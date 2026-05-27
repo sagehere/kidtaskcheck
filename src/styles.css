@@ -210,6 +210,21 @@ button:disabled {
   background: rgba(255, 255, 255, 0.18);
 }
 
+button.metric,
+button.child-tile {
+  border: 0;
+  text-align: inherit;
+}
+
+.clickable {
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 34px rgba(30, 41, 59, 0.12);
+}
+
 .metric strong {
   font-size: 34px;
   line-height: 1;
@@ -263,6 +278,10 @@ button:disabled {
   padding: 18px;
 }
 
+.setting-group {
+  margin-top: 16px;
+}
+
 .panel-title {
   display: flex;
   align-items: center;
@@ -293,7 +312,8 @@ button:disabled {
 }
 
 .compact button,
-.compact .picker {
+.compact .picker,
+.compact .toggle {
   grid-column: 1 / -1;
 }
 
@@ -418,6 +438,19 @@ textarea {
   gap: 8px;
 }
 
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  font-weight: 800;
+}
+
+.toggle input {
+  width: auto;
+  min-height: auto;
+}
+
 .dashboard-strip,
 .cards,
 .gallery {
@@ -431,7 +464,8 @@ textarea {
 }
 
 .cards {
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 320px));
+  justify-content: start;
 }
 
 .gallery {
@@ -461,6 +495,28 @@ textarea {
   border: 1px solid #ece7dd;
   border-radius: 8px;
   background: #fffdfa;
+}
+
+.item-card {
+  width: min(100%, 320px);
+  min-height: 168px;
+}
+
+.card-head {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.card-head div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.card-head strong {
+  overflow-wrap: anywhere;
 }
 
 .child-tile strong {
@@ -538,11 +594,36 @@ textarea {
   background: #f3f0ea;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(28, 31, 35, 0.38);
+}
+
+.ledger-modal {
+  width: min(620px, 100%);
+  max-height: min(720px, calc(100vh - 40px));
+  overflow: hidden;
+}
+
+.ledger-modal .scroll-list {
+  max-height: calc(100vh - 160px);
+}
+
 @media (max-width: 840px) {
   .login-shell,
   .grid.two,
-  .grid.three {
+  .grid.three,
+  .cards {
     grid-template-columns: 1fr;
+  }
+
+  .item-card {
+    width: 100%;
   }
 
   .login-shell {

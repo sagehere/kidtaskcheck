@@ -35,6 +35,7 @@ type Task = Record<string, any> & { assignees?: string[] };
 type Reward = Record<string, any> & { assignees?: string[] };
 type Notification = { id: string; title: string; body: string; read_at: string | null; created_at: string };
 type LedgerRow = { id: string; amount: number; source_type: string; note: string; created_at: string; period_key?: string | null };
+const REFRESH_INTERVAL_MS = 12000;
 
 async function api<T>(path: string, options: RequestInit = {}) {
   const response = await fetch(`/api${path}`, {
@@ -87,6 +88,17 @@ function formatSource(value: string) {
     reward: "奖励兑换",
     reward_cancel: "兑换退回",
     manual_deduction: "即时扣分"
+  };
+  return labels[value] || value;
+}
+
+function formatPeriod(value: string) {
+  const labels: Record<string, string> = {
+    daily: "每日",
+    weekly: "每周",
+    monthly: "每月",
+    once: "一次性",
+    none: "不限"
   };
   return labels[value] || value;
 }
@@ -284,7 +296,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   const [achievements, setAchievements] = useState<any[]>([]);
   const [dashboard, setDashboard] = useState<any>({ children: [], pendingSubmissions: [], pendingRedemptions: [] });
   const [activeTab, setActiveTab] = useState<"pending" | "children" | "settings">("pending");
-  const [ledgerChildId, setLedgerChildId] = useState("");
+  const [ledgerChild, setLedgerChild] = useState<{ id: string; display_name: string } | null>(null);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -304,16 +316,20 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     setRewards(rewardRows);
     setAchievements(achievementRows);
     setDashboard(dash);
-    setLedgerChildId((current) => current || childRows[0]?.id || "");
   }
   useEffect(() => void load(), []);
   useEffect(() => {
-    if (!ledgerChildId) {
-      setLedger([]);
-      return;
-    }
-    void api<LedgerRow[]>(`/points/ledger?childId=${encodeURIComponent(ledgerChildId)}`).then(setLedger).catch(() => setLedger([]));
-  }, [ledgerChildId, dashboard]);
+    const timer = window.setInterval(() => void load(), REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (ledgerChild) void loadLedger(ledgerChild);
+  }, [dashboard, ledgerChild?.id]);
+
+  async function loadLedger(child: { id: string; display_name: string }) {
+    setLedgerChild(child);
+    setLedger(await api<LedgerRow[]>(`/points/ledger?childId=${encodeURIComponent(child.id)}`).catch(() => []));
+  }
 
   async function run(action: () => Promise<void>, note: string) {
     setError("");
@@ -418,11 +434,11 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
         <>
           <div className="dashboard-strip">
             {dashboard.children?.map((child: Child) => (
-              <article className="child-tile" key={child.id}>
+              <button className="child-tile clickable" key={child.id} onClick={() => void loadLedger(child)}>
                 <span>{child.display_name}</span>
                 <strong>{child.balance || 0}</strong>
                 <small>当前积分</small>
-              </article>
+              </button>
             ))}
           </div>
           <div className="grid two">
@@ -431,39 +447,50 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           </div>
           <div className="grid two">
             <DeductionPanel children={children} onSubmit={deductPoints} />
-            <LedgerPanel children={children} selectedChildId={ledgerChildId} onSelectChild={setLedgerChildId} rows={ledger} />
           </div>
         </>
       )}
 
       {activeTab === "children" && (
         <>
-          <div className="grid three">
-            <CreateChild onCreate={(data) => create("/children", data, "孩子账号已创建")} />
-            <CreateCategory onCreate={(data) => create("/task-categories", data, "任务分类已创建")} />
-            <CreateAchievement onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
-          </div>
-          <ChildManager children={children} onEdit={updateChild} onToggle={toggleChild} onDelete={deleteChild} />
           <div className="grid two">
-            <CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} />
-            <CreateReward children={children} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
+            <CreateChild onCreate={(data) => create("/children", data, "孩子账号已创建")} />
+            <ChildManager children={children} onEdit={updateChild} onToggle={toggleChild} onDelete={deleteChild} />
           </div>
-          <CategoryOverview items={categories.filter((item) => !item.is_system)} onUpdate={(item, data) => update(`/task-categories/${item.id}`, data, "任务分类已更新")} />
-          <Overview title="现有任务" items={tasks} kind="task" children={children} categories={categories} onUpdate={(item, data) => update(`/tasks/${item.id}`, data, "任务已更新")} />
-          <Overview title="现有奖励" items={rewards} kind="reward" children={children} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} />
-          <Overview title="成就称号" items={achievements} kind="achievement" onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} />
         </>
       )}
 
       {activeTab === "settings" && (
-        <section className="panel">
-          <div className="panel-title"><RefreshCcw /><h2>测试与维护</h2></div>
-          <button className="secondary" onClick={resetProgress}>
-            <RefreshCcw size={18} />
-            重置测试数据
-          </button>
-        </section>
+        <>
+          <section className="setting-group">
+            <div className="panel-title"><Star /><h2>任务配置</h2></div>
+            <div className="grid two">
+              <CreateCategory onCreate={(data) => create("/task-categories", data, "任务分类已创建")} />
+              <CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} />
+            </div>
+            <CategoryOverview items={categories.filter((item) => !item.is_system)} onUpdate={(item, data) => update(`/task-categories/${item.id}`, data, "任务分类已更新")} />
+            <Overview title="现有任务" items={tasks} kind="task" children={children} categories={categories} onUpdate={(item, data) => update(`/tasks/${item.id}`, data, "任务已更新")} />
+          </section>
+          <section className="setting-group">
+            <div className="panel-title"><Gift /><h2>奖励配置</h2></div>
+            <CreateReward children={children} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
+            <Overview title="现有奖励" items={rewards} kind="reward" children={children} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} />
+          </section>
+          <section className="setting-group">
+            <div className="panel-title"><Award /><h2>成就称号</h2></div>
+            <CreateAchievement onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
+            <Overview title="成就称号" items={achievements} kind="achievement" onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} />
+          </section>
+          <section className="panel">
+            <div className="panel-title"><RefreshCcw /><h2>测试与维护</h2></div>
+            <button className="secondary" onClick={resetProgress}>
+              <RefreshCcw size={18} />
+              重置测试数据
+            </button>
+          </section>
+        </>
       )}
+      {ledgerChild && <LedgerModal title={`${ledgerChild.display_name} 的积分清单`} rows={ledger} onClose={() => setLedgerChild(null)} />}
     </Shell>
   );
 }
@@ -558,7 +585,7 @@ function DeductionPanel({ children, onSubmit }: { children: Child[]; onSubmit: (
     );
   }
   return (
-    <FormPanel title="即时扣分" icon={<Coins />} onSubmit={() => onSubmit({ ...data, childId })}>
+    <FormPanel title="即时扣分" icon={<Coins />} submitLabel="扣分" onSubmit={() => onSubmit({ ...data, childId })}>
       <Field label="孩子">
         <select value={childId} onChange={(e) => setData({ ...data, childId: e.target.value })}>
           {children.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
@@ -567,22 +594,6 @@ function DeductionPanel({ children, onSubmit }: { children: Child[]; onSubmit: (
       <Field label="扣除积分"><input type="number" min="1" value={data.amount} onChange={(e) => setData({ ...data, amount: Number(e.target.value) })} /></Field>
       <Field label="原因"><input value={data.note} onChange={(e) => setData({ ...data, note: e.target.value })} placeholder="例如：未按约定完成事项" /></Field>
     </FormPanel>
-  );
-}
-
-function LedgerPanel({ children, selectedChildId, onSelectChild, rows }: { children: Child[]; selectedChildId: string; onSelectChild: (id: string) => void; rows: LedgerRow[] }) {
-  return (
-    <section className="panel">
-      <div className="panel-title"><Coins /><h2>积分清单</h2></div>
-      {children.length > 0 && (
-        <Field label="孩子">
-          <select value={selectedChildId} onChange={(event) => onSelectChild(event.target.value)}>
-            {children.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
-          </select>
-        </Field>
-      )}
-      <LedgerList rows={rows} />
-    </section>
   );
 }
 
@@ -598,6 +609,21 @@ function LedgerList({ rows }: { rows: LedgerRow[] }) {
           <span>{formatSource(row.source_type)}</span>
         </article>
       )) : <Empty text="暂无积分记录" />}
+    </div>
+  );
+}
+
+function LedgerModal({ title, rows, onClose }: { title: string; rows: LedgerRow[]; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <section className="panel ledger-modal">
+        <div className="panel-title compact-title">
+          <Coins />
+          <h2>{title}</h2>
+          <button className="secondary" onClick={onClose}>关闭</button>
+        </div>
+        <LedgerList rows={rows} />
+      </section>
     </div>
   );
 }
@@ -667,7 +693,7 @@ function CreateAchievement({ onCreate }: { onCreate: (data: any) => void }) {
 }
 
 function CreateTask({ children, categories, onCreate }: { children: Child[]; categories: Category[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, pointType: "earn", points: 5, iconValue: "✅", childIds: [] as string[] });
+  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, pointType: "earn", points: 5, iconValue: "✅", isActive: true, childIds: [] as string[] });
   const categoryId = data.categoryId || categories[0]?.id || "";
   return (
     <FormPanel title="新任务" icon={<ClipboardCheck />} onSubmit={() => onCreate({ ...data, categoryId, iconType: "emoji" })}>
@@ -695,15 +721,16 @@ function CreateTask({ children, categories, onCreate }: { children: Child[]; cat
       </Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
       <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />
     </FormPanel>
   );
 }
 
 function CreateReward({ children, onCreate }: { children: Child[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", costPoints: 10, limitPeriod: "daily", limitCount: 1, iconValue: "🎁", childIds: [] as string[] });
+  const [data, setData] = useState({ title: "", description: "", costPoints: 10, limitPeriod: "daily", limitCount: 1, iconValue: "🎁", isActive: true, childIds: [] as string[] });
   return (
-    <FormPanel title="新奖励" icon={<Gift />} onSubmit={() => onCreate({ ...data, iconType: "emoji" })}>
+    <FormPanel title="新奖励" icon={<Gift />} onSubmit={() => onCreate({ ...data, limitCount: data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" })}>
       <Field label="名称"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
       <Field label="所需积分"><input type="number" min="0" value={data.costPoints} onChange={(e) => setData({ ...data, costPoints: Number(e.target.value) })} /></Field>
@@ -712,12 +739,23 @@ function CreateReward({ children, onCreate }: { children: Child[]; onCreate: (da
           <option value="daily">每日</option>
           <option value="weekly">每周</option>
           <option value="monthly">每月</option>
+          <option value="once">一次性</option>
         </select>
       </Field>
-      <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
+      {data.limitPeriod !== "once" && <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>}
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
       <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />
     </FormPanel>
+  );
+}
+
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <label className="toggle">
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <span>{label}</span>
+    </label>
   );
 }
 
@@ -739,13 +777,13 @@ function ChildPicker({ children, value, onChange }: { children: Child[]; value: 
   );
 }
 
-function FormPanel({ title, icon, children, onSubmit }: { title: string; icon: ReactNode; children: ReactNode; onSubmit: () => void }) {
+function FormPanel({ title, icon, children, onSubmit, submitLabel = "保存" }: { title: string; icon: ReactNode; children: ReactNode; onSubmit: () => void; submitLabel?: string }) {
   return (
     <section className="panel">
       <div className="panel-title">{icon}<h2>{title}</h2></div>
       <form className="stack compact" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
         {children}
-        <button className="primary"><Plus size={18} />保存</button>
+        <button className="primary"><Plus size={18} />{submitLabel}</button>
       </form>
     </section>
   );
@@ -793,17 +831,22 @@ function Overview({ title, items, kind, children = [], categories = [], onUpdate
       <div className="panel-title"><Star /><h2>{title}</h2></div>
       <div className="cards scroll-list">
         {items.length ? items.map((item) => (
-          <article className="mini-card" key={item.id}>
+          <article className="mini-card item-card" key={item.id}>
             {editing === item.id && onUpdate ? (
               <EditItemForm kind={kind} item={item} children={children} categories={categories} onCancel={() => setEditing("")} onSave={(data) => { onUpdate(item, data); setEditing(""); }} />
             ) : (
               <>
-                {icon(item.icon_type, item.icon_value, item.title)}
-                <strong>{item.title}</strong>
+                <div className="card-head">
+                  {icon(item.icon_type, item.icon_value, item.title)}
+                  <div>
+                    <strong>{item.title}</strong>
+                    {(kind === "task" || kind === "reward") && <small>{item.is_active ? "启用" : "停用"}</small>}
+                  </div>
+                </div>
                 {item.description && <small>{item.description}</small>}
                 <span>
-                  {kind === "task" && `${item.period} · ${item.point_type === "earn" ? "+" : "-"}${item.points} · ${item.limit_count || 1}次`}
-                  {kind === "reward" && `${item.cost_points}积分 · ${item.limit_period}`}
+                  {kind === "task" && `${formatPeriod(item.period)} · ${item.point_type === "earn" ? "+" : "-"}${item.points} · ${item.limit_count || 1}次`}
+                  {kind === "reward" && `${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`}`}
                   {kind === "achievement" && `${item.metric} ≥ ${item.threshold}`}
                 </span>
                 {onUpdate && <button className="secondary" onClick={() => setEditing(item.id)}><Edit3 size={16} />编辑</button>}
@@ -830,10 +873,11 @@ function EditItemForm({ kind, item, children, categories, onSave, onCancel }: { 
     metric: item.metric || "tasks_completed",
     threshold: item.threshold || 1,
     iconValue: item.icon_value || "⭐",
+    isActive: item.is_active !== 0,
     childIds: item.assignees || []
   }));
   return (
-    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, iconType: "emoji" }); }}>
+    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" }); }}>
       <Field label={kind === "reward" ? "名称" : "标题"}><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       {kind !== "task" && kind !== "reward" ? null : <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>}
       {kind === "task" && (
@@ -848,8 +892,8 @@ function EditItemForm({ kind, item, children, categories, onSave, onCancel }: { 
       {kind === "reward" && (
         <>
           <Field label="所需积分"><input type="number" min="0" value={data.costPoints} onChange={(e) => setData({ ...data, costPoints: Number(e.target.value) })} /></Field>
-          <Field label="限制周期"><select value={data.limitPeriod} onChange={(e) => setData({ ...data, limitPeriod: e.target.value })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option></select></Field>
-          <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
+          <Field label="限制周期"><select value={data.limitPeriod} onChange={(e) => setData({ ...data, limitPeriod: e.target.value })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
+          {data.limitPeriod !== "once" && <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>}
         </>
       )}
       {kind === "achievement" && (
@@ -860,6 +904,7 @@ function EditItemForm({ kind, item, children, categories, onSave, onCancel }: { 
         </>
       )}
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      {(kind === "task" || kind === "reward") && <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />}
       {(kind === "task" || kind === "reward") && <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />}
       <div className="actions"><button className="primary">保存</button><button type="button" className="secondary" onClick={onCancel}>取消</button></div>
     </form>
@@ -873,6 +918,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   const [busy, setBusy] = useState("");
   const [activeTab, setActiveTab] = useState<"tasks" | "rewards">("tasks");
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  const [ledgerOpen, setLedgerOpen] = useState(false);
   const [, setTick] = useState(0);
   const grouped = useMemo(() => {
     return dash.tasks.reduce((acc: Record<string, any[]>, task: any) => {
@@ -883,15 +929,25 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   }, [dash.tasks]);
 
   async function load() {
-    const [dashData, ledgerRows] = await Promise.all([api("/dashboard/child"), api<LedgerRow[]>("/points/ledger")]);
-    setDash(dashData);
-    setLedger(ledgerRows);
+    setDash(await api("/dashboard/child"));
   }
   useEffect(() => void load(), []);
+  useEffect(() => {
+    const timer = window.setInterval(() => void load(), REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => {
     const timer = window.setInterval(() => setTick((value) => value + 1), 60000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (ledgerOpen) void api<LedgerRow[]>("/points/ledger").then(setLedger).catch(() => setLedger([]));
+  }, [dash, ledgerOpen]);
+
+  async function openLedger() {
+    setLedger(await api<LedgerRow[]>("/points/ledger").catch(() => []));
+    setLedgerOpen(true);
+  }
 
   async function run(id: string, action: () => Promise<void>, note: string) {
     setBusy(id);
@@ -924,11 +980,11 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           <p>孩子面板</p>
           <h1>{me.displayName}，今天也很棒</h1>
         </div>
-        <div className="metric large">
+        <button className="metric large clickable" onClick={() => void openLedger()}>
           <Star />
           <strong>{dash.balance}</strong>
           <span>当前积分</span>
-        </div>
+        </button>
       </section>
       {message && <div className="success">{message}</div>}
       {error && <div className="error">{error}</div>}
@@ -953,7 +1009,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
         ]}
       />
       {activeTab === "tasks" && (
-        <div className="grid two">
+        <div className="grid">
           <section className="panel">
             <div className="panel-title"><ClipboardCheck /><h2>当前任务</h2></div>
             <div className="scroll-list">
@@ -964,9 +1020,14 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
                     {(items as any[]).map((task) => {
                       const limited = !task.canSubmit;
                       return (
-                        <article className="task-card" key={task.id}>
-                          {icon(task.icon_type, task.icon_value, task.title)}
-                          <strong>{task.title}</strong>
+                        <article className="task-card item-card" key={task.id}>
+                          <div className="card-head">
+                            {icon(task.icon_type, task.icon_value, task.title)}
+                            <div>
+                              <strong>{task.title}</strong>
+                              <small>{formatPeriod(task.period)}</small>
+                            </div>
+                          </div>
                           {task.description && <small>{task.description}</small>}
                           <span>{task.periodKey} · {task.point_type === "earn" ? "+" : "-"}{task.points} · {task.usedCount}/{task.limitCount}</span>
                           {task.rejectionNote && <small>上次驳回：{task.rejectionNote}</small>}
@@ -981,10 +1042,6 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
               ))}
             </div>
           </section>
-          <section className="panel">
-            <div className="panel-title"><Coins /><h2>积分清单</h2></div>
-            <LedgerList rows={ledger} />
-          </section>
         </div>
       )}
       {activeTab === "rewards" && (
@@ -995,9 +1052,14 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
               const limited = !reward.canRedeem;
               const disabled = dash.balance < reward.cost_points || limited || busy === `reward:${reward.id}`;
               return (
-                <article className="mini-card" key={reward.id}>
-                  {icon(reward.icon_type, reward.icon_value, reward.title)}
-                  <strong>{reward.title}</strong>
+                <article className="mini-card item-card" key={reward.id}>
+                  <div className="card-head">
+                    {icon(reward.icon_type, reward.icon_value, reward.title)}
+                    <div>
+                      <strong>{reward.title}</strong>
+                      <small>{formatPeriod(reward.limit_period)}</small>
+                    </div>
+                  </div>
                   {reward.description && <small>{reward.description}</small>}
                   <span>
                     {reward.cost_points}积分
@@ -1012,6 +1074,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           </div>
         </section>
       )}
+      {ledgerOpen && <LedgerModal title="我的积分清单" rows={ledger} onClose={() => setLedgerOpen(false)} />}
     </Shell>
   );
 }
@@ -1029,12 +1092,17 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
 
   useEffect(() => {
     void loadNotifications();
-    const timer = window.setInterval(() => void loadNotifications(), 12000);
+    const timer = window.setInterval(() => void loadNotifications(), REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [me.id]);
 
   async function readAll() {
     await api("/notifications/read-all", { method: "PATCH", body: JSON.stringify({}) });
+    await loadNotifications();
+  }
+
+  async function readOne(id: string) {
+    await api(`/notifications/${id}/read`, { method: "PATCH", body: JSON.stringify({}) });
     await loadNotifications();
   }
 
@@ -1067,6 +1135,7 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
                         <span>{item.body}</span>
                         <small>{formatTime(item.created_at)}</small>
                       </div>
+                      {!item.read_at && <button className="secondary" onClick={() => readOne(item.id)}>签收</button>}
                     </article>
                   )) : <Empty text="暂无消息" />}
                 </div>

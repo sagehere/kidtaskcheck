@@ -415,8 +415,8 @@ async function route(request, env) {
         const input = await body(request);
         if (method === "POST") {
             const taskId = id();
-            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(taskId, a.id, input.categoryId, input.title, input.description || "", input.period || "daily", input.pointType || "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)))
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, a.id, input.categoryId, input.title, input.description || "", input.period || "daily", input.pointType || "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), input.isActive === false ? 0 : 1)
                 .run();
             await replaceAssignees(env, "task_assignees", "task_id", taskId, input.childIds || []);
             return ok(true);
@@ -431,8 +431,8 @@ async function route(request, env) {
             .first();
         if (!task)
             return fail("NOT_FOUND", "任务不存在", 404);
-        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, updated_at=? WHERE id=?")
-            .bind(input.categoryId, input.title, input.description || "", input.period || "daily", input.pointType || "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), nowIso(), taskPatch[1])
+        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, is_active=?, updated_at=? WHERE id=?")
+            .bind(input.categoryId, input.title, input.description || "", input.period || "daily", input.pointType || "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), input.isActive === false ? 0 : 1, nowIso(), taskPatch[1])
             .run();
         await replaceAssignees(env, "task_assignees", "task_id", taskPatch[1], input.childIds || []);
         return ok(true);
@@ -444,8 +444,8 @@ async function route(request, env) {
         const input = await body(request);
         if (method === "POST") {
             const rewardId = id();
-            await env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, stock, limit_period, limit_count, icon_type, icon_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(rewardId, a.id, input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "daily", input.limitCount ?? 1, input.iconType || "emoji", input.iconValue || "🎁")
+            await env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, stock, limit_period, limit_count, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(rewardId, a.id, input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "daily", input.limitPeriod === "once" ? 1 : input.limitCount ?? 1, input.iconType || "emoji", input.iconValue || "🎁", input.isActive === false ? 0 : 1)
                 .run();
             await replaceAssignees(env, "reward_assignees", "reward_id", rewardId, input.childIds || []);
             return ok(true);
@@ -460,8 +460,8 @@ async function route(request, env) {
             .first();
         if (!reward)
             return fail("NOT_FOUND", "奖励不存在", 404);
-        await env.DB.prepare("UPDATE rewards SET title=?, description=?, cost_points=?, stock=?, limit_period=?, limit_count=?, icon_type=?, icon_value=?, updated_at=? WHERE id=?")
-            .bind(input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "daily", input.limitCount ?? 1, input.iconType || "emoji", input.iconValue || "🎁", nowIso(), rewardPatch[1])
+        await env.DB.prepare("UPDATE rewards SET title=?, description=?, cost_points=?, stock=?, limit_period=?, limit_count=?, icon_type=?, icon_value=?, is_active=?, updated_at=? WHERE id=?")
+            .bind(input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "daily", input.limitPeriod === "once" ? 1 : input.limitCount ?? 1, input.iconType || "emoji", input.iconValue || "🎁", input.isActive === false ? 0 : 1, nowIso(), rewardPatch[1])
             .run();
         await replaceAssignees(env, "reward_assignees", "reward_id", rewardPatch[1], input.childIds || []);
         return ok(true);

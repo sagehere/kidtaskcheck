@@ -86,7 +86,11 @@ async function ensureRewardOnceSchema(env) {
     if (!schema?.sql || String(schema.sql).includes("'once'"))
         return;
     await env.DB.prepare("PRAGMA foreign_keys = OFF").run();
+    await env.DB.prepare("DROP TABLE IF EXISTS reward_assignees_backup").run();
+    await env.DB.prepare("DROP TABLE IF EXISTS reward_redemptions_backup").run();
     await env.DB.prepare("DROP TABLE IF EXISTS rewards_new").run();
+    await env.DB.prepare("CREATE TABLE reward_assignees_backup AS SELECT * FROM reward_assignees").run();
+    await env.DB.prepare("CREATE TABLE reward_redemptions_backup AS SELECT * FROM reward_redemptions").run();
     await env.DB.prepare(`CREATE TABLE rewards_new (
   id TEXT PRIMARY KEY,
   parent_id TEXT NOT NULL REFERENCES users(id),
@@ -111,8 +115,32 @@ SELECT
   id, parent_id, title, description, cost_points, stock, limit_period, limit_count,
   icon_type, icon_value, is_active, deleted_at, created_at, updated_at
 FROM rewards`).run();
+    await env.DB.prepare("DROP TABLE reward_assignees").run();
+    await env.DB.prepare("DROP TABLE reward_redemptions").run();
     await env.DB.prepare("DROP TABLE rewards").run();
     await env.DB.prepare("ALTER TABLE rewards_new RENAME TO rewards").run();
+    await env.DB.prepare(`CREATE TABLE reward_assignees (
+  reward_id TEXT NOT NULL REFERENCES rewards(id),
+  child_id TEXT NOT NULL REFERENCES children(id),
+  PRIMARY KEY (reward_id, child_id)
+)`).run();
+    await env.DB.prepare(`CREATE TABLE reward_redemptions (
+  id TEXT PRIMARY KEY,
+  reward_id TEXT NOT NULL REFERENCES rewards(id),
+  child_id TEXT NOT NULL REFERENCES children(id),
+  parent_id TEXT NOT NULL REFERENCES users(id),
+  period_key TEXT NOT NULL,
+  requested_at TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'redeemed', 'cancelled')),
+  redeemed_at TEXT,
+  cancelled_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`).run();
+    await env.DB.prepare("INSERT INTO reward_assignees SELECT * FROM reward_assignees_backup").run();
+    await env.DB.prepare("INSERT INTO reward_redemptions SELECT * FROM reward_redemptions_backup").run();
+    await env.DB.prepare("DROP TABLE reward_assignees_backup").run();
+    await env.DB.prepare("DROP TABLE reward_redemptions_backup").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_redemptions_parent_status ON reward_redemptions(parent_id, status)").run();
     await env.DB.prepare("PRAGMA foreign_keys = ON").run();
 }
 async function actorFromRequest(request, env) {
@@ -215,7 +243,6 @@ function notificationRecipient(actor) {
 async function route(request, env) {
     await ensureAdmin(env);
     await ensureNotificationsSchema(env);
-    await ensureRewardOnceSchema(env);
     const url = new URL(request.url);
     const path = `/${(url.pathname.replace(/^\/api\/?/, "") || "").replace(/^\/|\/$/g, "")}`;
     const method = request.method;
@@ -478,6 +505,7 @@ async function route(request, env) {
             return ok(await listWithAssignees(env, "rewards", a.id));
         const input = await body(request);
         if (method === "POST") {
+            await ensureRewardOnceSchema(env);
             const rewardId = id();
             await env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, stock, limit_period, limit_count, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(rewardId, a.id, input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "daily", input.limitPeriod === "once" ? 1 : input.limitCount ?? 1, input.iconType || "emoji", input.iconValue || "🎁", input.isActive === false ? 0 : 1)
@@ -490,6 +518,7 @@ async function route(request, env) {
     if (rewardPatch && method === "PATCH") {
         const a = requireRole(actor, ["parent"]);
         const input = await body(request);
+        await ensureRewardOnceSchema(env);
         const reward = await env.DB.prepare("SELECT id FROM rewards WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(rewardPatch[1], a.id)
             .first();

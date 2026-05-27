@@ -35,10 +35,12 @@ npm run pages:dev
 远程 D1 初始化和后续 schema 变更需要 Wrangler migration。项目提供了部署脚本：
 
 ```bash
-npm run deploy:pages
+npm run pages:build
 ```
 
-该脚本会先执行 `npm run build`，再执行 `wrangler d1 migrations apply DB --remote`。如果在 Cloudflare Pages 或 CI 中使用它，需要配置具备 D1 编辑权限的 Cloudflare API Token。Pages 的静态构建本身不会自动运行 D1 migration，因此不要只配置 `npm run build` 后就发布依赖新 schema 的版本。
+该脚本会先执行 `npm run build`，再执行 `npm run db:migrate:remote`。Cloudflare Pages 项目的 Build command 应配置为 `npm run pages:build`（或等价的 `npm run deploy`），不要只配置 `npm run build`，否则自动部署只会更新代码，不会更新远程 D1 schema。
+
+如果在 Cloudflare Pages 或 CI 中运行该脚本，需要配置具备 D1 编辑权限的 Cloudflare API Token。Pages 的静态构建本身不会自动运行 D1 migration。
 
 ## 当前环境提示
 

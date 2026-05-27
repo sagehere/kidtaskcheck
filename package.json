@@ -10,7 +10,9 @@
     "preview:static": "node scripts/static-server.mjs",
     "test": "vitest run --config vite.config.mjs --configLoader runner",
     "pages:dev": "wrangler pages dev dist --d1=DB --port 8788 --persist-to .wrangler/state --log-level none",
-    "deploy:pages": "npm run build && wrangler d1 migrations apply DB --remote",
+    "pages:build": "npm run build && npm run db:migrate:remote",
+    "deploy": "npm run pages:build",
+    "deploy:pages": "npm run pages:build",
     "db:migrate:local": "wrangler d1 migrations apply kids_task_checkin --local",
     "db:migrate:remote": "wrangler d1 migrations apply kids_task_checkin --remote"
   },

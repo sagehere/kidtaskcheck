@@ -7,16 +7,20 @@ const ok = (data) => json({ data });
 const fail = (code, message, status = 400) => json({ error: { code, message } }, { status });
 const nowIso = () => new Date().toISOString();
 const id = () => crypto.randomUUID();
+const PBKDF2_ITERATIONS = 100000;
 async function hashPassword(password) {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-    const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 120000, hash: "SHA-256" }, key, 256);
-    return `pbkdf2$120000$${btoa(String.fromCharCode(...salt))}$${btoa(String.fromCharCode(...new Uint8Array(bits)))}`;
+    const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" }, key, 256);
+    return `pbkdf2$${PBKDF2_ITERATIONS}$${btoa(String.fromCharCode(...salt))}$${btoa(String.fromCharCode(...new Uint8Array(bits)))}`;
 }
 async function verifyPassword(password, stored) {
     const [, iterations, salt64, hash64] = stored.split("$");
     if (!iterations || !salt64 || !hash64)
         return false;
+    if (Number(iterations) > PBKDF2_ITERATIONS) {
+        throw new Error(`Unsupported PBKDF2 iteration count: ${iterations}`);
+    }
     const salt = Uint8Array.from(atob(salt64), (c) => c.charCodeAt(0));
     const expected = Uint8Array.from(atob(hash64), (c) => c.charCodeAt(0));
     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
@@ -151,7 +155,25 @@ async function route(request, env) {
         const user = await env.DB.prepare("SELECT * FROM users WHERE username=? AND status='active' AND deleted_at IS NULL").bind(input.username).first();
         const child = user ? null : await env.DB.prepare("SELECT * FROM children WHERE username=? AND status='active' AND deleted_at IS NULL").bind(input.username).first();
         const account = user || child;
-        if (!account || !(await verifyPassword(input.password || "", account.password_hash)))
+        if (!account)
+            return fail("BAD_CREDENTIALS", "账号或密码错误", 401);
+        let passwordOk = false;
+        try {
+            passwordOk = await verifyPassword(input.password || "", account.password_hash);
+        }
+        catch (error) {
+            if (account.role === "admin" && account.username === (env.ADMIN_USERNAME || "admin") && input.password === (env.ADMIN_PASSWORD || "change-me-admin-password")) {
+                const passwordHash = await hashPassword(input.password || "");
+                await env.DB.prepare("UPDATE users SET password_hash=?, updated_at=? WHERE id=?")
+                    .bind(passwordHash, nowIso(), account.id)
+                    .run();
+                passwordOk = true;
+            }
+            else {
+                throw error;
+            }
+        }
+        if (!passwordOk)
             return fail("BAD_CREDENTIALS", "账号或密码错误", 401);
         const token = id();
         const expires = new Date(Date.now() + 7 * 86400000).toISOString();

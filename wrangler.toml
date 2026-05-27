@@ -5,7 +5,7 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "kids_task_checkin"
-database_id = "replace-with-cloudflare-d1-id"
+database_id = "dbfc66d6-e579-4b66-95aa-26e2d41e5c79"
 
 [vars]
 APP_NAME = "儿童任务打卡"

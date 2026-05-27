@@ -30,6 +30,16 @@ npm run pages:dev
 
 线上部署前请修改 `ADMIN_PASSWORD`，并把 `wrangler.toml` 中的 `database_id` 替换为真实 Cloudflare D1 数据库 ID。
 
+## 部署与数据库迁移
+
+远程 D1 初始化和后续 schema 变更需要 Wrangler migration。项目提供了部署脚本：
+
+```bash
+npm run deploy:pages
+```
+
+该脚本会先执行 `npm run build`，再执行 `wrangler d1 migrations apply DB --remote`。如果在 Cloudflare Pages 或 CI 中使用它，需要配置具备 D1 编辑权限的 Cloudflare API Token。Pages 的静态构建本身不会自动运行 D1 migration，因此不要只配置 `npm run build` 后就发布依赖新 schema 的版本。
+
 ## 当前环境提示
 
 在 `C:\Users\link\Desktop\任务打卡` 这个中文路径下，`wrangler pages dev` 可能因为 esbuild 解析入口文件时报 `Cannot read directory "../..": Access is denied`。源码构建、测试和 D1 migration 已可正常运行；如需本机跑完整 Pages Functions 预览，建议把项目放到纯 ASCII 路径后再执行 `npm run pages:dev`。

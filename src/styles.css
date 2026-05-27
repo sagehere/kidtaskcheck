@@ -15,7 +15,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -234,13 +235,19 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 40px;
   padding: 8px 10px;
   border: 1px solid #d4cec2;
   border-radius: 8px;
   background: #fffdfa;
+}
+
+textarea {
+  min-height: 78px;
+  resize: vertical;
 }
 
 .primary,
@@ -309,6 +316,8 @@ select {
 .mini-card span,
 .task-card span,
 .achievement span,
+.mini-card small,
+.task-card small,
 .child-tile small {
   color: #69737d;
   font-size: 13px;

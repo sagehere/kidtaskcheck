@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { consecutiveDayStreak, periodKey, signedPoints } from "../src/lib/domain";
+import { consecutiveDayStreak, nextPeriodReset, periodKey, signedPoints } from "../src/lib/domain";
 
 describe("periodKey", () => {
   it("calculates daily, weekly, monthly and once keys", () => {
@@ -20,6 +20,20 @@ describe("points", () => {
   it("signs task points", () => {
     expect(signedPoints("earn", 10)).toBe(10);
     expect(signedPoints("deduct", 10)).toBe(-10);
+  });
+});
+
+describe("nextPeriodReset", () => {
+  it("returns the next UTC reset boundary for repeating periods", () => {
+    const at = "2026-05-25T10:30:00.000Z";
+    expect(nextPeriodReset("daily", at)).toBe("2026-05-26T00:00:00.000Z");
+    expect(nextPeriodReset("weekly", at)).toBe("2026-06-01T00:00:00.000Z");
+    expect(nextPeriodReset("monthly", at)).toBe("2026-06-01T00:00:00.000Z");
+  });
+
+  it("does not reset once-only or unlimited periods", () => {
+    expect(nextPeriodReset("once", "2026-05-25T10:30:00.000Z")).toBeNull();
+    expect(nextPeriodReset("none", "2026-05-25T10:30:00.000Z")).toBeNull();
   });
 });
 

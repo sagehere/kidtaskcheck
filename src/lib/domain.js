@@ -25,6 +25,22 @@ export function periodKey(period, input) {
     const week = Math.ceil(((copy.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
     return `${weekYear}-W${pad(week)}`;
 }
+export function nextPeriodReset(period, input) {
+    if (period === "none" || period === "once")
+        return null;
+    const date = toDate(input);
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth();
+    const day = date.getUTCDate();
+    if (period === "daily") {
+        return new Date(Date.UTC(year, month, day + 1)).toISOString();
+    }
+    if (period === "monthly") {
+        return new Date(Date.UTC(year, month + 1, 1)).toISOString();
+    }
+    const weekday = date.getUTCDay() || 7;
+    return new Date(Date.UTC(year, month, day + (8 - weekday))).toISOString();
+}
 export function signedPoints(pointType, points) {
     return pointType === "earn" ? Math.abs(points) : -Math.abs(points);
 }

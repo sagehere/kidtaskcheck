@@ -6,8 +6,10 @@ import {
   ClipboardCheck,
   Gift,
   Image,
+  KeyRound,
   LogOut,
   Plus,
+  RefreshCcw,
   Shield,
   Sparkles,
   Star,
@@ -57,9 +59,21 @@ function Empty(props: { text: string }) {
   return <div className="empty">{props.text}</div>;
 }
 
+function formatReset(resetAt?: string | null) {
+  if (!resetAt) return "已达上限";
+  const ms = new Date(resetAt).getTime() - Date.now();
+  if (ms <= 0) return "即将重置";
+  const totalMinutes = Math.ceil(ms / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `距重置 ${days}天${hours}小时`;
+  return `距重置 ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
 function Login({ onDone }: { onDone: () => void }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("change-me-admin-password");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
   async function submit(event: FormEvent) {
@@ -80,7 +94,7 @@ function Login({ onDone }: { onDone: () => void }) {
           <Sparkles />
         </div>
         <h1>儿童任务打卡</h1>
-        <p>任务、积分、奖励和成就都在一个温和清楚的家庭激励面板里。</p>
+        <p>任务、积分、奖励和成就都在一个清晰的家庭激励面板里。</p>
       </section>
       <form className="login-panel" onSubmit={submit}>
         <h2>登录</h2>
@@ -104,35 +118,53 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   const [users, setUsers] = useState<any[]>([]);
   const [gallery, setGallery] = useState<Gallery[]>([]);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   const [form, setForm] = useState({ username: "", displayName: "", password: "" });
   const [imageForm, setImageForm] = useState({ name: "", url: "", usage: "general" });
 
   async function load() {
-    setUsers(await api("/admin/users"));
-    setGallery(await api("/admin/gallery-images"));
+    const [userRows, galleryRows] = await Promise.all([api<any[]>("/admin/users"), api<Gallery[]>("/admin/gallery-images")]);
+    setUsers(userRows);
+    setGallery(galleryRows);
   }
   useEffect(() => void load(), []);
 
+  async function run(action: () => Promise<void>, note: string) {
+    setError("");
+    try {
+      await action();
+      setMessage(note);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "操作失败");
+    }
+  }
+
   async function createUser(event: FormEvent) {
     event.preventDefault();
-    await api("/admin/users", { method: "POST", body: JSON.stringify(form) });
-    setForm({ username: "", displayName: "", password: "" });
-    setMessage("家长用户已创建");
-    await load();
+    await run(async () => {
+      await api("/admin/users", { method: "POST", body: JSON.stringify(form) });
+      setForm({ username: "", displayName: "", password: "" });
+    }, "家长用户已创建");
   }
 
   async function createImage(event: FormEvent) {
     event.preventDefault();
-    await api("/admin/gallery-images", { method: "POST", body: JSON.stringify(imageForm) });
-    setImageForm({ name: "", url: "", usage: "general" });
-    setMessage("图库图片已添加");
-    await load();
+    await run(async () => {
+      await api("/admin/gallery-images", { method: "POST", body: JSON.stringify(imageForm) });
+      setImageForm({ name: "", url: "", usage: "general" });
+    }, "图库图片已添加");
+  }
+
+  async function resetPassword(user: any) {
+    const password = window.prompt(`为 ${user.display_name} 设置新密码`);
+    if (!password) return;
+    await run(() => api(`/admin/users/${user.id}`, { method: "PATCH", body: JSON.stringify({ password }) }), "家长密码已更新");
   }
 
   async function deleteUser(id: string) {
-    await api(`/admin/users/${id}`, { method: "DELETE" });
-    setMessage("家长用户及其子账户已归档删除");
-    await load();
+    if (!window.confirm("确认归档这个家长及其孩子账号？")) return;
+    await run(() => api(`/admin/users/${id}`, { method: "DELETE" }), "家长用户及其子账号已归档");
   }
 
   return (
@@ -149,6 +181,7 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
         </div>
       </section>
       {message && <div className="success">{message}</div>}
+      {error && <div className="error">{error}</div>}
       <div className="grid two">
         <section className="panel">
           <div className="panel-title">
@@ -177,9 +210,14 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
                   <strong>{user.display_name}</strong>
                   <span>{user.username}</span>
                 </div>
-                <button className="icon danger" title="归档删除" onClick={() => deleteUser(user.id)}>
-                  <Trash2 size={18} />
-                </button>
+                <div className="actions">
+                  <button className="icon" title="重置密码" onClick={() => resetPassword(user)}>
+                    <KeyRound size={18} />
+                  </button>
+                  <button className="icon danger" title="归档删除" onClick={() => deleteUser(user.id)}>
+                    <Trash2 size={18} />
+                  </button>
+                </div>
               </article>
             ))}
           </div>
@@ -193,7 +231,7 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
             <Field label="名称">
               <input value={imageForm.name} onChange={(e) => setImageForm({ ...imageForm, name: e.target.value })} required />
             </Field>
-            <Field label="图片URL">
+            <Field label="图片 URL">
               <input value={imageForm.url} onChange={(e) => setImageForm({ ...imageForm, url: e.target.value })} required />
             </Field>
             <Field label="用途">
@@ -226,6 +264,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   const [achievements, setAchievements] = useState<any[]>([]);
   const [dashboard, setDashboard] = useState<any>({ children: [], pendingSubmissions: [], pendingRedemptions: [] });
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
   async function load() {
     const [childRows, categoryRows, taskRows, rewardRows, achievementRows, dash] = await Promise.all([
@@ -245,22 +284,55 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   }
   useEffect(() => void load(), []);
 
+  async function run(action: () => Promise<void>, note: string) {
+    setError("");
+    try {
+      await action();
+      setMessage(note);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "操作失败");
+    }
+  }
+
   async function create(path: string, data: Record<string, unknown>, note: string) {
-    await api(path, { method: "POST", body: JSON.stringify(data) });
-    setMessage(note);
-    await load();
+    await run(() => api(path, { method: "POST", body: JSON.stringify(data) }), note);
   }
 
   async function review(id: string, approved: boolean) {
-    await api(`/task-submissions/${id}/review`, { method: "PATCH", body: JSON.stringify({ approved }) });
-    setMessage(approved ? "任务已通过并结算积分" : "任务已驳回");
-    await load();
+    const note = approved ? "" : window.prompt("请输入驳回原因，孩子会看到这条说明", "") || "";
+    await run(
+      () => api(`/task-submissions/${id}/review`, { method: "PATCH", body: JSON.stringify({ approved, note }) }),
+      approved ? "任务已通过并结算积分" : "任务已驳回"
+    );
   }
 
   async function finishRedemption(id: string, action: "redeem" | "cancel") {
-    await api(`/reward-redemptions/${id}/${action}`, { method: "PATCH", body: JSON.stringify({}) });
-    setMessage(action === "redeem" ? "奖励已核销" : "兑换已取消并退回积分");
-    await load();
+    await run(
+      () => api(`/reward-redemptions/${id}/${action}`, { method: "PATCH", body: JSON.stringify({}) }),
+      action === "redeem" ? "奖励已核销" : "兑换已取消并退回积分"
+    );
+  }
+
+  async function updateChild(child: Child) {
+    const displayName = window.prompt("新的显示名", child.display_name) || child.display_name;
+    const password = window.prompt("新密码，留空则不修改", "") || undefined;
+    await run(() => api(`/children/${child.id}`, { method: "PATCH", body: JSON.stringify({ displayName, password }) }), "孩子账号已更新");
+  }
+
+  async function toggleChild(child: Child) {
+    const status = child.status === "active" ? "disabled" : "active";
+    await run(() => api(`/children/${child.id}`, { method: "PATCH", body: JSON.stringify({ status }) }), status === "active" ? "孩子账号已启用" : "孩子账号已停用");
+  }
+
+  async function deleteChild(child: Child) {
+    if (!window.confirm(`确认归档 ${child.display_name} 的账号？历史记录会保留。`)) return;
+    await run(() => api(`/children/${child.id}`, { method: "DELETE" }), "孩子账号已归档");
+  }
+
+  async function resetProgress() {
+    if (!window.confirm("确认清空当前家长全部孩子的积分、任务、奖励与成就进度？账号和配置会保留。")) return;
+    await run(() => api("/testing/reset-parent-progress", { method: "POST", body: JSON.stringify({}) }), "测试进度已重置");
   }
 
   return (
@@ -271,6 +343,10 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           <h1>今天需要处理的事情</h1>
         </div>
         <div className="hero-actions">
+          <button className="secondary" onClick={resetProgress}>
+            <RefreshCcw size={18} />
+            重置测试数据
+          </button>
           <div className="metric">
             <ClipboardCheck />
             <strong>{dashboard.pendingSubmissions?.length || 0}</strong>
@@ -284,6 +360,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
         </div>
       </section>
       {message && <div className="success">{message}</div>}
+      {error && <div className="error">{error}</div>}
 
       <div className="dashboard-strip">
         {dashboard.children?.map((child: Child) => (
@@ -296,34 +373,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
       </div>
 
       <div className="grid two">
-        <section className="panel">
-          <div className="panel-title">
-            <ClipboardCheck />
-            <h2>任务审核</h2>
-          </div>
-          <div className="list">
-            {dashboard.pendingSubmissions?.length ? (
-              dashboard.pendingSubmissions.map((item: any) => (
-                <article className="row" key={item.id}>
-                  <div>
-                    <strong>{item.title}</strong>
-                    <span>{item.child_name} · {item.period_key}</span>
-                  </div>
-                  <div className="actions">
-                    <button className="icon good" title="通过" onClick={() => review(item.id, true)}>
-                      <Check size={18} />
-                    </button>
-                    <button className="icon danger" title="驳回" onClick={() => review(item.id, false)}>
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
-                </article>
-              ))
-            ) : (
-              <Empty text="没有待审核任务" />
-            )}
-          </div>
-        </section>
+        <ReviewPanel title="任务审核" items={dashboard.pendingSubmissions || []} empty="没有待审核任务" approve={(id) => review(id, true)} reject={(id) => review(id, false)} />
         <section className="panel">
           <div className="panel-title">
             <Gift />
@@ -359,6 +409,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
         <CreateCategory onCreate={(data) => create("/task-categories", data, "任务分类已创建")} />
         <CreateAchievement onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
       </div>
+      <ChildManager children={children} onEdit={updateChild} onToggle={toggleChild} onDelete={deleteChild} />
       <div className="grid two">
         <CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} />
         <CreateReward children={children} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
@@ -370,6 +421,39 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   );
 }
 
+function ReviewPanel({ title, items, empty, approve, reject }: { title: string; items: any[]; empty: string; approve: (id: string) => void; reject: (id: string) => void }) {
+  return (
+    <section className="panel">
+      <div className="panel-title">
+        <ClipboardCheck />
+        <h2>{title}</h2>
+      </div>
+      <div className="list">
+        {items.length ? (
+          items.map((item: any) => (
+            <article className="row" key={item.id}>
+              <div>
+                <strong>{item.title}</strong>
+                <span>{item.child_name} · {item.period_key}</span>
+              </div>
+              <div className="actions">
+                <button className="icon good" title="通过" onClick={() => approve(item.id)}>
+                  <Check size={18} />
+                </button>
+                <button className="icon danger" title="驳回" onClick={() => reject(item.id)}>
+                  <Trash2 size={18} />
+                </button>
+              </div>
+            </article>
+          ))
+        ) : (
+          <Empty text={empty} />
+        )}
+      </div>
+    </section>
+  );
+}
+
 function CreateChild({ onCreate }: { onCreate: (data: any) => void }) {
   const [data, setData] = useState({ username: "", displayName: "", password: "" });
   return (
@@ -378,6 +462,29 @@ function CreateChild({ onCreate }: { onCreate: (data: any) => void }) {
       <Field label="姓名"><input required value={data.displayName} onChange={(e) => setData({ ...data, displayName: e.target.value })} /></Field>
       <Field label="密码"><input required value={data.password} onChange={(e) => setData({ ...data, password: e.target.value })} /></Field>
     </FormPanel>
+  );
+}
+
+function ChildManager({ children, onEdit, onToggle, onDelete }: { children: Child[]; onEdit: (child: Child) => void; onToggle: (child: Child) => void; onDelete: (child: Child) => void }) {
+  return (
+    <section className="panel">
+      <div className="panel-title"><Users /><h2>孩子账号管理</h2></div>
+      <div className="list">
+        {children.length ? children.map((child) => (
+          <article className="row" key={child.id}>
+            <div>
+              <strong>{child.display_name}</strong>
+              <span>{child.username} · {child.status === "active" ? "启用" : "停用"}</span>
+            </div>
+            <div className="actions">
+              <button className="secondary" onClick={() => onEdit(child)}>修改</button>
+              <button className="secondary" onClick={() => onToggle(child)}>{child.status === "active" ? "停用" : "启用"}</button>
+              <button className="icon danger" title="归档" onClick={() => onDelete(child)}><Trash2 size={18} /></button>
+            </div>
+          </article>
+        )) : <Empty text="暂无孩子账号" />}
+      </div>
+    </section>
   );
 }
 
@@ -412,11 +519,12 @@ function CreateAchievement({ onCreate }: { onCreate: (data: any) => void }) {
 }
 
 function CreateTask({ children, categories, onCreate }: { children: Child[]; categories: Category[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", categoryId: "", period: "daily", pointType: "earn", points: 5, iconValue: "✅", childIds: [] as string[] });
+  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, pointType: "earn", points: 5, iconValue: "✅", childIds: [] as string[] });
   const categoryId = data.categoryId || categories[0]?.id || "";
   return (
     <FormPanel title="新任务" icon={<ClipboardCheck />} onSubmit={() => onCreate({ ...data, categoryId, iconType: "emoji" })}>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
+      <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
       <Field label="分类">
         <select value={categoryId} onChange={(e) => setData({ ...data, categoryId: e.target.value })}>
           {categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -430,6 +538,7 @@ function CreateTask({ children, categories, onCreate }: { children: Child[]; cat
           <option value="once">一次性</option>
         </select>
       </Field>
+      <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
       <Field label="积分类型">
         <select value={data.pointType} onChange={(e) => setData({ ...data, pointType: e.target.value })}>
           <option value="earn">加分</option>
@@ -444,10 +553,11 @@ function CreateTask({ children, categories, onCreate }: { children: Child[]; cat
 }
 
 function CreateReward({ children, onCreate }: { children: Child[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", costPoints: 10, limitPeriod: "none", limitCount: 1, iconValue: "🎁", childIds: [] as string[] });
+  const [data, setData] = useState({ title: "", description: "", costPoints: 10, limitPeriod: "none", limitCount: 1, iconValue: "🎁", childIds: [] as string[] });
   return (
     <FormPanel title="新奖励" icon={<Gift />} onSubmit={() => onCreate({ ...data, iconType: "emoji" })}>
       <Field label="名称"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
+      <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
       <Field label="所需积分"><input type="number" min="0" value={data.costPoints} onChange={(e) => setData({ ...data, costPoints: Number(e.target.value) })} /></Field>
       <Field label="限制周期">
         <select value={data.limitPeriod} onChange={(e) => setData({ ...data, limitPeriod: e.target.value })}>
@@ -503,9 +613,10 @@ function Overview({ title, items, kind }: { title: string; items: any[]; kind: "
           <article className="mini-card" key={item.id}>
             {icon(item.icon_type, item.icon_value, item.title)}
             <strong>{item.title}</strong>
+            {item.description && <small>{item.description}</small>}
             <span>
-              {kind === "task" && `${item.period} · ${item.point_type === "earn" ? "+" : "-"}${item.points}`}
-              {kind === "reward" && `${item.cost_points} 积分 · ${item.limit_period}`}
+              {kind === "task" && `${item.period} · ${item.point_type === "earn" ? "+" : "-"}${item.points} · ${item.limit_count || 1}次`}
+              {kind === "reward" && `${item.cost_points}积分 · ${item.limit_period}`}
               {kind === "achievement" && `${item.metric} ≥ ${item.threshold}`}
             </span>
           </article>
@@ -518,6 +629,9 @@ function Overview({ title, items, kind }: { title: string; items: any[]; kind: "
 function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [dash, setDash] = useState<any>({ tasks: [], rewards: [], achievements: [], balance: 0 });
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [, setTick] = useState(0);
   const grouped = useMemo(() => {
     return dash.tasks.reduce((acc: Record<string, any[]>, task: any) => {
       const key = task.category_name || "任务";
@@ -530,17 +644,33 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
     setDash(await api("/dashboard/child"));
   }
   useEffect(() => void load(), []);
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((value) => value + 1), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
 
-  async function submitTask(taskId: string) {
-    await api("/task-submissions", { method: "POST", body: JSON.stringify({ taskId }) });
-    setMessage("任务已提交，等待家长审核");
-    await load();
+  async function run(id: string, action: () => Promise<void>, note: string) {
+    setBusy(id);
+    setError("");
+    try {
+      await action();
+      setMessage(note);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "操作失败");
+    } finally {
+      setBusy("");
+    }
   }
 
-  async function redeem(rewardId: string) {
-    await api("/reward-redemptions", { method: "POST", body: JSON.stringify({ rewardId }) });
-    setMessage("奖励已兑换，等待家长核销");
-    await load();
+  async function submitTask(task: any) {
+    if (!window.confirm(`确认提交任务“${task.title}”？`)) return;
+    await run(`task:${task.id}`, () => api("/task-submissions", { method: "POST", body: JSON.stringify({ taskId: task.id }) }), "任务已提交，等待家长审核");
+  }
+
+  async function redeem(reward: any) {
+    if (!window.confirm(`确认兑换“${reward.title}”？将扣除 ${reward.cost_points} 积分。`)) return;
+    await run(`reward:${reward.id}`, () => api("/reward-redemptions", { method: "POST", body: JSON.stringify({ rewardId: reward.id }) }), "奖励已兑换，等待家长核销");
   }
 
   return (
@@ -557,6 +687,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
         </div>
       </section>
       {message && <div className="success">{message}</div>}
+      {error && <div className="error">{error}</div>}
       <div className="grid two">
         <section className="panel">
           <div className="panel-title"><ClipboardCheck /><h2>当前任务</h2></div>
@@ -564,16 +695,21 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
             <div className="task-group" key={category}>
               <h3>{category}</h3>
               <div className="cards">
-                {(items as any[]).map((task) => (
-                  <article className="task-card" key={task.id}>
-                    {icon(task.icon_type, task.icon_value, task.title)}
-                    <strong>{task.title}</strong>
-                    <span>{task.period_key} · {task.point_type === "earn" ? "+" : "-"}{task.points}</span>
-                    <button disabled={!!task.submissionStatus} className="primary" onClick={() => submitTask(task.id)}>
-                      {task.submissionStatus ? statusText(task.submissionStatus) : "提交完成"}
-                    </button>
-                  </article>
-                ))}
+                {(items as any[]).map((task) => {
+                  const limited = !task.canSubmit;
+                  return (
+                    <article className="task-card" key={task.id}>
+                      {icon(task.icon_type, task.icon_value, task.title)}
+                      <strong>{task.title}</strong>
+                      {task.description && <small>{task.description}</small>}
+                      <span>{task.periodKey} · {task.point_type === "earn" ? "+" : "-"}{task.points} · {task.usedCount}/{task.limitCount}</span>
+                      {task.rejectionNote && <small>上次驳回：{task.rejectionNote}</small>}
+                      <button disabled={limited || busy === `task:${task.id}`} className="primary" onClick={() => submitTask(task)}>
+                        {busy === `task:${task.id}` ? "提交中..." : limited ? formatReset(task.resetAt) : "提交完成"}
+                      </button>
+                    </article>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -581,14 +717,24 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
         <section className="panel">
           <div className="panel-title"><Gift /><h2>可兑换奖励</h2></div>
           <div className="cards">
-            {dash.rewards.map((reward: any) => (
-              <article className="mini-card" key={reward.id}>
-                {icon(reward.icon_type, reward.icon_value, reward.title)}
-                <strong>{reward.title}</strong>
-                <span>{reward.cost_points} 积分</span>
-                <button className="secondary" disabled={dash.balance < reward.cost_points} onClick={() => redeem(reward.id)}>兑换</button>
-              </article>
-            ))}
+            {dash.rewards.map((reward: any) => {
+              const limited = !reward.canRedeem;
+              const disabled = dash.balance < reward.cost_points || limited || busy === `reward:${reward.id}`;
+              return (
+                <article className="mini-card" key={reward.id}>
+                  {icon(reward.icon_type, reward.icon_value, reward.title)}
+                  <strong>{reward.title}</strong>
+                  {reward.description && <small>{reward.description}</small>}
+                  <span>
+                    {reward.cost_points}积分
+                    {reward.limitCount !== null && ` · ${reward.usedCount}/${reward.limitCount}`}
+                  </span>
+                  <button className="secondary" disabled={disabled} onClick={() => redeem(reward)}>
+                    {busy === `reward:${reward.id}` ? "兑换中..." : limited ? formatReset(reward.resetAt) : dash.balance < reward.cost_points ? "积分不足" : "兑换"}
+                  </button>
+                </article>
+              );
+            })}
           </div>
         </section>
       </div>
@@ -606,12 +752,6 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
       </section>
     </Shell>
   );
-}
-
-function statusText(status: string) {
-  if (status === "pending") return "待审核";
-  if (status === "approved") return "已完成";
-  return "已驳回";
 }
 
 function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => void; children: ReactNode }) {

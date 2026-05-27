@@ -1,4 +1,4 @@
-import { consecutiveDayStreak, periodKey, signedPoints } from "../../src/lib/domain.js";
+import { consecutiveDayStreak, nextPeriodReset, periodKey, signedPoints } from "../../src/lib/domain.js";
 const json = (data, init) => new Response(JSON.stringify(data), {
     ...init,
     headers: { "content-type": "application/json; charset=utf-8", ...(init?.headers || {}) }
@@ -95,6 +95,16 @@ async function childIdsForParent(env, parentId) {
     const rows = await env.DB.prepare("SELECT id FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(parentId).all();
     return rows.results.map((row) => row.id);
 }
+async function usernameExists(env, username, ignore) {
+    const normalized = String(username || "").trim();
+    if (!normalized)
+        return false;
+    const user = await env.DB.prepare("SELECT id FROM users WHERE username=? AND deleted_at IS NULL").bind(normalized).first();
+    if (user && ignore !== `user:${user.id}`)
+        return true;
+    const child = await env.DB.prepare("SELECT id FROM children WHERE username=? AND deleted_at IS NULL").bind(normalized).first();
+    return !!(child && ignore !== `child:${child.id}`);
+}
 async function replaceAssignees(env, table, key, keyValue, childIds) {
     await env.DB.prepare(`DELETE FROM ${table} WHERE ${key}=?`).bind(keyValue).run();
     for (const childId of childIds) {
@@ -135,6 +145,13 @@ async function listWithAssignees(env, kind, parentId) {
         ...row,
         assignees: (await env.DB.prepare(`SELECT child_id FROM ${table} WHERE ${key}=?`).bind(row.id).all()).results.map((x) => x.child_id)
     })));
+}
+async function childUsageForPeriod(env, table, idColumn, itemId, childId, periodKeyValue, activeStatuses) {
+    const placeholders = activeStatuses.map(() => "?").join(",");
+    const row = await env.DB.prepare(`SELECT COUNT(*) v FROM ${table} WHERE ${idColumn}=? AND child_id=? AND period_key=? AND status IN (${placeholders})`)
+        .bind(itemId, childId, periodKeyValue, ...activeStatuses)
+        .first();
+    return Number(row?.v || 0);
 }
 async function route(request, env) {
     await ensureAdmin(env);
@@ -189,8 +206,13 @@ async function route(request, env) {
     if (path === "/admin/users" && method === "POST") {
         requireRole(actor, ["admin"]);
         const input = await body(request);
+        const username = String(input.username || "").trim();
+        if (!username)
+            return fail("BAD_REQUEST", "请输入账号");
+        if (await usernameExists(env, username))
+            return fail("USERNAME_EXISTS", "账号已存在，请换一个用户名", 409);
         await env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, ?, ?, 'parent', ?)")
-            .bind(id(), input.username, await hashPassword(input.password || "123456"), input.displayName || input.username)
+            .bind(id(), username, await hashPassword(input.password || "123456"), input.displayName || username)
             .run();
         return ok(true);
     }
@@ -212,6 +234,9 @@ async function route(request, env) {
         const input = await body(request);
         if (input.password) {
             await env.DB.prepare("UPDATE users SET password_hash=?, updated_at=? WHERE id=? AND role='parent'").bind(await hashPassword(input.password), nowIso(), userPatch[1]).run();
+        }
+        if (input.displayName) {
+            await env.DB.prepare("UPDATE users SET display_name=?, updated_at=? WHERE id=? AND role='parent'").bind(input.displayName, nowIso(), userPatch[1]).run();
         }
         if (input.status) {
             await env.DB.prepare("UPDATE users SET status=?, updated_at=? WHERE id=? AND role='parent'").bind(input.status, nowIso(), userPatch[1]).run();
@@ -236,11 +261,41 @@ async function route(request, env) {
             return ok((await env.DB.prepare("SELECT id, username, display_name, status FROM children WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC").bind(a.id).all()).results);
         const input = await body(request);
         if (method === "POST") {
+            const username = String(input.username || "").trim();
+            if (!username)
+                return fail("BAD_REQUEST", "请输入账号");
+            if (await usernameExists(env, username))
+                return fail("USERNAME_EXISTS", "账号已存在，请换一个用户名", 409);
             await env.DB.prepare("INSERT INTO children (id, parent_id, username, password_hash, display_name) VALUES (?, ?, ?, ?, ?)")
-                .bind(id(), a.id, input.username, await hashPassword(input.password || "123456"), input.displayName || input.username)
+                .bind(id(), a.id, username, await hashPassword(input.password || "123456"), input.displayName || username)
                 .run();
             return ok(true);
         }
+    }
+    const childPatch = path.match(/^\/children\/([^/]+)$/);
+    if (childPatch && method === "PATCH") {
+        const a = requireRole(actor, ["parent"]);
+        const input = await body(request);
+        const child = await env.DB.prepare("SELECT id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(childPatch[1], a.id).first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        if (input.displayName) {
+            await env.DB.prepare("UPDATE children SET display_name=?, updated_at=? WHERE id=?").bind(input.displayName, nowIso(), childPatch[1]).run();
+        }
+        if (input.password) {
+            await env.DB.prepare("UPDATE children SET password_hash=?, updated_at=? WHERE id=?").bind(await hashPassword(input.password), nowIso(), childPatch[1]).run();
+        }
+        if (input.status) {
+            await env.DB.prepare("UPDATE children SET status=?, updated_at=? WHERE id=?").bind(input.status, nowIso(), childPatch[1]).run();
+        }
+        return ok(true);
+    }
+    if (childPatch && method === "DELETE") {
+        const a = requireRole(actor, ["parent"]);
+        await env.DB.prepare("UPDATE children SET deleted_at=?, status='disabled', updated_at=? WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(nowIso(), nowIso(), childPatch[1], a.id)
+            .run();
+        return ok(true);
     }
     if (path === "/task-categories") {
         const a = requireRole(actor, ["parent"]);
@@ -262,8 +317,8 @@ async function route(request, env) {
         const input = await body(request);
         if (method === "POST") {
             const taskId = id();
-            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(taskId, a.id, input.categoryId, input.title, input.description || "", input.period || "daily", input.pointType || "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅")
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, a.id, input.categoryId, input.title, input.description || "", input.period || "daily", input.pointType || "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)))
                 .run();
             await replaceAssignees(env, "task_assignees", "task_id", taskId, input.childIds || []);
             return ok(true);
@@ -304,8 +359,12 @@ async function route(request, env) {
         if (!task)
             return fail("NOT_ASSIGNED", "任务不存在或未分配给当前孩子", 404);
         const submittedAt = nowIso();
+        const pkey = periodKey(task.period, submittedAt);
+        const used = await childUsageForPeriod(env, "task_submissions", "task_id", task.id, a.id, pkey, ["pending", "approved"]);
+        if (used >= Number(task.limit_count || 1))
+            return fail("LIMIT_REACHED", "已达到本周期提交次数限制", 409);
         await env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, period_key, submitted_at, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')")
-            .bind(id(), task.id, a.id, a.parentId, periodKey(task.period, submittedAt), submittedAt)
+            .bind(id(), task.id, a.id, a.parentId, pkey, submittedAt)
             .run();
         return ok(true);
     }
@@ -346,7 +405,7 @@ async function route(request, env) {
         const requestedAt = nowIso();
         const pkey = periodKey(reward.limit_period, requestedAt);
         if (reward.limit_period !== "none" && reward.limit_count !== null) {
-            const count = Number((await env.DB.prepare("SELECT COUNT(*) v FROM reward_redemptions WHERE reward_id=? AND child_id=? AND period_key=? AND status IN ('pending','redeemed')").bind(reward.id, a.id, pkey).first())?.v || 0);
+            const count = await childUsageForPeriod(env, "reward_redemptions", "reward_id", reward.id, a.id, pkey, ["pending", "redeemed"]);
             if (count >= Number(reward.limit_count))
                 return fail("LIMIT_REACHED", "已达到本周期兑换次数限制", 409);
         }
@@ -380,6 +439,18 @@ async function route(request, env) {
         }
         return ok(true);
     }
+    if (path === "/testing/reset-parent-progress" && method === "POST") {
+        const a = requireRole(actor, ["parent"]);
+        const children = await childIdsForParent(env, a.id);
+        if (!children.length)
+            return ok(true);
+        const placeholders = children.map(() => "?").join(",");
+        await env.DB.prepare(`DELETE FROM point_ledger WHERE child_id IN (${placeholders})`).bind(...children).run();
+        await env.DB.prepare(`DELETE FROM task_submissions WHERE child_id IN (${placeholders})`).bind(...children).run();
+        await env.DB.prepare(`DELETE FROM reward_redemptions WHERE child_id IN (${placeholders})`).bind(...children).run();
+        await env.DB.prepare(`DELETE FROM child_achievements WHERE child_id IN (${placeholders})`).bind(...children).run();
+        return ok(true);
+    }
     if (path === "/points/ledger" && method === "GET") {
         const a = requireRole(actor, ["parent", "child"]);
         const childId = a.role === "child" ? a.id : url.searchParams.get("childId");
@@ -406,14 +477,46 @@ async function route(request, env) {
             .all();
         const taskRows = await Promise.all(currentTasks.results.map(async (task) => {
             const pkey = periodKey(task.period);
-            const submission = await env.DB.prepare("SELECT status FROM task_submissions WHERE task_id=? AND child_id=? AND period_key=?").bind(task.id, a.id, pkey).first();
-            return { ...task, periodKey: pkey, submissionStatus: submission?.status || null };
+            const [activeCount, latest, rejected] = await Promise.all([
+                childUsageForPeriod(env, "task_submissions", "task_id", task.id, a.id, pkey, ["pending", "approved"]),
+                env.DB.prepare("SELECT status, review_note FROM task_submissions WHERE task_id=? AND child_id=? AND period_key=? ORDER BY submitted_at DESC LIMIT 1").bind(task.id, a.id, pkey).first(),
+                env.DB.prepare("SELECT status, review_note FROM task_submissions WHERE task_id=? AND child_id=? AND period_key=? AND status='rejected' ORDER BY reviewed_at DESC LIMIT 1").bind(task.id, a.id, pkey).first()
+            ]);
+            const limitCount = Number(task.limit_count || 1);
+            return {
+                ...task,
+                periodKey: pkey,
+                limitCount,
+                usedCount: activeCount,
+                remainingCount: Math.max(0, limitCount - activeCount),
+                canSubmit: activeCount < limitCount,
+                resetAt: nextPeriodReset(task.period),
+                submissionStatus: latest?.status || null,
+                rejectionNote: rejected?.review_note || ""
+            };
+        }));
+        const rewardRows = await env.DB.prepare("SELECT r.* FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id WHERE ra.child_id=? AND r.is_active=1 AND r.deleted_at IS NULL ORDER BY r.cost_points")
+            .bind(a.id)
+            .all();
+        const rewards = await Promise.all(rewardRows.results.map(async (reward) => {
+            const pkey = periodKey(reward.limit_period);
+            const limitCount = reward.limit_period === "none" || reward.limit_count === null ? null : Number(reward.limit_count);
+            const usedCount = limitCount === null ? 0 : await childUsageForPeriod(env, "reward_redemptions", "reward_id", reward.id, a.id, pkey, ["pending", "redeemed"]);
+            return {
+                ...reward,
+                periodKey: pkey,
+                limitCount,
+                usedCount,
+                remainingCount: limitCount === null ? null : Math.max(0, limitCount - usedCount),
+                canRedeem: limitCount === null || usedCount < limitCount,
+                resetAt: nextPeriodReset(reward.limit_period)
+            };
         }));
         return ok({
             child: a,
             balance: await balance(env, a.id),
             tasks: taskRows,
-            rewards: (await env.DB.prepare("SELECT r.* FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id WHERE ra.child_id=? AND r.is_active=1 AND r.deleted_at IS NULL ORDER BY r.cost_points").bind(a.id).all()).results,
+            rewards,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
         });
     }

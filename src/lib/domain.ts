@@ -29,6 +29,26 @@ export function periodKey(period: RewardLimitPeriod, input?: string | Date) {
   return `${weekYear}-W${pad(week)}`;
 }
 
+export function nextPeriodReset(period: RewardLimitPeriod, input?: string | Date) {
+  if (period === "none" || period === "once") return null;
+
+  const date = toDate(input);
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const day = date.getUTCDate();
+
+  if (period === "daily") {
+    return new Date(Date.UTC(year, month, day + 1)).toISOString();
+  }
+
+  if (period === "monthly") {
+    return new Date(Date.UTC(year, month + 1, 1)).toISOString();
+  }
+
+  const weekday = date.getUTCDay() || 7;
+  return new Date(Date.UTC(year, month, day + (8 - weekday))).toISOString();
+}
+
 export function signedPoints(pointType: "earn" | "deduct", points: number) {
   return pointType === "earn" ? Math.abs(points) : -Math.abs(points);
 }

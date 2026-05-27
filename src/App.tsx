@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import {
   Award,
   BadgeCheck,
@@ -920,13 +920,6 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [, setTick] = useState(0);
-  const grouped = useMemo(() => {
-    return dash.tasks.reduce((acc: Record<string, any[]>, task: any) => {
-      const key = task.category_name || "任务";
-      acc[key] = [...(acc[key] || []), task];
-      return acc;
-    }, {});
-  }, [dash.tasks]);
 
   async function load() {
     setDash(await api("/dashboard/child"));
@@ -1010,67 +1003,69 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
       />
       {activeTab === "tasks" && (
         <div className="grid">
-          <section className="panel">
-            <div className="panel-title"><ClipboardCheck /><h2>当前任务</h2></div>
-            <div className="scroll-list">
-              {Object.entries(grouped).map(([category, items]) => (
-                <div className="task-group" key={category}>
-                  <h3>{category}</h3>
-                  <div className="cards">
-                    {(items as any[]).map((task) => {
-                      const limited = !task.canSubmit;
-                      return (
-                        <article className="task-card item-card" key={task.id}>
-                          <div className="card-head">
-                            {icon(task.icon_type, task.icon_value, task.title)}
-                            <div>
-                              <strong>{task.title}</strong>
-                              <small>{formatPeriod(task.period)}</small>
-                            </div>
-                          </div>
-                          {task.description && <small>{task.description}</small>}
-                          <span>{task.periodKey} · {task.point_type === "earn" ? "+" : "-"}{task.points} · {task.usedCount}/{task.limitCount}</span>
-                          {task.rejectionNote && <small>上次驳回：{task.rejectionNote}</small>}
-                          <button disabled={limited || busy === `task:${task.id}`} className="primary" onClick={() => submitTask(task)}>
-                            {busy === `task:${task.id}` ? "提交中..." : limited ? formatReset(task.resetAt) : "提交完成"}
-                          </button>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+          <section className="panel child-panel">
+            <div className="panel-title"><ClipboardCheck /><h2>任务墙</h2></div>
+            <div className="wall-grid scroll-list">
+              {dash.tasks.length ? dash.tasks.map((task: any) => {
+                const limited = !task.canSubmit;
+                const busyId = busy === `task:${task.id}`;
+                const points = `${task.point_type === "earn" ? "+" : "-"}${task.points}`;
+                return (
+                  <article className={`task-card wall-card ${limited ? "is-muted" : ""}`} key={task.id}>
+                    <div className="card-head wall-card-head">
+                      {icon(task.icon_type, task.icon_value, task.title)}
+                      <div>
+                        <strong>{task.title}</strong>
+                        <small>{formatPeriod(task.period)}</small>
+                      </div>
+                    </div>
+                    {task.description && <small className="card-description">{task.description}</small>}
+                    <div className="card-meta">
+                      <span className={task.point_type === "earn" ? "positive" : "negative"}>{points} 积分</span>
+                      <span>{task.usedCount}/{task.limitCount} 次</span>
+                      <span>{task.periodKey}</span>
+                    </div>
+                    {task.rejectionNote && <small className="card-status warn">上次驳回：{task.rejectionNote}</small>}
+                    <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
+                      {busyId ? "提交中..." : limited ? formatReset(task.resetAt) : "提交完成"}
+                    </button>
+                  </article>
+                );
+              }) : <Empty text="暂无任务" />}
             </div>
           </section>
         </div>
       )}
       {activeTab === "rewards" && (
-        <section className="panel">
-          <div className="panel-title"><Gift /><h2>可兑换奖励</h2></div>
-          <div className="cards scroll-list">
-            {dash.rewards.map((reward: any) => {
+        <section className="panel child-panel">
+          <div className="panel-title"><Gift /><h2>奖励墙</h2></div>
+          <div className="wall-grid scroll-list">
+            {dash.rewards.length ? dash.rewards.map((reward: any) => {
               const limited = !reward.canRedeem;
               const disabled = dash.balance < reward.cost_points || limited || busy === `reward:${reward.id}`;
               return (
-                <article className="mini-card item-card" key={reward.id}>
-                  <div className="card-head">
+                <article className={`mini-card wall-card reward-wall-card ${disabled ? "is-muted" : ""}`} key={reward.id}>
+                  <div className="card-head wall-card-head">
                     {icon(reward.icon_type, reward.icon_value, reward.title)}
                     <div>
                       <strong>{reward.title}</strong>
                       <small>{formatPeriod(reward.limit_period)}</small>
                     </div>
                   </div>
-                  {reward.description && <small>{reward.description}</small>}
-                  <span>
-                    {reward.cost_points}积分
-                    {reward.limitCount !== null && ` · ${reward.usedCount}/${reward.limitCount}`}
-                  </span>
-                  <button className="secondary" disabled={disabled} onClick={() => redeem(reward)}>
+                  {reward.description && <small className="card-description">{reward.description}</small>}
+                  <div className="card-meta">
+                    <span className="cost"><Coins size={16} />{reward.cost_points} 积分</span>
+                    {reward.limitCount !== null && <span>{reward.usedCount}/{reward.limitCount} 次</span>}
+                  </div>
+                  <small className={`card-status ${disabled ? "warn" : "ready"}`}>
+                    {limited ? formatReset(reward.resetAt) : dash.balance < reward.cost_points ? "积分还不够" : "可以兑换"}
+                  </small>
+                  <button className="secondary card-action" disabled={disabled} onClick={() => redeem(reward)}>
                     {busy === `reward:${reward.id}` ? "兑换中..." : limited ? formatReset(reward.resetAt) : dash.balance < reward.cost_points ? "积分不足" : "兑换"}
                   </button>
                 </article>
               );
-            })}
+            }) : <Empty text="暂无可兑换奖励" />}
           </div>
         </section>
       )}

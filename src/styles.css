@@ -11,6 +11,7 @@
 
 body {
   margin: 0;
+  min-width: 320px;
 }
 
 button,
@@ -27,6 +28,12 @@ button {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+button,
+.primary,
+.secondary {
+  white-space: normal;
 }
 
 .login-shell {
@@ -108,14 +115,24 @@ button:disabled {
 }
 
 .brand {
+  min-width: 0;
   font-weight: 800;
   color: #157f6f;
+  overflow-wrap: anywhere;
 }
 
 .account {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+}
+
+.account > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .notification-wrap {
@@ -154,7 +171,7 @@ button:disabled {
 }
 
 .content {
-  width: min(1200px, calc(100% - 32px));
+  width: min(1240px, calc(100% - 32px));
   margin: 0 auto;
   padding: 24px 0 48px;
 }
@@ -169,6 +186,7 @@ button:disabled {
   border-radius: 8px;
   color: #ffffff;
   background: #157f6f;
+  overflow: hidden;
 }
 
 .hero-band.parent {
@@ -193,6 +211,7 @@ button:disabled {
   margin: 0;
   font-size: clamp(28px, 5vw, 54px);
   line-height: 1.05;
+  overflow-wrap: anywhere;
 }
 
 .hero-actions {
@@ -260,6 +279,7 @@ button.child-tile {
 }
 
 .tabs button {
+  flex: 1 1 120px;
   min-height: 40px;
   padding: 0 16px;
   border: 0;
@@ -287,6 +307,12 @@ button.child-tile {
   align-items: center;
   gap: 10px;
   margin-bottom: 14px;
+  min-width: 0;
+}
+
+.panel-title h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .compact-title {
@@ -351,6 +377,7 @@ textarea {
   border: 0;
   border-radius: 8px;
   font-weight: 800;
+  line-height: 1.2;
 }
 
 .primary {
@@ -401,11 +428,19 @@ textarea {
   border: 1px solid #ece7dd;
   border-radius: 8px;
   background: #fffdfa;
+  min-width: 0;
 }
 
 .row div:first-child {
   display: grid;
   gap: 2px;
+  min-width: 0;
+}
+
+.row strong,
+.row span,
+.row small {
+  overflow-wrap: anywhere;
 }
 
 .row span,
@@ -464,8 +499,8 @@ textarea {
 }
 
 .cards {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 320px));
-  justify-content: start;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  justify-content: stretch;
 }
 
 .gallery {
@@ -498,7 +533,7 @@ textarea {
 }
 
 .item-card {
-  width: min(100%, 320px);
+  width: 100%;
   min-height: 168px;
 }
 
@@ -517,6 +552,128 @@ textarea {
 
 .card-head strong {
   overflow-wrap: anywhere;
+}
+
+.child-panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 253, 250, 0.96)),
+    #ffffff;
+}
+
+.wall-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  align-items: stretch;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.wall-card {
+  min-height: 240px;
+  position: relative;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding: 16px;
+  border: 1px solid #e7dfd0;
+  border-radius: 8px;
+  background: #fffdfa;
+  box-shadow: 0 10px 28px rgba(30, 41, 59, 0.08);
+}
+
+.wall-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  height: 5px;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(90deg, #157f6f, #efb545);
+}
+
+.wall-card.is-muted {
+  background: #fbf8f1;
+}
+
+.wall-card-head {
+  grid-template-columns: 56px minmax(0, 1fr);
+  padding-top: 4px;
+}
+
+.wall-card-head .emoji,
+.wall-card-head .visual {
+  width: 56px;
+  height: 56px;
+}
+
+.wall-card-head .emoji {
+  font-size: 32px;
+  background: #f4ead6;
+}
+
+.wall-card-head strong {
+  font-size: 18px;
+  line-height: 1.22;
+}
+
+.card-description {
+  min-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.card-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  color: #35424d;
+  background: #f0ede7;
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.card-meta .positive {
+  color: #0b6b4f;
+  background: #dff4ec;
+}
+
+.card-meta .negative,
+.card-status.warn {
+  color: #9d2f2f;
+  background: #ffe5e1;
+}
+
+.card-meta .cost {
+  color: #805600;
+  background: #fff1c2;
+}
+
+.card-status {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.card-status.ready {
+  color: #0b6b4f;
+  background: #e9f8ef;
+}
+
+.card-action {
+  align-self: end;
+  width: 100%;
+  min-height: 46px;
+  margin-top: auto;
 }
 
 .child-tile strong {
@@ -559,14 +716,6 @@ textarea {
 .picker input {
   width: auto;
   min-height: auto;
-}
-
-.task-group {
-  margin-top: 14px;
-}
-
-.task-group h3 {
-  margin: 0 0 10px;
 }
 
 .success,
@@ -617,13 +766,13 @@ textarea {
 @media (max-width: 840px) {
   .login-shell,
   .grid.two,
-  .grid.three,
-  .cards {
+  .grid.three {
     grid-template-columns: 1fr;
   }
 
-  .item-card {
-    width: 100%;
+  .cards,
+  .wall-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .login-shell {
@@ -651,5 +800,95 @@ textarea {
 
   .actions {
     flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .content {
+    width: min(100% - 20px, 1240px);
+    padding: 14px 0 32px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .account {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .hero-band {
+    min-height: auto;
+    padding: 20px;
+  }
+
+  .hero-band h1 {
+    font-size: 30px;
+  }
+
+  .hero-actions {
+    width: 100%;
+  }
+
+  .metric,
+  .hero-actions .secondary {
+    width: 100%;
+  }
+
+  .tabs {
+    position: sticky;
+    top: 86px;
+    z-index: 9;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .tabs button {
+    flex: 0 0 auto;
+    min-width: 112px;
+  }
+
+  .panel {
+    padding: 14px;
+  }
+
+  .panel-title {
+    align-items: flex-start;
+  }
+
+  .scroll-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .wall-card {
+    min-height: 0;
+    padding: 14px;
+  }
+
+  .wall-card-head {
+    grid-template-columns: 50px minmax(0, 1fr);
+  }
+
+  .wall-card-head .emoji,
+  .wall-card-head .visual {
+    width: 50px;
+    height: 50px;
+  }
+
+  .compact-title {
+    flex-wrap: wrap;
+  }
+
+  .notification-panel {
+    position: fixed;
+    top: 76px;
+    right: 10px;
+    left: 10px;
+    width: auto;
   }
 }

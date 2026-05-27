@@ -153,6 +153,14 @@ async function childUsageForPeriod(env, table, idColumn, itemId, childId, period
         .first();
     return Number(row?.v || 0);
 }
+async function notify(env, input) {
+    await env.DB.prepare("INSERT INTO notifications (id, recipient_type, recipient_id, actor_type, actor_id, title, body, event_type, related_type, related_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(id(), input.recipientType, input.recipientId, input.actorType, input.actorId || null, input.title, input.body || "", input.eventType, input.relatedType || null, input.relatedId || null, nowIso())
+        .run();
+}
+function notificationRecipient(actor) {
+    return actor.role === "child" ? { type: "child", id: actor.id } : { type: "user", id: actor.id };
+}
 async function route(request, env) {
     await ensureAdmin(env);
     const url = new URL(request.url);
@@ -255,6 +263,34 @@ async function route(request, env) {
             return ok(true);
         }
     }
+    if (path === "/notifications" && method === "GET") {
+        const a = requireRole(actor, ["parent", "child"]);
+        const recipient = notificationRecipient(a);
+        const rows = (await env.DB.prepare("SELECT * FROM notifications WHERE recipient_type=? AND recipient_id=? ORDER BY created_at DESC LIMIT 50")
+            .bind(recipient.type, recipient.id)
+            .all()).results;
+        const unread = Number((await env.DB.prepare("SELECT COUNT(*) v FROM notifications WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL")
+            .bind(recipient.type, recipient.id)
+            .first())?.v || 0);
+        return ok({ items: rows, unread });
+    }
+    if (path === "/notifications/read-all" && method === "PATCH") {
+        const a = requireRole(actor, ["parent", "child"]);
+        const recipient = notificationRecipient(a);
+        await env.DB.prepare("UPDATE notifications SET read_at=? WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL")
+            .bind(nowIso(), recipient.type, recipient.id)
+            .run();
+        return ok(true);
+    }
+    const notificationRead = path.match(/^\/notifications\/([^/]+)\/read$/);
+    if (notificationRead && method === "PATCH") {
+        const a = requireRole(actor, ["parent", "child"]);
+        const recipient = notificationRecipient(a);
+        await env.DB.prepare("UPDATE notifications SET read_at=? WHERE id=? AND recipient_type=? AND recipient_id=?")
+            .bind(nowIso(), notificationRead[1], recipient.type, recipient.id)
+            .run();
+        return ok(true);
+    }
     if (path === "/children") {
         const a = requireRole(actor, ["parent"]);
         if (method === "GET")
@@ -297,6 +333,36 @@ async function route(request, env) {
             .run();
         return ok(true);
     }
+    const childDeduction = path.match(/^\/children\/([^/]+)\/deductions$/);
+    if (childDeduction && method === "POST") {
+        const a = requireRole(actor, ["parent"]);
+        const input = await body(request);
+        const child = await env.DB.prepare("SELECT id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(childDeduction[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const amount = Math.abs(Number(input.amount || 0));
+        if (!amount)
+            return fail("BAD_REQUEST", "请输入扣分分值");
+        const ledgerId = id();
+        const note = String(input.note || "家长即时扣分").trim() || "家长即时扣分";
+        await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note) VALUES (?, ?, ?, ?, 'manual_deduction', ?, NULL, ?)")
+            .bind(ledgerId, child.id, a.id, -amount, ledgerId, note)
+            .run();
+        await notify(env, {
+            recipientType: "child",
+            recipientId: child.id,
+            actorType: "user",
+            actorId: a.id,
+            title: "收到一条扣分记录",
+            body: `${note}，扣除 ${amount} 积分。`,
+            eventType: "manual_deduction",
+            relatedType: "point_ledger",
+            relatedId: ledgerId
+        });
+        return ok(true);
+    }
     if (path === "/task-categories") {
         const a = requireRole(actor, ["parent"]);
         if (method === "GET") {
@@ -309,6 +375,20 @@ async function route(request, env) {
                 .run();
             return ok(true);
         }
+    }
+    const categoryPatch = path.match(/^\/task-categories\/([^/]+)$/);
+    if (categoryPatch && method === "PATCH") {
+        const a = requireRole(actor, ["parent"]);
+        const input = await body(request);
+        const category = await env.DB.prepare("SELECT id FROM task_categories WHERE id=? AND owner_id=? AND is_system=0 AND is_active=1")
+            .bind(categoryPatch[1], a.id)
+            .first();
+        if (!category)
+            return fail("NOT_FOUND", "任务分类不存在或不可编辑", 404);
+        await env.DB.prepare("UPDATE task_categories SET name=?, icon_type=?, icon_value=? WHERE id=?")
+            .bind(input.name, input.iconType || "emoji", input.iconValue || "⭐", categoryPatch[1])
+            .run();
+        return ok(true);
     }
     if (path === "/tasks") {
         const a = requireRole(actor, ["parent"]);
@@ -324,6 +404,21 @@ async function route(request, env) {
             return ok(true);
         }
     }
+    const taskPatch = path.match(/^\/tasks\/([^/]+)$/);
+    if (taskPatch && method === "PATCH") {
+        const a = requireRole(actor, ["parent"]);
+        const input = await body(request);
+        const task = await env.DB.prepare("SELECT id FROM tasks WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(taskPatch[1], a.id)
+            .first();
+        if (!task)
+            return fail("NOT_FOUND", "任务不存在", 404);
+        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, updated_at=? WHERE id=?")
+            .bind(input.categoryId, input.title, input.description || "", input.period || "daily", input.pointType || "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), nowIso(), taskPatch[1])
+            .run();
+        await replaceAssignees(env, "task_assignees", "task_id", taskPatch[1], input.childIds || []);
+        return ok(true);
+    }
     if (path === "/rewards") {
         const a = requireRole(actor, ["parent"]);
         if (method === "GET")
@@ -332,11 +427,26 @@ async function route(request, env) {
         if (method === "POST") {
             const rewardId = id();
             await env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, stock, limit_period, limit_count, icon_type, icon_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(rewardId, a.id, input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "none", input.limitCount ?? null, input.iconType || "emoji", input.iconValue || "🎁")
+                .bind(rewardId, a.id, input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "daily", input.limitCount ?? 1, input.iconType || "emoji", input.iconValue || "🎁")
                 .run();
             await replaceAssignees(env, "reward_assignees", "reward_id", rewardId, input.childIds || []);
             return ok(true);
         }
+    }
+    const rewardPatch = path.match(/^\/rewards\/([^/]+)$/);
+    if (rewardPatch && method === "PATCH") {
+        const a = requireRole(actor, ["parent"]);
+        const input = await body(request);
+        const reward = await env.DB.prepare("SELECT id FROM rewards WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(rewardPatch[1], a.id)
+            .first();
+        if (!reward)
+            return fail("NOT_FOUND", "奖励不存在", 404);
+        await env.DB.prepare("UPDATE rewards SET title=?, description=?, cost_points=?, stock=?, limit_period=?, limit_count=?, icon_type=?, icon_value=?, updated_at=? WHERE id=?")
+            .bind(input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "daily", input.limitCount ?? 1, input.iconType || "emoji", input.iconValue || "🎁", nowIso(), rewardPatch[1])
+            .run();
+        await replaceAssignees(env, "reward_assignees", "reward_id", rewardPatch[1], input.childIds || []);
+        return ok(true);
     }
     if (path === "/achievements") {
         const a = requireRole(actor, ["parent"]);
@@ -349,6 +459,20 @@ async function route(request, env) {
                 .run();
             return ok(true);
         }
+    }
+    const achievementPatch = path.match(/^\/achievements\/([^/]+)$/);
+    if (achievementPatch && method === "PATCH") {
+        const a = requireRole(actor, ["parent"]);
+        const input = await body(request);
+        const achievement = await env.DB.prepare("SELECT id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(achievementPatch[1], a.id)
+            .first();
+        if (!achievement)
+            return fail("NOT_FOUND", "成就称号不存在", 404);
+        await env.DB.prepare("UPDATE achievements SET title=?, description=?, metric=?, threshold=?, icon_type=?, icon_value=?, updated_at=? WHERE id=?")
+            .bind(input.title, input.description || "", input.metric || "tasks_completed", Number(input.threshold || 1), input.iconType || "emoji", input.iconValue || "🏅", nowIso(), achievementPatch[1])
+            .run();
+        return ok(true);
     }
     if (path === "/task-submissions" && method === "POST") {
         const a = requireRole(actor, ["child"]);
@@ -363,9 +487,21 @@ async function route(request, env) {
         const used = await childUsageForPeriod(env, "task_submissions", "task_id", task.id, a.id, pkey, ["pending", "approved"]);
         if (used >= Number(task.limit_count || 1))
             return fail("LIMIT_REACHED", "已达到本周期提交次数限制", 409);
+        const submissionId = id();
         await env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, period_key, submitted_at, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')")
-            .bind(id(), task.id, a.id, a.parentId, pkey, submittedAt)
+            .bind(submissionId, task.id, a.id, a.parentId, pkey, submittedAt)
             .run();
+        await notify(env, {
+            recipientType: "user",
+            recipientId: a.parentId,
+            actorType: "child",
+            actorId: a.id,
+            title: "有新的任务待审核",
+            body: `${a.displayName} 提交了「${task.title}」。`,
+            eventType: "task_submitted",
+            relatedType: "task_submission",
+            relatedId: submissionId
+        });
         return ok(true);
     }
     const review = path.match(/^\/task-submissions\/([^/]+)\/review$/);
@@ -385,6 +521,17 @@ async function route(request, env) {
                 .run();
             await recalcAchievements(env, a.id, sub.child_id);
         }
+        await notify(env, {
+            recipientType: "child",
+            recipientId: sub.child_id,
+            actorType: "user",
+            actorId: a.id,
+            title: status === "approved" ? "任务审核通过" : "任务被驳回",
+            body: status === "approved" ? "家长已通过你的任务，积分已结算。" : input.note || "家长驳回了这次任务提交。",
+            eventType: status === "approved" ? "task_approved" : "task_rejected",
+            relatedType: "task_submission",
+            relatedId: sub.id
+        });
         return ok(true);
     }
     if (path === "/reward-redemptions" && method === "POST") {
@@ -417,6 +564,17 @@ async function route(request, env) {
             .bind(id(), a.id, a.parentId, -Number(reward.cost_points), redemptionId, pkey, "兑换奖励")
             .run();
         await recalcAchievements(env, a.parentId, a.id);
+        await notify(env, {
+            recipientType: "user",
+            recipientId: a.parentId,
+            actorType: "child",
+            actorId: a.id,
+            title: "有新的奖励待核销",
+            body: `${a.displayName} 兑换了「${reward.title}」。`,
+            eventType: "reward_requested",
+            relatedType: "reward_redemption",
+            relatedId: redemptionId
+        });
         return ok(true);
     }
     const redemptionAction = path.match(/^\/reward-redemptions\/([^/]+)\/(redeem|cancel)$/);
@@ -437,6 +595,17 @@ async function route(request, env) {
                 .run();
             await recalcAchievements(env, a.id, redemption.child_id);
         }
+        await notify(env, {
+            recipientType: "child",
+            recipientId: redemption.child_id,
+            actorType: "user",
+            actorId: a.id,
+            title: redemptionAction[2] === "redeem" ? "奖励已核销" : "奖励兑换已取消",
+            body: redemptionAction[2] === "redeem" ? "家长已核销你的奖励兑换。" : "家长取消了奖励兑换，积分已退回。",
+            eventType: redemptionAction[2] === "redeem" ? "reward_redeemed" : "reward_cancelled",
+            relatedType: "reward_redemption",
+            relatedId: redemption.id
+        });
         return ok(true);
     }
     if (path === "/testing/reset-parent-progress" && method === "POST") {

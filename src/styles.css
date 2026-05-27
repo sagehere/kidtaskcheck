@@ -118,6 +118,41 @@ button:disabled {
   gap: 12px;
 }
 
+.notification-wrap {
+  position: relative;
+}
+
+.notification-wrap .icon {
+  position: relative;
+}
+
+.badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: #c43d3d;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.notification-panel {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  z-index: 20;
+  width: min(380px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid #e1ddd2;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 50px rgba(30, 41, 59, 0.18);
+}
+
 .content {
   width: min(1200px, calc(100% - 32px));
   margin: 0 auto;
@@ -198,6 +233,32 @@ button:disabled {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 6px;
+  border: 1px solid #e1ddd2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.tabs button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 8px;
+  color: #35424d;
+  background: transparent;
+  font-weight: 800;
+}
+
+.tabs button.active {
+  color: #ffffff;
+  background: #157f6f;
+}
+
 .panel {
   padding: 18px;
 }
@@ -207,6 +268,15 @@ button:disabled {
   align-items: center;
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.compact-title {
+  margin-bottom: 10px;
+}
+
+.compact-title h2 {
+  flex: 1;
+  font-size: 18px;
 }
 
 .panel-title svg {
@@ -296,6 +366,12 @@ textarea {
   gap: 10px;
 }
 
+.scroll-list {
+  max-height: 460px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -313,6 +389,7 @@ textarea {
 }
 
 .row span,
+.row small,
 .mini-card span,
 .task-card span,
 .achievement span,
@@ -321,6 +398,19 @@ textarea {
 .child-tile small {
   color: #69737d;
   font-size: 13px;
+}
+
+.row.unread {
+  border-color: #9bd6ce;
+  background: #f0fbf8;
+}
+
+.positive {
+  color: #0b6b4f;
+}
+
+.negative {
+  color: #9d2f2f;
 }
 
 .actions {
@@ -471,5 +561,14 @@ textarea {
 
   .topbar {
     padding: 12px 16px;
+  }
+
+  .row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actions {
+    flex-wrap: wrap;
   }
 }

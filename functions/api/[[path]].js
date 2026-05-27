@@ -81,6 +81,40 @@ async function ensureNotificationsSchema(env) {
 )`).run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_type, recipient_id, read_at, created_at)").run();
 }
+async function ensureRewardOnceSchema(env) {
+    const schema = await env.DB.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='rewards'").first();
+    if (!schema?.sql || String(schema.sql).includes("'once'"))
+        return;
+    await env.DB.prepare("PRAGMA foreign_keys = OFF").run();
+    await env.DB.prepare("DROP TABLE IF EXISTS rewards_new").run();
+    await env.DB.prepare(`CREATE TABLE rewards_new (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  cost_points INTEGER NOT NULL CHECK(cost_points >= 0),
+  stock INTEGER,
+  limit_period TEXT NOT NULL DEFAULT 'daily' CHECK(limit_period IN ('none', 'daily', 'weekly', 'monthly', 'once')),
+  limit_count INTEGER,
+  icon_type TEXT NOT NULL DEFAULT 'emoji' CHECK(icon_type IN ('emoji', 'gallery_image')),
+  icon_value TEXT NOT NULL DEFAULT '🎁',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`).run();
+    await env.DB.prepare(`INSERT INTO rewards_new (
+  id, parent_id, title, description, cost_points, stock, limit_period, limit_count,
+  icon_type, icon_value, is_active, deleted_at, created_at, updated_at
+)
+SELECT
+  id, parent_id, title, description, cost_points, stock, limit_period, limit_count,
+  icon_type, icon_value, is_active, deleted_at, created_at, updated_at
+FROM rewards`).run();
+    await env.DB.prepare("DROP TABLE rewards").run();
+    await env.DB.prepare("ALTER TABLE rewards_new RENAME TO rewards").run();
+    await env.DB.prepare("PRAGMA foreign_keys = ON").run();
+}
 async function actorFromRequest(request, env) {
     const token = cookie(request, "session");
     if (!token)
@@ -181,6 +215,7 @@ function notificationRecipient(actor) {
 async function route(request, env) {
     await ensureAdmin(env);
     await ensureNotificationsSchema(env);
+    await ensureRewardOnceSchema(env);
     const url = new URL(request.url);
     const path = `/${(url.pathname.replace(/^\/api\/?/, "") || "").replace(/^\/|\/$/g, "")}`;
     const method = request.method;

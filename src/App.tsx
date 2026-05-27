@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Award,
   BadgeCheck,
@@ -1083,6 +1083,7 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
+  const notificationRef = useRef<HTMLDivElement>(null);
 
   async function loadNotifications() {
     const data = await api<{ items: Notification[]; unread: number }>("/notifications").catch(() => ({ items: [], unread: 0 }));
@@ -1095,6 +1096,13 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
     const timer = window.setInterval(() => void loadNotifications(), REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [me.id]);
+  useEffect(() => {
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!notificationRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, []);
 
   async function readAll() {
     await api("/notifications/read-all", { method: "PATCH", body: JSON.stringify({}) });
@@ -1115,7 +1123,7 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
       <header className="topbar">
         <div className="brand"><Sparkles />儿童任务打卡</div>
         <div className="account">
-          <div className="notification-wrap">
+          <div className="notification-wrap" ref={notificationRef}>
             <button className="icon" title="消息中心" onClick={() => setOpen(!open)}>
               <Bell size={18} />
               {unread > 0 && <span className="badge">{unread}</span>}

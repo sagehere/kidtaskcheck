@@ -1,0 +1,13 @@
+name = "kids-task-checkin"
+compatibility_date = "2026-05-25"
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kids_task_checkin"
+database_id = "replace-with-cloudflare-d1-id"
+
+[vars]
+APP_NAME = "儿童任务打卡"
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "change-me-admin-password"

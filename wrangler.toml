@@ -9,5 +9,5 @@ database_id = "dbfc66d6-e579-4b66-95aa-26e2d41e5c79"
 
 [vars]
 APP_NAME = "儿童任务打卡"
-ADMIN_USERNAME = "sagehere"
-ADMIN_PASSWORD = "646566Dd"
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "change-me-admin-password"

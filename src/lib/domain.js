@@ -114,3 +114,14 @@ export function consecutiveDayStreak(inputs, timezoneOffsetMinutes = DEFAULT_TIM
 export function consecutiveSameTaskStreak(inputs, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
     return consecutiveDayStreak(inputs, timezoneOffsetMinutes);
 }
+export function daysWithoutEvents(inputs, input, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES, maxDays = 3650) {
+    const blocked = new Set(inputs.map((item) => todayKey(item, timezoneOffsetMinutes)));
+    let cursor = todayKey(input, timezoneOffsetMinutes);
+    let days = 0;
+    while (!blocked.has(cursor) && days < maxDays) {
+        days += 1;
+        const date = utcFromZonedParts(Number(cursor.slice(0, 4)), Number(cursor.slice(5, 7)) - 1, Number(cursor.slice(8, 10)) - 1, timezoneOffsetMinutes);
+        cursor = todayKey(date, timezoneOffsetMinutes);
+    }
+    return days;
+}

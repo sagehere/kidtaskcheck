@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, inAchievementWindow, nextPeriodReset, periodKey, signedPoints } from "../src/lib/domain";
+import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, nextPeriodReset, periodKey, signedPoints } from "../src/lib/domain";
 
 describe("periodKey", () => {
   it("calculates daily, weekly, monthly and once keys in the default UTC+8 timezone", () => {
@@ -68,5 +68,16 @@ describe("achievement windows", () => {
 describe("consecutiveSameTaskStreak", () => {
   it("counts consecutive local dates for one task", () => {
     expect(consecutiveSameTaskStreak(["2026-05-24T16:30:00.000Z", "2026-05-23T16:30:00.000Z", "2026-05-22T16:30:00.000Z"])).toBe(3);
+  });
+});
+
+describe("daysWithoutEvents", () => {
+  it("counts clean days from the current local date backwards", () => {
+    expect(daysWithoutEvents(["2026-05-23T16:30:00.000Z"], "2026-05-26T03:00:00.000Z")).toBe(2);
+    expect(daysWithoutEvents(["2026-05-25T16:30:00.000Z"], "2026-05-26T03:00:00.000Z")).toBe(0);
+  });
+
+  it("caps the count when there are no blocking events", () => {
+    expect(daysWithoutEvents([], "2026-05-26T03:00:00.000Z", 480, 7)).toBe(7);
   });
 });

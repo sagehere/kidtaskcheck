@@ -141,11 +141,24 @@ const ACHIEVEMENT_CONDITIONS = [
   { value: "tasks_week", label: "一周内完成任务" },
   { value: "tasks_month", label: "一月内完成任务" },
   { value: "tasks_custom", label: "固定日期范围内完成任务" },
+  { value: "category_tasks_total", label: "指定分类累计完成任务" },
+  { value: "category_tasks_week", label: "指定分类本周完成任务" },
+  { value: "category_tasks_month", label: "指定分类本月完成任务" },
+  { value: "category_tasks_custom", label: "指定分类固定日期范围内完成任务" },
+  { value: "category_streak", label: "指定分类连续打卡天数" },
   { value: "streak_days", label: "连续打卡天数" },
   { value: "same_task_streak", label: "连续完成同一任务" },
   { value: "total_earned", label: "累计获得积分" },
-  { value: "balance", label: "当前积分余额" },
-  { value: "redemptions", label: "累计兑换奖励" }
+  { value: "redemptions", label: "累计兑换奖励" },
+  { value: "praise_total", label: "累计获得表扬" },
+  { value: "praise_week", label: "本周获得表扬" },
+  { value: "praise_month", label: "本月获得表扬" },
+  { value: "praise_custom", label: "固定日期范围内获得表扬" },
+  { value: "praise_streak", label: "连续获得表扬天数" },
+  { value: "no_criticism_days", label: "连续未被批评天数" },
+  { value: "no_criticism_week", label: "本周未被批评" },
+  { value: "no_criticism_month", label: "本月未被批评" },
+  { value: "no_criticism_custom", label: "固定日期范围内未被批评" }
 ];
 
 function conditionFromAchievement(item: any) {
@@ -155,6 +168,17 @@ function conditionFromAchievement(item: any) {
   if (ruleType === "tasks_completed" && windowType === "current_month") return "tasks_month";
   if (ruleType === "tasks_completed" && windowType === "custom") return "tasks_custom";
   if (ruleType === "tasks_completed") return "tasks_total";
+  if (ruleType === "category_tasks" && windowType === "current_week") return "category_tasks_week";
+  if (ruleType === "category_tasks" && windowType === "current_month") return "category_tasks_month";
+  if (ruleType === "category_tasks" && windowType === "custom") return "category_tasks_custom";
+  if (ruleType === "category_tasks") return "category_tasks_total";
+  if (ruleType === "praise_count" && windowType === "current_week") return "praise_week";
+  if (ruleType === "praise_count" && windowType === "current_month") return "praise_month";
+  if (ruleType === "praise_count" && windowType === "custom") return "praise_custom";
+  if (ruleType === "praise_count") return "praise_total";
+  if (ruleType === "no_criticism_window" && windowType === "current_week") return "no_criticism_week";
+  if (ruleType === "no_criticism_window" && windowType === "current_month") return "no_criticism_month";
+  if (ruleType === "no_criticism_window" && windowType === "custom") return "no_criticism_custom";
   return ruleType;
 }
 
@@ -164,6 +188,20 @@ function achievementRuleFromCondition(condition: string) {
   if (condition === "tasks_month") return { ruleType: "tasks_completed", metric: "tasks_completed", windowType: "current_month" };
   if (condition === "tasks_custom") return { ruleType: "tasks_completed", metric: "tasks_completed", windowType: "custom" };
   if (condition === "same_task_streak") return { ruleType: "same_task_streak", metric: "tasks_completed", windowType: "all_time" };
+  if (condition === "category_tasks_total") return { ruleType: "category_tasks", metric: "tasks_completed", windowType: "all_time" };
+  if (condition === "category_tasks_week") return { ruleType: "category_tasks", metric: "tasks_completed", windowType: "current_week" };
+  if (condition === "category_tasks_month") return { ruleType: "category_tasks", metric: "tasks_completed", windowType: "current_month" };
+  if (condition === "category_tasks_custom") return { ruleType: "category_tasks", metric: "tasks_completed", windowType: "custom" };
+  if (condition === "category_streak") return { ruleType: "category_streak", metric: "tasks_completed", windowType: "all_time" };
+  if (condition === "praise_total") return { ruleType: "praise_count", metric: "total_earned", windowType: "all_time" };
+  if (condition === "praise_week") return { ruleType: "praise_count", metric: "total_earned", windowType: "current_week" };
+  if (condition === "praise_month") return { ruleType: "praise_count", metric: "total_earned", windowType: "current_month" };
+  if (condition === "praise_custom") return { ruleType: "praise_count", metric: "total_earned", windowType: "custom" };
+  if (condition === "praise_streak") return { ruleType: "praise_streak", metric: "total_earned", windowType: "all_time" };
+  if (condition === "no_criticism_days") return { ruleType: "no_criticism_days", metric: "total_earned", windowType: "all_time" };
+  if (condition === "no_criticism_week") return { ruleType: "no_criticism_window", metric: "total_earned", windowType: "current_week" };
+  if (condition === "no_criticism_month") return { ruleType: "no_criticism_window", metric: "total_earned", windowType: "current_month" };
+  if (condition === "no_criticism_custom") return { ruleType: "no_criticism_window", metric: "total_earned", windowType: "custom" };
   return { ruleType: condition, metric: condition, windowType: "all_time" };
 }
 
@@ -172,29 +210,37 @@ function achievementPayload(data: any) {
   return {
     title: data.title,
     description: data.description || "",
-    threshold: Number(data.threshold || 0),
+    threshold: rule.ruleType === "no_criticism_window" ? 1 : Number(data.threshold || 0),
     iconType: "emoji",
     iconValue: data.iconValue,
     ...rule,
     windowStart: rule.windowType === "custom" ? data.windowStart : null,
     windowEnd: rule.windowType === "custom" ? data.windowEnd : null,
-    targetTaskId: rule.ruleType === "same_task_streak" ? data.targetTaskId : null
+    targetTaskId: rule.ruleType === "same_task_streak" ? data.targetTaskId : null,
+    targetCategoryId: rule.ruleType === "category_tasks" || rule.ruleType === "category_streak" ? data.targetCategoryId : null
   };
 }
 
-function formatAchievementRule(item: any, tasks: Task[] = []) {
+function formatAchievementRule(item: any, tasks: Task[] = [], categories: Category[] = []) {
   const condition = conditionFromAchievement(item);
   const label = ACHIEVEMENT_CONDITIONS.find((entry) => entry.value === condition)?.label || formatMetric(item.metric);
-  if (condition === "tasks_custom") {
+  const category = categories.find((entry) => entry.id === item.target_category_id);
+  if (condition === "tasks_custom" || condition === "category_tasks_custom" || condition === "praise_custom" || condition === "no_criticism_custom") {
     const start = item.window_start || "开始日期";
     const end = item.window_end || "结束日期";
+    if (condition === "category_tasks_custom") return `${start} 至 ${end} ${category?.name || "指定分类"}完成任务 ≥ ${item.threshold}次`;
+    if (condition === "praise_custom") return `${start} 至 ${end} 获得表扬 ≥ ${item.threshold}次`;
+    if (condition === "no_criticism_custom") return `${start} 至 ${end} 未被批评`;
     return `${start} 至 ${end} 完成任务 ≥ ${item.threshold}`;
   }
   if (condition === "same_task_streak") {
     const task = tasks.find((entry) => entry.id === item.target_task_id);
     return `${task?.title || "指定任务"}连续完成 ≥ ${item.threshold} 天`;
   }
-  const unit = condition === "total_earned" || condition === "balance" ? "分" : condition === "streak_days" ? "天" : "次";
+  if (condition === "category_streak") return `${category?.name || "指定分类"}连续打卡 ≥ ${item.threshold}天`;
+  if (condition.startsWith("category_tasks_")) return `${category?.name || "指定分类"}${label.replace("指定分类", "")} ≥ ${item.threshold}次`;
+  if (condition === "no_criticism_week" || condition === "no_criticism_month") return label;
+  const unit = condition === "total_earned" || condition === "balance" ? "分" : condition === "streak_days" || condition === "praise_streak" || condition === "no_criticism_days" ? "天" : "次";
   return `${label} ≥ ${item.threshold}${unit}`;
 }
 
@@ -636,8 +682,8 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           </section>
           <section className="setting-group">
             <div className="panel-title"><Award /><h2>成就称号</h2></div>
-            <CreateAchievement tasks={tasks} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
-            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
+            <CreateAchievement tasks={tasks} categories={categories} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
+            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
@@ -856,10 +902,13 @@ function CreateCategory({ onCreate }: { onCreate: (data: any) => void }) {
   );
 }
 
-function AchievementRuleFields({ data, setData, tasks }: { data: any; setData: (data: any) => void; tasks: Task[] }) {
-  const needsCustomWindow = data.condition === "tasks_custom";
+function AchievementRuleFields({ data, setData, tasks, categories }: { data: any; setData: (data: any) => void; tasks: Task[]; categories: Category[] }) {
+  const needsCustomWindow = ["tasks_custom", "category_tasks_custom", "praise_custom", "no_criticism_custom"].includes(data.condition);
   const needsTask = data.condition === "same_task_streak";
+  const needsCategory = data.condition.startsWith("category_");
+  const needsThreshold = !["no_criticism_week", "no_criticism_month", "no_criticism_custom"].includes(data.condition);
   const targetTaskId = data.targetTaskId || tasks[0]?.id || "";
+  const targetCategoryId = data.targetCategoryId || categories[0]?.id || "";
   return (
     <>
       <Field label="条件">
@@ -881,18 +930,26 @@ function AchievementRuleFields({ data, setData, tasks }: { data: any; setData: (
           </select>
         </Field>
       )}
-      <Field label="阈值"><input type="number" min="0" value={data.threshold} onChange={(e) => setData({ ...data, threshold: Number(e.target.value) })} /></Field>
+      {needsCategory && (
+        <Field label="任务分类">
+          <select required value={targetCategoryId} onChange={(e) => setData({ ...data, targetCategoryId: e.target.value })}>
+            {!categories.length && <option value="">暂无分类</option>}
+            {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          </select>
+        </Field>
+      )}
+      {needsThreshold && <Field label="阈值"><input type="number" min="0" value={data.threshold} onChange={(e) => setData({ ...data, threshold: Number(e.target.value) })} /></Field>}
     </>
   );
 }
 
-function CreateAchievement({ tasks, onCreate }: { tasks: Task[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", condition: "tasks_total", threshold: 5, windowStart: "", windowEnd: "", targetTaskId: "", iconValue: "🏅" });
+function CreateAchievement({ tasks, categories, onCreate }: { tasks: Task[]; categories: Category[]; onCreate: (data: any) => void }) {
+  const [data, setData] = useState({ title: "", description: "", condition: "tasks_total", threshold: 5, windowStart: "", windowEnd: "", targetTaskId: "", targetCategoryId: "", iconValue: "🏅" });
   return (
-    <FormPanel title="成就称号" icon={<Award />} onSubmit={() => onCreate(achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "" }))}>
+    <FormPanel title="成就称号" icon={<Award />} onSubmit={() => onCreate(achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "", targetCategoryId: data.targetCategoryId || categories[0]?.id || "" }))}>
       <Field label="称号"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
-      <AchievementRuleFields data={data} setData={setData} tasks={tasks} />
+      <AchievementRuleFields data={data} setData={setData} tasks={tasks} categories={categories} />
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
     </FormPanel>
   );
@@ -1001,12 +1058,11 @@ function FeedbackOverview({ items, onUpdate, onDelete }: { items: FeedbackTempla
 }
 
 function EditFeedbackForm({ item, onSave, onCancel }: { item: FeedbackTemplate; onSave: (data: any) => void; onCancel: () => void }) {
-  const [data, setData] = useState({ kind: item.kind, title: item.title, description: item.description || "", points: item.points || 0, iconValue: item.icon_value || "✨", isActive: item.is_active !== 0 });
+  const [data, setData] = useState({ kind: item.kind, title: item.title, points: item.points || 0, iconValue: item.icon_value || "✨", isActive: item.is_active !== 0 });
   return (
     <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, iconType: "emoji" }); }}>
       <Field label="类型"><select value={data.kind} onChange={(e) => setData({ ...data, kind: e.target.value as "praise" | "criticism" })}><option value="praise">表扬</option><option value="criticism">批评</option></select></Field>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
-      <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
@@ -1169,7 +1225,7 @@ function Overview({ title, items, kind, children = [], categories = [], tasks = 
                 <small>
                   {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次`}
                   {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`}`}
-                  {kind === "achievement" && formatAchievementRule(item, tasks)}
+                  {kind === "achievement" && formatAchievementRule(item, tasks, categories)}
                 </small>
               </div>
             </div>
@@ -1205,12 +1261,13 @@ function EditItemForm({ kind, item, children, categories, tasks, onSave, onCance
     windowStart: item.window_start || "",
     windowEnd: item.window_end || "",
     targetTaskId: item.target_task_id || "",
+    targetCategoryId: item.target_category_id || "",
     iconValue: item.icon_value || "⭐",
     isActive: item.is_active !== 0,
     childIds: item.assignees || []
   }));
   return (
-    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave(kind === "achievement" ? achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "" }) : { ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" }); }}>
+    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave(kind === "achievement" ? achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "", targetCategoryId: data.targetCategoryId || categories[0]?.id || "" }) : { ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" }); }}>
       <Field label={kind === "reward" ? "名称" : "标题"}><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       {kind !== "task" && kind !== "reward" ? null : <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>}
       {kind === "task" && (
@@ -1231,7 +1288,7 @@ function EditItemForm({ kind, item, children, categories, tasks, onSave, onCance
       {kind === "achievement" && (
         <>
           <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
-          <AchievementRuleFields data={data} setData={setData} tasks={tasks} />
+          <AchievementRuleFields data={data} setData={setData} tasks={tasks} categories={categories} />
         </>
       )}
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>

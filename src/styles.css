@@ -640,6 +640,8 @@ button:disabled {
 }
 
 .pinned-card {
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 260px;
   border-color: #d8c48e;

@@ -143,6 +143,17 @@ async function ensureAchievementSchema(env) {
         await env.DB.prepare("ALTER TABLE achievements ADD COLUMN target_category_id TEXT REFERENCES task_categories(id)").run();
     }
 }
+async function ensureChildPinsSchema(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_pins (
+  child_id TEXT NOT NULL REFERENCES children(id),
+  item_type TEXT NOT NULL CHECK(item_type IN ('task', 'reward')),
+  item_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (child_id, item_type)
+)`).run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_child_pins_item ON child_pins(item_type, item_id)").run();
+}
 async function bootstrap(env) {
     if (!bootstrapPromise) {
         bootstrapPromise = (async () => {
@@ -152,6 +163,7 @@ async function bootstrap(env) {
             await ensureFeedbackSchema(env);
             await ensureCategorySchema(env);
             await ensureAchievementSchema(env);
+            await ensureChildPinsSchema(env);
         })().catch((error) => {
             bootstrapPromise = null;
             throw error;
@@ -1308,6 +1320,29 @@ WHERE id=?`)
         });
         return ok(true);
     }
+    const childPin = path.match(/^\/child-pins\/(task|reward)$/);
+    if (childPin && method === "PATCH") {
+        const a = requireRole(actor, ["child"]);
+        const input = await body(request);
+        const itemType = childPin[1];
+        const itemId = input.itemId === null ? null : String(input.itemId || "").trim();
+        if (!itemId) {
+            await env.DB.prepare("DELETE FROM child_pins WHERE child_id=? AND item_type=?").bind(a.id, itemType).run();
+            return ok({ itemType, itemId: null });
+        }
+        const found = itemType === "task"
+            ? await env.DB.prepare("SELECT t.id FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id WHERE t.id=? AND ta.child_id=? AND t.is_active=1 AND t.deleted_at IS NULL").bind(itemId, a.id).first()
+            : await env.DB.prepare("SELECT r.id FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id WHERE r.id=? AND ra.child_id=? AND r.is_active=1 AND r.deleted_at IS NULL").bind(itemId, a.id).first();
+        if (!found)
+            return fail("NOT_ASSIGNED", itemType === "task" ? "任务不存在或未分配给当前孩子" : "奖励不存在或未分配给当前孩子", 404);
+        const now = nowIso();
+        await env.DB.prepare(`INSERT INTO child_pins (child_id, item_type, item_id, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(child_id, item_type) DO UPDATE SET item_id=excluded.item_id, updated_at=excluded.updated_at`)
+            .bind(a.id, itemType, itemId, now, now)
+            .run();
+        return ok({ itemType, itemId });
+    }
     if (path === "/testing/reset-parent-progress" && method === "POST") {
         const a = requireRole(actor, ["parent"]);
         const children = await childIdsForParent(env, a.id);
@@ -1343,6 +1378,9 @@ WHERE id=?`)
     if (path === "/dashboard/child" && method === "GET") {
         const a = requireRole(actor, ["child"]);
         const offset = await timezoneOffsetMinutes(env);
+        const pins = (await env.DB.prepare("SELECT item_type, item_id FROM child_pins WHERE child_id=?").bind(a.id).all()).results;
+        const pinnedTaskId = pins.find((pin) => pin.item_type === "task")?.item_id || null;
+        const pinnedRewardId = pins.find((pin) => pin.item_type === "reward")?.item_id || null;
         const currentTasks = await env.DB.prepare("SELECT t.*, tc.name category_name, tc.icon_type category_icon_type, tc.icon_value category_icon_value FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id JOIN task_categories tc ON tc.id=t.category_id WHERE ta.child_id=? AND t.is_active=1 AND t.deleted_at IS NULL ORDER BY tc.name, t.created_at DESC")
             .bind(a.id)
             .all();
@@ -1367,7 +1405,8 @@ WHERE id=?`)
                 canSubmit: activeCount < limitCount,
                 resetAt: nextPeriodReset(task.period, undefined, offset),
                 submissionStatus: latest?.status || null,
-                rejectionNote: rejected?.review_note || ""
+                rejectionNote: rejected?.review_note || "",
+                isPinned: task.id === pinnedTaskId
             };
         });
         const rewardRows = await env.DB.prepare("SELECT r.* FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id WHERE ra.child_id=? AND r.is_active=1 AND r.deleted_at IS NULL ORDER BY r.cost_points")
@@ -1386,12 +1425,17 @@ WHERE id=?`)
                 usedCount,
                 remainingCount: limitCount === null ? null : Math.max(0, limitCount - usedCount),
                 canRedeem: limitCount === null || usedCount < limitCount,
-                resetAt: nextPeriodReset(reward.limit_period, undefined, offset)
+                resetAt: nextPeriodReset(reward.limit_period, undefined, offset),
+                isPinned: reward.id === pinnedRewardId
             };
         });
+        const visiblePinnedTaskId = taskRows.some((task) => task.id === pinnedTaskId) ? pinnedTaskId : null;
+        const visiblePinnedRewardId = rewards.some((reward) => reward.id === pinnedRewardId) ? pinnedRewardId : null;
         return ok({
             child: a,
             balance: await balance(env, a.id),
+            pinnedTaskId: visiblePinnedTaskId,
+            pinnedRewardId: visiblePinnedRewardId,
             tasks: taskRows,
             rewards,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results

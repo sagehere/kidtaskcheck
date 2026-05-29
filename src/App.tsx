@@ -13,6 +13,7 @@ import {
   KeyRound,
   LogOut,
   MessageSquare,
+  Pin,
   Plus,
   Settings,
   Shield,
@@ -1352,6 +1353,107 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [, setTick] = useState(0);
 
+  async function togglePin(kind: "task" | "reward", item: any) {
+    const itemId = item.isPinned ? null : item.id;
+    await run(
+      `pin:${kind}:${item.id}`,
+      () => api(`/child-pins/${kind}`, { method: "PATCH", body: JSON.stringify({ itemId }) }),
+      itemId ? "已置顶" : "已取消置顶"
+    );
+  }
+
+  function pinButton(kind: "task" | "reward", item: any) {
+    const busyId = busy === `pin:${kind}:${item.id}`;
+    return (
+      <button
+        type="button"
+        className={`icon pin-action ${item.isPinned ? "is-pinned" : ""}`}
+        title={item.isPinned ? "取消置顶" : "置顶"}
+        disabled={busyId}
+        onClick={() => void togglePin(kind, item)}
+      >
+        <Pin size={18} />
+      </button>
+    );
+  }
+
+  function rewardProgress(reward: any) {
+    const cost = Number(reward.cost_points || 0);
+    const current = Number(dash.balance || 0);
+    const complete = cost <= 0 || current >= cost;
+    const percent = cost <= 0 ? 100 : Math.min(100, Math.max(0, (current / cost) * 100));
+    return (
+      <div className={`reward-progress ${complete ? "is-complete" : ""}`}>
+        <div>
+          <span>兑换进度</span>
+          <strong>{current}/{cost} 积分</strong>
+        </div>
+        <div className="progress-track" aria-hidden="true">
+          <span style={{ width: `${percent}%` }} />
+        </div>
+      </div>
+    );
+  }
+
+  function renderTaskCard(task: any, pinned = false) {
+    const limited = !task.canSubmit;
+    const busyId = busy === "task:" + task.id;
+    const points = (task.point_type === "earn" ? "+" : "-") + task.points;
+    return (
+      <article className={["task-card", "wall-card", pinned ? "pinned-card" : "", limited ? "is-muted" : ""].filter(Boolean).join(" ")} key={task.id}>
+        <div className="card-head wall-card-head with-pin">
+          {icon(task.icon_type, task.icon_value, task.title)}
+          <div>
+            <strong>{task.title}</strong>
+            <small>{formatPeriod(task.period)}</small>
+          </div>
+          {pinButton("task", task)}
+        </div>
+        {task.description && <small className="card-description">{task.description}</small>}
+        <div className="card-meta">
+          <span className={task.point_type === "earn" ? "positive" : "negative"}>{points} 积分</span>
+          <span>{task.usedCount}/{task.limitCount} 次</span>
+          <span>{task.periodKey}</span>
+        </div>
+        {task.rejectionNote && <small className="card-status warn">上次驳回：{task.rejectionNote}</small>}
+        <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
+          {busyId ? "提交中..." : limited ? formatReset(task.resetAt) : "提交完成"}
+        </button>
+      </article>
+    );
+  }
+
+  function renderRewardCard(reward: any, pinned = false) {
+    const limited = !reward.canRedeem;
+    const disabled = dash.balance < reward.cost_points || limited || busy === "reward:" + reward.id;
+    return (
+      <article className={["mini-card", "wall-card", "reward-wall-card", pinned ? "pinned-card" : "", disabled ? "is-muted" : ""].filter(Boolean).join(" ")} key={reward.id}>
+        <div className="card-head wall-card-head with-pin">
+          {icon(reward.icon_type, reward.icon_value, reward.title)}
+          <div>
+            <strong>{reward.title}</strong>
+            <small>{formatPeriod(reward.limit_period)}</small>
+          </div>
+          {pinButton("reward", reward)}
+        </div>
+        {reward.description && <small className="card-description">{reward.description}</small>}
+        <div className="card-meta">
+          <span className="cost"><Coins size={16} />{reward.cost_points} 积分</span>
+          {reward.limitCount !== null && <span>{reward.usedCount}/{reward.limitCount} 次</span>}
+        </div>
+        {pinned && rewardProgress(reward)}
+        <small className={"card-status " + (disabled ? "warn" : "ready")}>
+          {limited ? formatReset(reward.resetAt) : dash.balance < reward.cost_points ? "积分还不够" : "可以兑换"}
+        </small>
+        <button className="secondary card-action" disabled={disabled} onClick={() => redeem(reward)}>
+          {busy === "reward:" + reward.id ? "兑换中..." : limited ? formatReset(reward.resetAt) : dash.balance < reward.cost_points ? "积分不足" : "兑换"}
+        </button>
+      </article>
+    );
+  }
+
+  const pinnedTask = dash.tasks.find((task: any) => task.isPinned);
+  const pinnedReward = dash.rewards.find((reward: any) => reward.isPinned);
   async function load() {
     setDash(await api("/dashboard/child"));
   }
@@ -1424,6 +1526,16 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           )) : <Empty text="完成任务后会解锁称号" />}
         </div>
       </section>
+      <section className="pinned-strip" aria-label="置顶任务和奖励">
+        <div className="pinned-slot">
+          <div className="pinned-slot-title"><ClipboardCheck size={18} /><span>置顶任务</span></div>
+          {pinnedTask ? renderTaskCard(pinnedTask, true) : <div className="empty pinned-empty">从任务卡片右上角置顶一个任务</div>}
+        </div>
+        <div className="pinned-slot">
+          <div className="pinned-slot-title"><Gift size={18} /><span>置顶奖励</span></div>
+          {pinnedReward ? renderRewardCard(pinnedReward, true) : <div className="empty pinned-empty">从奖励卡片右上角置顶一个奖励</div>}
+        </div>
+      </section>
       <Tabs
         value={activeTab}
         onChange={(value) => setActiveTab(value as typeof activeTab)}
@@ -1443,12 +1555,13 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
                 const points = `${task.point_type === "earn" ? "+" : "-"}${task.points}`;
                 return (
                   <article className={`task-card wall-card ${limited ? "is-muted" : ""}`} key={task.id}>
-                    <div className="card-head wall-card-head">
+                    <div className="card-head wall-card-head with-pin">
                       {icon(task.icon_type, task.icon_value, task.title)}
                       <div>
                         <strong>{task.title}</strong>
                         <small>{formatPeriod(task.period)}</small>
                       </div>
+                      {pinButton("task", task)}
                     </div>
                     {task.description && <small className="card-description">{task.description}</small>}
                     <div className="card-meta">
@@ -1476,12 +1589,13 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
               const disabled = dash.balance < reward.cost_points || limited || busy === `reward:${reward.id}`;
               return (
                 <article className={`mini-card wall-card reward-wall-card ${disabled ? "is-muted" : ""}`} key={reward.id}>
-                  <div className="card-head wall-card-head">
+                  <div className="card-head wall-card-head with-pin">
                     {icon(reward.icon_type, reward.icon_value, reward.title)}
                     <div>
                       <strong>{reward.title}</strong>
                       <small>{formatPeriod(reward.limit_period)}</small>
                     </div>
+                    {pinButton("reward", reward)}
                   </div>
                   {reward.description && <small className="card-description">{reward.description}</small>}
                   <div className="card-meta">
@@ -1603,3 +1717,4 @@ function App() {
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
+

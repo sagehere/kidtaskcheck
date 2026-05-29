@@ -605,6 +605,45 @@ button:disabled {
     #ffffff;
 }
 
+.pinned-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #e4dccb;
+  border-radius: 8px;
+  background: #fff8ea;
+}
+
+.pinned-slot {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.pinned-slot-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #6c4b09;
+  font-weight: 900;
+}
+
+.pinned-card {
+  min-height: 260px;
+  border-color: #d8c48e;
+  background: #fffdfa;
+}
+
+.pinned-empty {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  margin-top: 0;
+  text-align: center;
+}
+
 .wall-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -642,6 +681,25 @@ button:disabled {
 .wall-card-head {
   grid-template-columns: 56px minmax(0, 1fr);
   padding-top: 4px;
+}
+
+.wall-card-head.with-pin {
+  grid-template-columns: 56px minmax(0, 1fr) 38px;
+}
+
+.pin-action {
+  align-self: start;
+  width: 38px;
+  height: 38px;
+  color: #805600;
+  background: #fff4cf;
+  border-color: #ead89f;
+}
+
+.pin-action.is-pinned {
+  color: #ffffff;
+  background: #157f6f;
+  border-color: #157f6f;
 }
 
 .wall-card-head .emoji,
@@ -719,6 +777,46 @@ button:disabled {
   width: 100%;
   min-height: 46px;
   margin-top: auto;
+}
+
+.reward-progress {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f5efe2;
+}
+
+.reward-progress > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #5f6770;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.reward-progress strong {
+  color: #805600;
+  overflow-wrap: anywhere;
+}
+
+.reward-progress.is-complete strong {
+  color: #0b6b4f;
+}
+
+.progress-track {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e3ded4;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #efb545, #157f6f);
 }
 
 .child-tile strong {
@@ -847,7 +945,8 @@ button:disabled {
   }
 
   .cards,
-  .wall-grid {
+  .wall-grid,
+  .pinned-strip {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -948,6 +1047,10 @@ button:disabled {
 
   .wall-card-head {
     grid-template-columns: 50px minmax(0, 1fr);
+  }
+
+  .wall-card-head.with-pin {
+    grid-template-columns: 50px minmax(0, 1fr) 38px;
   }
 
   .wall-card-head .emoji,

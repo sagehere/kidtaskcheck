@@ -607,7 +607,7 @@ button:disabled {
 
 .pinned-strip {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
   gap: 16px;
   margin-top: 16px;
   padding: 16px;
@@ -616,9 +616,18 @@ button:disabled {
   background: #fff8ea;
 }
 
+.pinned-strip.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pinned-strip.is-pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .pinned-slot {
   min-width: 0;
   display: grid;
+  grid-template-rows: auto 1fr;
   gap: 10px;
 }
 
@@ -631,6 +640,7 @@ button:disabled {
 }
 
 .pinned-card {
+  height: 100%;
   min-height: 260px;
   border-color: #d8c48e;
   background: #fffdfa;
@@ -946,7 +956,8 @@ button:disabled {
 
   .cards,
   .wall-grid,
-  .pinned-strip {
+  .pinned-strip,
+  .pinned-strip.is-pair {
     grid-template-columns: minmax(0, 1fr);
   }
 

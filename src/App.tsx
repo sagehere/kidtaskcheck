@@ -1454,6 +1454,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
 
   const pinnedTask = dash.tasks.find((task: any) => task.isPinned);
   const pinnedReward = dash.rewards.find((reward: any) => reward.isPinned);
+  const pinnedCount = Number(Boolean(pinnedTask)) + Number(Boolean(pinnedReward));
   async function load() {
     setDash(await api("/dashboard/child"));
   }
@@ -1526,16 +1527,22 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           )) : <Empty text="完成任务后会解锁称号" />}
         </div>
       </section>
-      <section className="pinned-strip" aria-label="置顶任务和奖励">
-        <div className="pinned-slot">
-          <div className="pinned-slot-title"><ClipboardCheck size={18} /><span>置顶任务</span></div>
-          {pinnedTask ? renderTaskCard(pinnedTask, true) : <div className="empty pinned-empty">从任务卡片右上角置顶一个任务</div>}
-        </div>
-        <div className="pinned-slot">
-          <div className="pinned-slot-title"><Gift size={18} /><span>置顶奖励</span></div>
-          {pinnedReward ? renderRewardCard(pinnedReward, true) : <div className="empty pinned-empty">从奖励卡片右上角置顶一个奖励</div>}
-        </div>
-      </section>
+      {pinnedCount > 0 && (
+        <section className={`pinned-strip ${pinnedCount === 1 ? "is-single" : "is-pair"}`} aria-label="置顶任务和奖励">
+          {pinnedTask && (
+            <div className="pinned-slot">
+              <div className="pinned-slot-title"><ClipboardCheck size={18} /><span>置顶任务</span></div>
+              {renderTaskCard(pinnedTask, true)}
+            </div>
+          )}
+          {pinnedReward && (
+            <div className="pinned-slot">
+              <div className="pinned-slot-title"><Gift size={18} /><span>置顶奖励</span></div>
+              {renderRewardCard(pinnedReward, true)}
+            </div>
+          )}
+        </section>
+      )}
       <Tabs
         value={activeTab}
         onChange={(value) => setActiveTab(value as typeof activeTab)}

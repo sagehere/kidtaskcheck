@@ -14,7 +14,6 @@ import {
   LogOut,
   MessageSquare,
   Plus,
-  RefreshCcw,
   Settings,
   Shield,
   Sparkles,
@@ -135,6 +134,68 @@ function formatMetric(value: string) {
     redemptions: "累计兑换奖励"
   };
   return labels[value] || value;
+}
+
+const ACHIEVEMENT_CONDITIONS = [
+  { value: "tasks_total", label: "累计完成任务" },
+  { value: "tasks_week", label: "一周内完成任务" },
+  { value: "tasks_month", label: "一月内完成任务" },
+  { value: "tasks_custom", label: "固定日期范围内完成任务" },
+  { value: "streak_days", label: "连续打卡天数" },
+  { value: "same_task_streak", label: "连续完成同一任务" },
+  { value: "total_earned", label: "累计获得积分" },
+  { value: "balance", label: "当前积分余额" },
+  { value: "redemptions", label: "累计兑换奖励" }
+];
+
+function conditionFromAchievement(item: any) {
+  const ruleType = item.rule_type || item.metric || "tasks_completed";
+  const windowType = item.window_type || "all_time";
+  if (ruleType === "tasks_completed" && windowType === "current_week") return "tasks_week";
+  if (ruleType === "tasks_completed" && windowType === "current_month") return "tasks_month";
+  if (ruleType === "tasks_completed" && windowType === "custom") return "tasks_custom";
+  if (ruleType === "tasks_completed") return "tasks_total";
+  return ruleType;
+}
+
+function achievementRuleFromCondition(condition: string) {
+  if (condition === "tasks_total") return { ruleType: "tasks_completed", metric: "tasks_completed", windowType: "all_time" };
+  if (condition === "tasks_week") return { ruleType: "tasks_completed", metric: "tasks_completed", windowType: "current_week" };
+  if (condition === "tasks_month") return { ruleType: "tasks_completed", metric: "tasks_completed", windowType: "current_month" };
+  if (condition === "tasks_custom") return { ruleType: "tasks_completed", metric: "tasks_completed", windowType: "custom" };
+  if (condition === "same_task_streak") return { ruleType: "same_task_streak", metric: "tasks_completed", windowType: "all_time" };
+  return { ruleType: condition, metric: condition, windowType: "all_time" };
+}
+
+function achievementPayload(data: any) {
+  const rule = achievementRuleFromCondition(data.condition);
+  return {
+    title: data.title,
+    description: data.description || "",
+    threshold: Number(data.threshold || 0),
+    iconType: "emoji",
+    iconValue: data.iconValue,
+    ...rule,
+    windowStart: rule.windowType === "custom" ? data.windowStart : null,
+    windowEnd: rule.windowType === "custom" ? data.windowEnd : null,
+    targetTaskId: rule.ruleType === "same_task_streak" ? data.targetTaskId : null
+  };
+}
+
+function formatAchievementRule(item: any, tasks: Task[] = []) {
+  const condition = conditionFromAchievement(item);
+  const label = ACHIEVEMENT_CONDITIONS.find((entry) => entry.value === condition)?.label || formatMetric(item.metric);
+  if (condition === "tasks_custom") {
+    const start = item.window_start || "开始日期";
+    const end = item.window_end || "结束日期";
+    return `${start} 至 ${end} 完成任务 ≥ ${item.threshold}`;
+  }
+  if (condition === "same_task_streak") {
+    const task = tasks.find((entry) => entry.id === item.target_task_id);
+    return `${task?.title || "指定任务"}连续完成 ≥ ${item.threshold} 天`;
+  }
+  const unit = condition === "total_earned" || condition === "balance" ? "分" : condition === "streak_days" ? "天" : "次";
+  return `${label} ≥ ${item.threshold}${unit}`;
 }
 
 function timezoneOptions() {
@@ -371,6 +432,8 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const resetTapCount = useRef(0);
+  const resetTapTimer = useRef<number | null>(null);
 
   async function load() {
     const [childRows, categoryRows, taskRows, rewardRows, achievementRows, feedbackRows, dash] = await Promise.all([
@@ -398,6 +461,9 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   useEffect(() => {
     if (ledgerChild) void loadLedger(ledgerChild);
   }, [dashboard, ledgerChild?.id]);
+  useEffect(() => () => {
+    if (resetTapTimer.current) window.clearTimeout(resetTapTimer.current);
+  }, []);
 
   async function loadLedger(child: { id: string; display_name: string }) {
     setLedgerChild(child);
@@ -464,6 +530,20 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     await run(() => api("/testing/reset-parent-progress", { method: "POST", body: JSON.stringify({}) }), "测试进度已重置");
   }
 
+  function tapHiddenReset() {
+    if (resetTapTimer.current) window.clearTimeout(resetTapTimer.current);
+    resetTapCount.current += 1;
+    if (resetTapCount.current >= 5) {
+      resetTapCount.current = 0;
+      void resetProgress();
+      return;
+    }
+    resetTapTimer.current = window.setTimeout(() => {
+      resetTapCount.current = 0;
+      resetTapTimer.current = null;
+    }, 2000);
+  }
+
   async function applyFeedback(data: { childId: string; templateId: string }) {
     await run(
       () => api(`/children/${data.childId}/feedback-events`, { method: "POST", body: JSON.stringify({ templateId: data.templateId }) }),
@@ -475,14 +555,10 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     <Shell me={me} refresh={refresh}>
       <section className="hero-band parent">
         <div>
-          <p>家长面板</p>
+          <p className="hidden-reset-trigger" onClick={tapHiddenReset}>家长面板</p>
           <h1>今天需要处理的事情</h1>
         </div>
         <div className="hero-actions">
-          <button className="secondary" onClick={resetProgress}>
-            <RefreshCcw size={18} />
-            重置测试数据
-          </button>
           <div className="metric">
             <ClipboardCheck />
             <strong>{dashboard.pendingSubmissions?.length || 0}</strong>
@@ -560,8 +636,8 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           </section>
           <section className="setting-group">
             <div className="panel-title"><Award /><h2>成就称号</h2></div>
-            <CreateAchievement onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
-            <Overview title="成就称号" items={achievements} kind="achievement" onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
+            <CreateAchievement tasks={tasks} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
+            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
@@ -569,13 +645,6 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
             <FeedbackOverview items={feedbackTemplates} onUpdate={(item, data) => update(`/feedback-templates/${item.id}`, data, "条款已更新")} onDelete={(item) => remove(`/feedback-templates/${item.id}`, "条款已删除", `确认删除${item.kind === "praise" ? "表扬" : "批评"}条款「${item.title}」？历史积分记录会保留。`)} />
           </section>
           <ConfigPortPanel onImported={load} />
-          <section className="panel">
-            <div className="panel-title"><RefreshCcw /><h2>测试与维护</h2></div>
-            <button className="secondary" onClick={resetProgress}>
-              <RefreshCcw size={18} />
-              重置测试数据
-            </button>
-          </section>
         </>
       )}
       {ledgerChild && <LedgerModal title={`${ledgerChild.display_name} 的积分清单`} rows={ledger} onClose={() => setLedgerChild(null)} />}
@@ -787,21 +856,43 @@ function CreateCategory({ onCreate }: { onCreate: (data: any) => void }) {
   );
 }
 
-function CreateAchievement({ onCreate }: { onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", metric: "tasks_completed", threshold: 5, iconValue: "🏅" });
+function AchievementRuleFields({ data, setData, tasks }: { data: any; setData: (data: any) => void; tasks: Task[] }) {
+  const needsCustomWindow = data.condition === "tasks_custom";
+  const needsTask = data.condition === "same_task_streak";
+  const targetTaskId = data.targetTaskId || tasks[0]?.id || "";
   return (
-    <FormPanel title="成就称号" icon={<Award />} onSubmit={() => onCreate({ ...data, iconType: "emoji" })}>
-      <Field label="称号"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
+    <>
       <Field label="条件">
-        <select value={data.metric} onChange={(e) => setData({ ...data, metric: e.target.value })}>
-          <option value="tasks_completed">累计完成任务</option>
-          <option value="total_earned">累计获得积分</option>
-          <option value="balance">当前积分余额</option>
-          <option value="streak_days">连续打卡天数</option>
-          <option value="redemptions">累计兑换奖励</option>
+        <select value={data.condition} onChange={(e) => setData({ ...data, condition: e.target.value })}>
+          {ACHIEVEMENT_CONDITIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
       </Field>
-      <Field label="阈值"><input type="number" value={data.threshold} onChange={(e) => setData({ ...data, threshold: Number(e.target.value) })} /></Field>
+      {needsCustomWindow && (
+        <div className="grid two compact-fields">
+          <Field label="开始日期"><input type="date" required value={data.windowStart} onChange={(e) => setData({ ...data, windowStart: e.target.value })} /></Field>
+          <Field label="结束日期"><input type="date" required value={data.windowEnd} onChange={(e) => setData({ ...data, windowEnd: e.target.value })} /></Field>
+        </div>
+      )}
+      {needsTask && (
+        <Field label="指定任务">
+          <select required value={targetTaskId} onChange={(e) => setData({ ...data, targetTaskId: e.target.value })}>
+            {!tasks.length && <option value="">暂无任务</option>}
+            {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
+          </select>
+        </Field>
+      )}
+      <Field label="阈值"><input type="number" min="0" value={data.threshold} onChange={(e) => setData({ ...data, threshold: Number(e.target.value) })} /></Field>
+    </>
+  );
+}
+
+function CreateAchievement({ tasks, onCreate }: { tasks: Task[]; onCreate: (data: any) => void }) {
+  const [data, setData] = useState({ title: "", description: "", condition: "tasks_total", threshold: 5, windowStart: "", windowEnd: "", targetTaskId: "", iconValue: "🏅" });
+  return (
+    <FormPanel title="成就称号" icon={<Award />} onSubmit={() => onCreate(achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "" }))}>
+      <Field label="称号"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
+      <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
+      <AchievementRuleFields data={data} setData={setData} tasks={tasks} />
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
     </FormPanel>
   );
@@ -860,7 +951,7 @@ function CreateReward({ children, onCreate }: { children: Child[]; onCreate: (da
 }
 
 function CreateFeedbackTemplate({ onCreate }: { onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ kind: "praise", title: "", description: "", points: 5, iconValue: "✨", isActive: true });
+  const [data, setData] = useState({ kind: "praise", title: "", points: 5, iconValue: "✨", isActive: true });
   return (
     <FormPanel title="新条款" icon={<MessageSquare />} onSubmit={() => onCreate({ ...data, iconType: "emoji" })}>
       <Field label="类型">
@@ -870,7 +961,6 @@ function CreateFeedbackTemplate({ onCreate }: { onCreate: (data: any) => void })
         </select>
       </Field>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
-      <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
@@ -1062,7 +1152,7 @@ function CategoryEditForm({ item, onSave, onCancel }: { item: Category; onSave: 
   );
 }
 
-function Overview({ title, items, kind, children = [], categories = [], onUpdate, onDelete }: { title: string; items: any[]; kind: "task" | "reward" | "achievement"; children?: Child[]; categories?: Category[]; onUpdate?: (item: any, data: any) => void; onDelete?: (item: any) => void }) {
+function Overview({ title, items, kind, children = [], categories = [], tasks = [], onUpdate, onDelete }: { title: string; items: any[]; kind: "task" | "reward" | "achievement"; children?: Child[]; categories?: Category[]; tasks?: Task[]; onUpdate?: (item: any, data: any) => void; onDelete?: (item: any) => void }) {
   const [editing, setEditing] = useState<any | null>(null);
   const titleLabel = kind === "reward" ? "奖励" : kind === "achievement" ? "成就称号" : "任务";
   return (
@@ -1079,7 +1169,7 @@ function Overview({ title, items, kind, children = [], categories = [], onUpdate
                 <small>
                   {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次`}
                   {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`}`}
-                  {kind === "achievement" && `${formatMetric(item.metric)} ≥ ${item.threshold}`}
+                  {kind === "achievement" && formatAchievementRule(item, tasks)}
                 </small>
               </div>
             </div>
@@ -1092,14 +1182,14 @@ function Overview({ title, items, kind, children = [], categories = [], onUpdate
       </div>
       {editing && onUpdate && (
         <EditDialog title={`编辑${titleLabel}`} icon={kind === "reward" ? <Gift /> : kind === "achievement" ? <Award /> : <ClipboardCheck />} onClose={() => setEditing(null)}>
-          <EditItemForm kind={kind} item={editing} children={children} categories={categories} onCancel={() => setEditing(null)} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} />
+          <EditItemForm kind={kind} item={editing} children={children} categories={categories} tasks={tasks} onCancel={() => setEditing(null)} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} />
         </EditDialog>
       )}
     </section>
   );
 }
 
-function EditItemForm({ kind, item, children, categories, onSave, onCancel }: { kind: "task" | "reward" | "achievement"; item: any; children: Child[]; categories: Category[]; onSave: (data: any) => void; onCancel: () => void }) {
+function EditItemForm({ kind, item, children, categories, tasks, onSave, onCancel }: { kind: "task" | "reward" | "achievement"; item: any; children: Child[]; categories: Category[]; tasks: Task[]; onSave: (data: any) => void; onCancel: () => void }) {
   const [data, setData] = useState<any>(() => ({
     title: item.title || "",
     description: item.description || "",
@@ -1110,13 +1200,17 @@ function EditItemForm({ kind, item, children, categories, onSave, onCancel }: { 
     costPoints: item.cost_points || 0,
     limitPeriod: item.limit_period === "none" ? "daily" : item.limit_period || "daily",
     metric: item.metric || "tasks_completed",
+    condition: conditionFromAchievement(item),
     threshold: item.threshold || 1,
+    windowStart: item.window_start || "",
+    windowEnd: item.window_end || "",
+    targetTaskId: item.target_task_id || "",
     iconValue: item.icon_value || "⭐",
     isActive: item.is_active !== 0,
     childIds: item.assignees || []
   }));
   return (
-    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" }); }}>
+    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave(kind === "achievement" ? achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "" }) : { ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" }); }}>
       <Field label={kind === "reward" ? "名称" : "标题"}><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       {kind !== "task" && kind !== "reward" ? null : <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>}
       {kind === "task" && (
@@ -1137,8 +1231,7 @@ function EditItemForm({ kind, item, children, categories, onSave, onCancel }: { 
       {kind === "achievement" && (
         <>
           <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
-          <Field label="条件"><select value={data.metric} onChange={(e) => setData({ ...data, metric: e.target.value })}><option value="tasks_completed">累计完成任务</option><option value="total_earned">累计获得积分</option><option value="balance">当前积分余额</option><option value="streak_days">连续打卡天数</option><option value="redemptions">累计兑换奖励</option></select></Field>
-          <Field label="阈值"><input type="number" min="0" value={data.threshold} onChange={(e) => setData({ ...data, threshold: Number(e.target.value) })} /></Field>
+          <AchievementRuleFields data={data} setData={setData} tasks={tasks} />
         </>
       )}
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>

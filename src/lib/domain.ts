@@ -67,6 +67,65 @@ export function todayKey(input?: string | Date, timezoneOffsetMinutes = DEFAULT_
   return periodKey("daily", input, timezoneOffsetMinutes);
 }
 
+export type AchievementWindowType = "all_time" | "current_week" | "current_month" | "custom";
+
+export function localDateKey(input?: string | Date, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
+  return todayKey(input, timezoneOffsetMinutes);
+}
+
+export function achievementWindowRange(
+  windowType: AchievementWindowType,
+  input?: string | Date,
+  timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES,
+  customStart?: string | null,
+  customEnd?: string | null
+) {
+  if (windowType === "all_time") return null;
+
+  if (windowType === "custom") {
+    if (!customStart || !customEnd) return null;
+    const [startYear, startMonth, startDay] = customStart.split("-").map(Number);
+    const [endYear, endMonth, endDay] = customEnd.split("-").map(Number);
+    if (![startYear, startMonth, startDay, endYear, endMonth, endDay].every(Number.isFinite)) return null;
+    return {
+      start: utcFromZonedParts(startYear, startMonth - 1, startDay, timezoneOffsetMinutes).toISOString(),
+      end: utcFromZonedParts(endYear, endMonth - 1, endDay + 1, timezoneOffsetMinutes).toISOString()
+    };
+  }
+
+  const date = zonedDate(input, timezoneOffsetMinutes);
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const day = date.getUTCDate();
+
+  if (windowType === "current_month") {
+    return {
+      start: utcFromZonedParts(year, month, 1, timezoneOffsetMinutes).toISOString(),
+      end: utcFromZonedParts(year, month + 1, 1, timezoneOffsetMinutes).toISOString()
+    };
+  }
+
+  const weekday = date.getUTCDay() || 7;
+  return {
+    start: utcFromZonedParts(year, month, day - weekday + 1, timezoneOffsetMinutes).toISOString(),
+    end: utcFromZonedParts(year, month, day + (8 - weekday), timezoneOffsetMinutes).toISOString()
+  };
+}
+
+export function inAchievementWindow(
+  value: string | Date,
+  windowType: AchievementWindowType,
+  input?: string | Date,
+  timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES,
+  customStart?: string | null,
+  customEnd?: string | null
+) {
+  const range = achievementWindowRange(windowType, input, timezoneOffsetMinutes, customStart, customEnd);
+  if (!range) return true;
+  const at = toDate(value).getTime();
+  return at >= new Date(range.start).getTime() && at < new Date(range.end).getTime();
+}
+
 export function consecutiveDayStreak(inputs: (string | Date)[], timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
   const unique = [...new Set(inputs.map((input) => todayKey(input, timezoneOffsetMinutes)))].sort().reverse();
   if (!unique.length) return 0;
@@ -79,4 +138,8 @@ export function consecutiveDayStreak(inputs: (string | Date)[], timezoneOffsetMi
     streak += 1;
   }
   return streak;
+}
+
+export function consecutiveSameTaskStreak(inputs: (string | Date)[], timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
+  return consecutiveDayStreak(inputs, timezoneOffsetMinutes);
 }

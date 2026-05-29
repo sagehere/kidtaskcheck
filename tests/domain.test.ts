@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { consecutiveDayStreak, nextPeriodReset, periodKey, signedPoints } from "../src/lib/domain";
+import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, inAchievementWindow, nextPeriodReset, periodKey, signedPoints } from "../src/lib/domain";
 
 describe("periodKey", () => {
   it("calculates daily, weekly, monthly and once keys in the default UTC+8 timezone", () => {
@@ -43,5 +43,30 @@ describe("nextPeriodReset", () => {
 describe("consecutiveDayStreak", () => {
   it("counts consecutive approved submission days in the configured timezone", () => {
     expect(consecutiveDayStreak(["2026-05-24T16:30:00.000Z", "2026-05-23T16:30:00.000Z", "2026-05-21T16:30:00.000Z"])).toBe(2);
+  });
+});
+
+describe("achievement windows", () => {
+  it("builds current week and month windows in the configured timezone", () => {
+    expect(achievementWindowRange("current_week", "2026-05-27T10:00:00.000Z")).toEqual({
+      start: "2026-05-24T16:00:00.000Z",
+      end: "2026-05-31T16:00:00.000Z"
+    });
+    expect(achievementWindowRange("current_month", "2026-05-27T10:00:00.000Z")).toEqual({
+      start: "2026-04-30T16:00:00.000Z",
+      end: "2026-05-31T16:00:00.000Z"
+    });
+  });
+
+  it("checks custom date ranges inclusively by local date", () => {
+    expect(inAchievementWindow("2026-09-01T00:00:00.000Z", "custom", "2026-10-01T00:00:00.000Z", 480, "2026-09-01", "2027-01-20")).toBe(true);
+    expect(inAchievementWindow("2027-01-20T15:59:59.000Z", "custom", "2026-10-01T00:00:00.000Z", 480, "2026-09-01", "2027-01-20")).toBe(true);
+    expect(inAchievementWindow("2027-01-20T16:00:00.000Z", "custom", "2026-10-01T00:00:00.000Z", 480, "2026-09-01", "2027-01-20")).toBe(false);
+  });
+});
+
+describe("consecutiveSameTaskStreak", () => {
+  it("counts consecutive local dates for one task", () => {
+    expect(consecutiveSameTaskStreak(["2026-05-24T16:30:00.000Z", "2026-05-23T16:30:00.000Z", "2026-05-22T16:30:00.000Z"])).toBe(3);
   });
 });

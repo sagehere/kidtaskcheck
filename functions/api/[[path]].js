@@ -1,4 +1,4 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, consecutiveDayStreak, nextPeriodReset, periodKey, signedPoints } from "../../src/lib/domain.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, consecutiveDayStreak, consecutiveSameTaskStreak, inAchievementWindow, nextPeriodReset, periodKey, signedPoints } from "../../src/lib/domain.js";
 const json = (data, init) => new Response(JSON.stringify(data), {
     ...init,
     headers: { "content-type": "application/json; charset=utf-8", ...(init?.headers || {}) }
@@ -121,6 +121,25 @@ async function ensureCategorySchema(env) {
         await env.DB.prepare("ALTER TABLE task_categories ADD COLUMN source_system_id TEXT REFERENCES task_categories(id)").run();
     }
 }
+async function ensureAchievementSchema(env) {
+    const columns = (await env.DB.prepare("PRAGMA table_info(achievements)").all()).results.map((row) => row.name);
+    if (!columns.includes("rule_type")) {
+        await env.DB.prepare("ALTER TABLE achievements ADD COLUMN rule_type TEXT NOT NULL DEFAULT 'tasks_completed'").run();
+        await env.DB.prepare("UPDATE achievements SET rule_type=metric WHERE metric IN ('total_earned', 'balance', 'tasks_completed', 'streak_days', 'redemptions')").run();
+    }
+    if (!columns.includes("window_type")) {
+        await env.DB.prepare("ALTER TABLE achievements ADD COLUMN window_type TEXT NOT NULL DEFAULT 'all_time'").run();
+    }
+    if (!columns.includes("window_start")) {
+        await env.DB.prepare("ALTER TABLE achievements ADD COLUMN window_start TEXT").run();
+    }
+    if (!columns.includes("window_end")) {
+        await env.DB.prepare("ALTER TABLE achievements ADD COLUMN window_end TEXT").run();
+    }
+    if (!columns.includes("target_task_id")) {
+        await env.DB.prepare("ALTER TABLE achievements ADD COLUMN target_task_id TEXT REFERENCES tasks(id)").run();
+    }
+}
 async function ensureRewardOnceSchema(env) {
     const schema = await env.DB.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='rewards'").first();
     if (!schema?.sql || String(schema.sql).includes("'once'"))
@@ -230,27 +249,65 @@ async function replaceAssignees(env, table, key, keyValue, childIds) {
         await env.DB.prepare(`INSERT INTO ${table} (${key}, child_id) VALUES (?, ?)`).bind(keyValue, childId).run();
     }
 }
+const ACHIEVEMENT_RULE_TYPES = new Set(["tasks_completed", "total_earned", "balance", "streak_days", "redemptions", "same_task_streak"]);
+const ACHIEVEMENT_WINDOW_TYPES = new Set(["all_time", "current_week", "current_month", "custom"]);
+function normalizeAchievementInput(input = {}) {
+    const requestedRule = input.ruleType || input.rule_type || input.metric || "tasks_completed";
+    const ruleType = ACHIEVEMENT_RULE_TYPES.has(requestedRule) ? requestedRule : "tasks_completed";
+    const requestedWindow = input.windowType || input.window_type || "all_time";
+    const windowType = ACHIEVEMENT_WINDOW_TYPES.has(requestedWindow) ? requestedWindow : "all_time";
+    const threshold = Math.max(0, Number(input.threshold || 1));
+    const windowStart = windowType === "custom" ? String(input.windowStart || input.window_start || "").slice(0, 10) || null : null;
+    const windowEnd = windowType === "custom" ? String(input.windowEnd || input.window_end || "").slice(0, 10) || null : null;
+    const targetTaskId = ruleType === "same_task_streak" ? String(input.targetTaskId || input.target_task_id || "") || null : null;
+    const metric = ruleType === "same_task_streak" ? "tasks_completed" : ruleType;
+    return { ruleType, metric, threshold, windowType, windowStart, windowEnd, targetTaskId };
+}
+function countRowsInWindow(rows, dateKey, achievement, offset, now) {
+    const windowType = achievement.window_type || "all_time";
+    return rows.filter((row) => inAchievementWindow(row[dateKey], windowType, now, offset, achievement.window_start, achievement.window_end)).length;
+}
 async function balance(env, childId) {
     const row = await env.DB.prepare("SELECT COALESCE(SUM(amount), 0) balance FROM point_ledger WHERE child_id=?").bind(childId).first();
     return Number(row?.balance || 0);
 }
 async function recalcAchievements(env, parentId, childId) {
     const achievements = await env.DB.prepare("SELECT * FROM achievements WHERE parent_id=? AND is_active=1 AND deleted_at IS NULL").bind(parentId).all();
-    const earned = Number((await env.DB.prepare("SELECT COALESCE(SUM(amount), 0) v FROM point_ledger WHERE child_id=? AND amount > 0").bind(childId).first())?.v || 0);
-    const current = await balance(env, childId);
-    const completed = Number((await env.DB.prepare("SELECT COUNT(*) v FROM task_submissions WHERE child_id=? AND status='approved'").bind(childId).first())?.v || 0);
-    const redemptions = Number((await env.DB.prepare("SELECT COUNT(*) v FROM reward_redemptions WHERE child_id=? AND status IN ('pending','redeemed')").bind(childId).first())?.v || 0);
     const offset = await timezoneOffsetMinutes(env);
-    const days = (await env.DB.prepare("SELECT submitted_at FROM task_submissions WHERE child_id=? AND status='approved'").bind(childId).all()).results.map((r) => r.submitted_at);
-    const metrics = {
-        total_earned: earned,
-        balance: current,
-        tasks_completed: completed,
-        redemptions,
-        streak_days: consecutiveDayStreak(days, offset)
-    };
+    const now = nowIso();
+    const current = await balance(env, childId);
+    const approvedTasks = (await env.DB.prepare("SELECT task_id, submitted_at FROM task_submissions WHERE child_id=? AND status='approved'").bind(childId).all()).results;
+    const positiveLedger = (await env.DB.prepare("SELECT amount, created_at FROM point_ledger WHERE child_id=? AND amount > 0").bind(childId).all()).results;
+    const redemptions = (await env.DB.prepare("SELECT requested_at FROM reward_redemptions WHERE child_id=? AND status IN ('pending','redeemed')").bind(childId).all()).results;
     for (const achievement of achievements.results) {
-        if ((metrics[achievement.metric] || 0) >= Number(achievement.threshold)) {
+        const normalized = {
+            ...achievement,
+            rule_type: achievement.rule_type || achievement.metric || "tasks_completed",
+            window_type: achievement.window_type || "all_time"
+        };
+        let value = 0;
+        if (normalized.rule_type === "balance") {
+            value = current;
+        }
+        else if (normalized.rule_type === "streak_days") {
+            value = consecutiveDayStreak(approvedTasks.map((row) => row.submitted_at), offset);
+        }
+        else if (normalized.rule_type === "same_task_streak") {
+            const taskIds = normalized.target_task_id ? [normalized.target_task_id] : [...new Set(approvedTasks.map((row) => row.task_id))];
+            value = Math.max(0, ...taskIds.map((taskId) => consecutiveSameTaskStreak(approvedTasks.filter((row) => row.task_id === taskId).map((row) => row.submitted_at), offset)));
+        }
+        else if (normalized.rule_type === "total_earned") {
+            value = positiveLedger
+                .filter((row) => inAchievementWindow(row.created_at, normalized.window_type, now, offset, normalized.window_start, normalized.window_end))
+                .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        }
+        else if (normalized.rule_type === "redemptions") {
+            value = countRowsInWindow(redemptions, "requested_at", normalized, offset, now);
+        }
+        else {
+            value = countRowsInWindow(approvedTasks, "submitted_at", normalized, offset, now);
+        }
+        if (value >= Number(normalized.threshold)) {
             await env.DB.prepare("INSERT OR IGNORE INTO child_achievements (child_id, achievement_id, unlocked_at) VALUES (?, ?, ?)")
                 .bind(childId, achievement.id, nowIso())
                 .run();
@@ -354,15 +411,22 @@ async function importConfig(env, parentId, input) {
     }
     for (const item of input.achievements || []) {
         const title = String(item.title || "").trim();
-        const metric = item.metric || "tasks_completed";
-        const threshold = Number(item.threshold || 1);
-        const exists = title ? await env.DB.prepare("SELECT id FROM achievements WHERE parent_id=? AND title=? AND metric=? AND threshold=? AND deleted_at IS NULL").bind(parentId, title, metric, threshold).first() : true;
+        const rule = normalizeAchievementInput(item);
+        const exists = title ? await env.DB.prepare(`SELECT id FROM achievements
+WHERE parent_id=? AND title=? AND rule_type=? AND threshold=? AND window_type=?
+  AND COALESCE(window_start, '')=COALESCE(?, '') AND COALESCE(window_end, '')=COALESCE(?, '')
+  AND COALESCE(target_task_id, '')=COALESCE(?, '') AND deleted_at IS NULL`)
+            .bind(parentId, title, rule.ruleType, rule.threshold, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId)
+            .first() : true;
         if (exists) {
             stats.achievements.skipped += 1;
             continue;
         }
-        await env.DB.prepare("INSERT INTO achievements (id, parent_id, title, description, metric, threshold, icon_type, icon_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(id(), parentId, title, item.description || "", metric, threshold, item.icon_type || "emoji", item.icon_value || "🏅")
+        await env.DB.prepare(`INSERT INTO achievements (
+  id, parent_id, title, description, metric, threshold, icon_type, icon_value,
+  rule_type, window_type, window_start, window_end, target_task_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .bind(id(), parentId, title, item.description || "", rule.metric, rule.threshold, item.icon_type || "emoji", item.icon_value || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId)
             .run();
         stats.achievements.created += 1;
     }
@@ -443,6 +507,7 @@ async function route(request, env) {
     await ensureSystemSettings(env);
     await ensureFeedbackSchema(env);
     await ensureCategorySchema(env);
+    await ensureAchievementSchema(env);
     const url = new URL(request.url);
     const path = `/${(url.pathname.replace(/^\/api\/?/, "") || "").replace(/^\/|\/$/g, "")}`;
     const method = request.method;
@@ -872,8 +937,12 @@ async function route(request, env) {
             return ok((await env.DB.prepare("SELECT * FROM achievements WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC").bind(a.id).all()).results);
         const input = await body(request);
         if (method === "POST") {
-            await env.DB.prepare("INSERT INTO achievements (id, parent_id, title, description, metric, threshold, icon_type, icon_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(id(), a.id, input.title, input.description || "", input.metric || "tasks_completed", Number(input.threshold || 1), input.iconType || "emoji", input.iconValue || "🏅")
+            const rule = normalizeAchievementInput(input);
+            await env.DB.prepare(`INSERT INTO achievements (
+  id, parent_id, title, description, metric, threshold, icon_type, icon_value,
+  rule_type, window_type, window_start, window_end, target_task_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                .bind(id(), a.id, input.title, input.description || "", rule.metric, rule.threshold, input.iconType || "emoji", input.iconValue || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId)
                 .run();
             return ok(true);
         }
@@ -887,8 +956,12 @@ async function route(request, env) {
             .first();
         if (!achievement)
             return fail("NOT_FOUND", "成就称号不存在", 404);
-        await env.DB.prepare("UPDATE achievements SET title=?, description=?, metric=?, threshold=?, icon_type=?, icon_value=?, updated_at=? WHERE id=?")
-            .bind(input.title, input.description || "", input.metric || "tasks_completed", Number(input.threshold || 1), input.iconType || "emoji", input.iconValue || "🏅", nowIso(), achievementPatch[1])
+        const rule = normalizeAchievementInput(input);
+        await env.DB.prepare(`UPDATE achievements
+SET title=?, description=?, metric=?, threshold=?, icon_type=?, icon_value=?,
+    rule_type=?, window_type=?, window_start=?, window_end=?, target_task_id=?, updated_at=?
+WHERE id=?`)
+            .bind(input.title, input.description || "", rule.metric, rule.threshold, input.iconType || "emoji", input.iconValue || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId, nowIso(), achievementPatch[1])
             .run();
         return ok(true);
     }
@@ -942,6 +1015,11 @@ async function route(request, env) {
                 description: item.description,
                 metric: item.metric,
                 threshold: item.threshold,
+                rule_type: item.rule_type || item.metric,
+                window_type: item.window_type || "all_time",
+                window_start: item.window_start,
+                window_end: item.window_end,
+                target_task_id: item.target_task_id,
                 icon_type: item.icon_type,
                 icon_value: item.icon_value
             })),

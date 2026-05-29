@@ -324,6 +324,11 @@ button.child-tile {
   font-size: 18px;
 }
 
+.hidden-reset-trigger {
+  width: fit-content;
+  user-select: none;
+}
+
 .panel-title svg {
   color: #157f6f;
 }
@@ -795,7 +800,8 @@ button:disabled {
 
 .ledger-modal {
   width: min(620px, 100%);
-  overflow: visible;
+  max-height: min(86vh, 720px);
+  overflow: hidden;
 }
 
 .edit-modal {

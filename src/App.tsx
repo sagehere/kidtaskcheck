@@ -38,7 +38,7 @@ type Category = { id: string; name: string; icon_type: string; icon_value: strin
 type Task = Record<string, any> & { assignees?: string[] };
 type Reward = Record<string, any> & { assignees?: string[] };
 type FeedbackTemplate = Record<string, any> & { id: string; kind: "praise" | "criticism"; title: string; description: string; points: number; icon_type: string; icon_value: string; is_active: number };
-type Notification = { id: string; title: string; body: string; read_at: string | null; created_at: string; sourceLabel?: string; sourceTypeLabel?: string };
+type Notification = { id: string; title: string; body: string; event_type?: string; read_at: string | null; created_at: string; sourceLabel?: string; sourceTypeLabel?: string };
 type LedgerRow = { id: string; amount: number; source_type: string; note: string; created_at: string; period_key?: string | null };
 type SystemSettings = { timezoneOffsetMinutes: number; timezoneLabel: string };
 const REFRESH_INTERVAL_MS = 12000;
@@ -98,6 +98,21 @@ function formatSource(value: string) {
     criticism: "批评"
   };
   return labels[value] || value;
+}
+
+function formatNotificationSource(item: Notification) {
+  if (item.sourceLabel || item.sourceTypeLabel) return item.sourceLabel || item.sourceTypeLabel;
+  const labels: Record<string, string> = {
+    task_submitted: "任务",
+    task_approved: "任务",
+    task_rejected: "任务",
+    reward_requested: "奖励",
+    reward_redeemed: "奖励",
+    reward_cancelled: "奖励",
+    praise: "表扬",
+    criticism: "批评"
+  };
+  return labels[item.event_type || ""] || "消息";
 }
 
 function formatPeriod(value: string) {
@@ -651,7 +666,7 @@ function PraiseCriticismPanel({ children, templates, onSubmit }: { children: Chi
   const [kind, setKind] = useState<"praise" | "criticism">("praise");
   const childId = data.childId || children[0]?.id || "";
   const visibleTemplates = templates.filter((item) => item.kind === kind);
-  const templateId = visibleTemplates.some((item) => item.id === data.templateId) ? data.templateId : visibleTemplates[0]?.id || "";
+  const templateId = visibleTemplates.some((item) => item.id === data.templateId) ? data.templateId : "";
   if (!children.length || !templates.length) {
     return (
       <section className="panel">
@@ -663,7 +678,7 @@ function PraiseCriticismPanel({ children, templates, onSubmit }: { children: Chi
   return (
     <section className="panel">
       <div className="panel-title"><MessageSquare /><h2>表扬与批评</h2></div>
-      <form className="stack compact" onSubmit={(event) => { event.preventDefault(); if (templateId) onSubmit({ childId, templateId }); }}>
+      <form className="stack compact" onSubmit={(event) => { event.preventDefault(); if (templateId && visibleTemplates.some((item) => item.id === templateId)) onSubmit({ childId, templateId }); }}>
         <Field label="孩子">
           <select value={childId} onChange={(e) => setData({ ...data, childId: e.target.value })}>
             {children.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
@@ -675,9 +690,8 @@ function PraiseCriticismPanel({ children, templates, onSubmit }: { children: Chi
             value={kind}
             onChange={(value) => {
               const nextKind = value as "praise" | "criticism";
-              const nextTemplate = templates.find((item) => item.kind === nextKind)?.id || "";
               setKind(nextKind);
-              setData({ ...data, templateId: nextTemplate });
+              setData({ ...data, templateId: "" });
             }}
             options={[
               { value: "praise", label: "表扬" },
@@ -687,6 +701,7 @@ function PraiseCriticismPanel({ children, templates, onSubmit }: { children: Chi
         </div>
         <Field label="条款">
           <select value={templateId} onChange={(e) => setData({ ...data, templateId: e.target.value })} disabled={!visibleTemplates.length}>
+            <option value="">请选择{kind === "praise" ? "表扬" : "批评"}条款</option>
             {visibleTemplates.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.kind === "praise" ? "+" : "-"}{item.points}</option>)}
           </select>
         </Field>
@@ -1359,7 +1374,7 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
                       <div>
                         <strong>{item.title}</strong>
                         <span>{item.body}</span>
-                        <small className="source-line">{item.sourceLabel || item.sourceTypeLabel || "消息来源"}</small>
+                        <small className="source-line">{formatNotificationSource(item)}</small>
                         <small>{formatTime(item.created_at)}</small>
                       </div>
                       {!item.read_at && <button className="secondary" onClick={() => readOne(item.id)}>签收</button>}

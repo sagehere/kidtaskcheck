@@ -362,7 +362,7 @@ textarea {
 }
 
 textarea {
-  min-height: 78px;
+  min-height: 40px;
   resize: vertical;
 }
 

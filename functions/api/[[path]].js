@@ -269,7 +269,7 @@ async function listWithAssignees(env, kind, parentId) {
 async function listConfig(env, parentId) {
     await ensureFeedbackSchema(env);
     const [categories, tasks, rewards, achievements, feedbackTemplates] = await Promise.all([
-        env.DB.prepare("SELECT * FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL AND is_active=1)) OR owner_id=?) ORDER BY is_system DESC, created_at DESC").bind(parentId, parentId).all(),
+        env.DB.prepare("SELECT * FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL)) OR owner_id=?) ORDER BY is_system DESC, created_at DESC").bind(parentId, parentId).all(),
         listWithAssignees(env, "tasks", parentId),
         listWithAssignees(env, "rewards", parentId),
         env.DB.prepare("SELECT * FROM achievements WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC").bind(parentId).all(),
@@ -282,6 +282,11 @@ async function listConfig(env, parentId) {
         achievements: achievements.results,
         feedbackTemplates: feedbackTemplates.results
     };
+}
+function importedActive(item) {
+    if (item.is_active === undefined && item.isActive === undefined)
+        return 0;
+    return item.is_active === 0 || item.isActive === false ? 0 : 1;
 }
 async function insertTaskFromConfig(env, parentId, item, categoryMap, childMap) {
     const title = String(item.title || "").trim();
@@ -296,7 +301,7 @@ async function insertTaskFromConfig(env, parentId, item, categoryMap, childMap) 
         return false;
     const taskId = id();
     await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, is_active) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?)")
-        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), item.is_active === 0 ? 0 : 1)
+        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), importedActive(item))
         .run();
     await replaceAssignees(env, "task_assignees", "task_id", taskId, (item.assignee_names || []).map((name) => childMap.get(name)).filter(Boolean));
     return true;
@@ -312,7 +317,7 @@ async function importConfig(env, parentId, input) {
     };
     const children = (await env.DB.prepare("SELECT id, display_name FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(parentId).all()).results;
     const childMap = new Map(children.map((child) => [child.display_name, child.id]));
-    const categoryRows = (await env.DB.prepare("SELECT id, name FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL AND is_active=1)) OR owner_id=?)").bind(parentId, parentId).all()).results;
+    const categoryRows = (await env.DB.prepare("SELECT id, name FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL)) OR owner_id=?)").bind(parentId, parentId).all()).results;
     const categoryMap = new Map(categoryRows.map((category) => [category.name, category.id]));
     for (const item of input.categories || []) {
         const name = String(item.name || "").trim();
@@ -342,7 +347,7 @@ async function importConfig(env, parentId, input) {
         }
         const rewardId = id();
         await env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, stock, limit_period, limit_count, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(rewardId, parentId, title, item.description || "", Number(item.cost_points ?? item.costPoints ?? 0), item.stock ?? null, item.limit_period || item.limitPeriod || "daily", (item.limit_period || item.limitPeriod) === "once" ? 1 : item.limit_count ?? item.limitCount ?? 1, item.icon_type || "emoji", item.icon_value || "🎁", item.is_active === 0 ? 0 : 1)
+            .bind(rewardId, parentId, title, item.description || "", Number(item.cost_points ?? item.costPoints ?? 0), item.stock ?? null, item.limit_period || item.limitPeriod || "daily", (item.limit_period || item.limitPeriod) === "once" ? 1 : item.limit_count ?? item.limitCount ?? 1, item.icon_type || "emoji", item.icon_value || "🎁", importedActive(item))
             .run();
         await replaceAssignees(env, "reward_assignees", "reward_id", rewardId, (item.assignee_names || []).map((name) => childMap.get(name)).filter(Boolean));
         stats.rewards.created += 1;
@@ -370,7 +375,7 @@ async function importConfig(env, parentId, input) {
             continue;
         }
         await env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(id(), parentId, kind, title, item.description || "", Number(item.points || 0), item.icon_type || "emoji", item.icon_value || (kind === "praise" ? "✨" : "⚠️"), item.is_active === 0 ? 0 : 1)
+            .bind(id(), parentId, kind, title, item.description || "", Number(item.points || 0), item.icon_type || "emoji", item.icon_value || (kind === "praise" ? "✨" : "⚠️"), importedActive(item))
             .run();
         stats.feedbackTemplates.created += 1;
     }
@@ -390,6 +395,47 @@ async function notify(env, input) {
 }
 function notificationRecipient(actor) {
     return actor.role === "child" ? { type: "child", id: actor.id } : { type: "user", id: actor.id };
+}
+function eventTypeLabel(value) {
+    const labels = {
+        task_submitted: "任务",
+        task_approved: "任务",
+        task_rejected: "任务",
+        reward_requested: "奖励",
+        reward_redeemed: "奖励",
+        reward_cancelled: "奖励",
+        praise: "表扬",
+        criticism: "批评"
+    };
+    return labels[value] || "消息";
+}
+async function notificationSource(env, item) {
+    if (item.related_type === "task_submission") {
+        const row = await env.DB.prepare("SELECT t.title FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.id=?").bind(item.related_id).first();
+        if (row?.title)
+            return { sourceTypeLabel: "任务", sourceLabel: `任务：${row.title}` };
+    }
+    if (item.related_type === "reward_redemption") {
+        const row = await env.DB.prepare("SELECT r.title FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id WHERE rr.id=?").bind(item.related_id).first();
+        if (row?.title)
+            return { sourceTypeLabel: "奖励", sourceLabel: `奖励：${row.title}` };
+    }
+    if (item.related_type === "point_ledger") {
+        const row = await env.DB.prepare("SELECT pl.source_type, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id=?").bind(item.related_id).first();
+        if (row?.title) {
+            const label = row.source_type === "criticism" ? "批评" : "表扬";
+            return { sourceTypeLabel: label, sourceLabel: `${label}：${row.title}` };
+        }
+        if (row?.source_type) {
+            const label = eventTypeLabel(row.source_type);
+            return { sourceTypeLabel: label, sourceLabel: label };
+        }
+    }
+    const fallback = eventTypeLabel(item.event_type);
+    return { sourceTypeLabel: fallback, sourceLabel: fallback };
+}
+async function withNotificationSources(env, rows) {
+    return Promise.all(rows.map(async (item) => ({ ...item, ...(await notificationSource(env, item)) })));
 }
 async function route(request, env) {
     await ensureAdmin(env);
@@ -523,7 +569,7 @@ async function route(request, env) {
         const unread = Number((await env.DB.prepare("SELECT COUNT(*) v FROM notifications WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL")
             .bind(recipient.type, recipient.id)
             .first())?.v || 0);
-        return ok({ items: rows, unread });
+        return ok({ items: await withNotificationSources(env, rows), unread });
     }
     if (path === "/notifications/read-all" && method === "PATCH") {
         const a = requireRole(actor, ["parent", "child"]);
@@ -646,10 +692,20 @@ async function route(request, env) {
             .run();
         return ok(true);
     }
+    if (feedbackPatch && method === "DELETE") {
+        const a = requireRole(actor, ["parent"]);
+        const found = await env.DB.prepare("SELECT id FROM feedback_templates WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(feedbackPatch[1], a.id).first();
+        if (!found)
+            return fail("NOT_FOUND", "表扬或批评条款不存在", 404);
+        await env.DB.prepare("UPDATE feedback_templates SET deleted_at=?, is_active=0, updated_at=? WHERE id=?")
+            .bind(nowIso(), nowIso(), feedbackPatch[1])
+            .run();
+        return ok(true);
+    }
     if (path === "/task-categories") {
         const a = requireRole(actor, ["parent"]);
         if (method === "GET") {
-            return ok((await env.DB.prepare("SELECT * FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL AND is_active=1)) OR owner_id=?) ORDER BY is_system DESC, created_at DESC").bind(a.id, a.id).all()).results);
+            return ok((await env.DB.prepare("SELECT * FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL)) OR owner_id=?) ORDER BY is_system DESC, created_at DESC").bind(a.id, a.id).all()).results);
         }
         const input = await body(request);
         if (method === "POST") {
@@ -685,6 +741,46 @@ async function route(request, env) {
             .run();
         return ok(true);
     }
+    if (categoryPatch && method === "DELETE") {
+        const a = requireRole(actor, ["parent"]);
+        const category = await env.DB.prepare("SELECT * FROM task_categories WHERE id=? AND is_active=1 AND (owner_id=? OR is_system=1)")
+            .bind(categoryPatch[1], a.id)
+            .first();
+        if (!category)
+            return fail("NOT_FOUND", "任务分类不存在", 404);
+        const deletedAt = nowIso();
+        let targetId = category.id;
+        if (category.is_system) {
+            const existing = await env.DB.prepare("SELECT id FROM task_categories WHERE owner_id=? AND source_system_id=?")
+                .bind(a.id, category.id)
+                .first();
+            targetId = existing?.id || id();
+            if (existing) {
+                await env.DB.prepare("UPDATE task_categories SET is_active=0 WHERE id=? AND owner_id=?")
+                    .bind(targetId, a.id)
+                    .run();
+            }
+            else {
+                await env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value, is_system, is_active, source_system_id) VALUES (?, ?, ?, ?, ?, 0, 0, ?)")
+                    .bind(targetId, a.id, category.name, category.icon_type, category.icon_value, category.id)
+                    .run();
+            }
+        }
+        else {
+            await env.DB.prepare("UPDATE task_categories SET is_active=0 WHERE id=? AND owner_id=?")
+                .bind(targetId, a.id)
+                .run();
+        }
+        await env.DB.prepare("UPDATE tasks SET deleted_at=?, is_active=0, updated_at=? WHERE parent_id=? AND category_id=? AND deleted_at IS NULL")
+            .bind(deletedAt, deletedAt, a.id, category.id)
+            .run();
+        if (targetId !== category.id) {
+            await env.DB.prepare("UPDATE tasks SET deleted_at=?, is_active=0, updated_at=? WHERE parent_id=? AND category_id=? AND deleted_at IS NULL")
+                .bind(deletedAt, deletedAt, a.id, targetId)
+                .run();
+        }
+        return ok(true);
+    }
     if (path === "/tasks") {
         const a = requireRole(actor, ["parent"]);
         if (method === "GET")
@@ -712,6 +808,18 @@ async function route(request, env) {
             .bind(input.categoryId, input.title, input.description || "", input.period || "daily", "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), input.isActive === false ? 0 : 1, nowIso(), taskPatch[1])
             .run();
         await replaceAssignees(env, "task_assignees", "task_id", taskPatch[1], input.childIds || []);
+        return ok(true);
+    }
+    if (taskPatch && method === "DELETE") {
+        const a = requireRole(actor, ["parent"]);
+        const task = await env.DB.prepare("SELECT id FROM tasks WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(taskPatch[1], a.id)
+            .first();
+        if (!task)
+            return fail("NOT_FOUND", "任务不存在", 404);
+        await env.DB.prepare("UPDATE tasks SET deleted_at=?, is_active=0, updated_at=? WHERE id=?")
+            .bind(nowIso(), nowIso(), taskPatch[1])
+            .run();
         return ok(true);
     }
     if (path === "/rewards") {
@@ -745,6 +853,19 @@ async function route(request, env) {
         await replaceAssignees(env, "reward_assignees", "reward_id", rewardPatch[1], input.childIds || []);
         return ok(true);
     }
+    if (rewardPatch && method === "DELETE") {
+        const a = requireRole(actor, ["parent"]);
+        await ensureRewardOnceSchema(env);
+        const reward = await env.DB.prepare("SELECT id FROM rewards WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(rewardPatch[1], a.id)
+            .first();
+        if (!reward)
+            return fail("NOT_FOUND", "奖励不存在", 404);
+        await env.DB.prepare("UPDATE rewards SET deleted_at=?, is_active=0, updated_at=? WHERE id=?")
+            .bind(nowIso(), nowIso(), rewardPatch[1])
+            .run();
+        return ok(true);
+    }
     if (path === "/achievements") {
         const a = requireRole(actor, ["parent"]);
         if (method === "GET")
@@ -771,11 +892,21 @@ async function route(request, env) {
             .run();
         return ok(true);
     }
+    if (achievementPatch && method === "DELETE") {
+        const a = requireRole(actor, ["parent"]);
+        const achievement = await env.DB.prepare("SELECT id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(achievementPatch[1], a.id)
+            .first();
+        if (!achievement)
+            return fail("NOT_FOUND", "成就称号不存在", 404);
+        await env.DB.prepare("UPDATE achievements SET deleted_at=?, is_active=0, updated_at=? WHERE id=?")
+            .bind(nowIso(), nowIso(), achievementPatch[1])
+            .run();
+        return ok(true);
+    }
     if (path === "/config/export" && method === "GET") {
         const a = requireRole(actor, ["parent"]);
         const config = await listConfig(env, a.id);
-        const childRows = (await env.DB.prepare("SELECT id, display_name FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(a.id).all()).results;
-        const childNames = new Map(childRows.map((child) => [child.id, child.display_name]));
         const categoryNames = new Map(config.categories.map((category) => [category.id, category.name]));
         return ok({
             version: 1,
@@ -794,9 +925,7 @@ async function route(request, env) {
                 points: item.points,
                 limit_count: item.limit_count,
                 icon_type: item.icon_type,
-                icon_value: item.icon_value,
-                is_active: item.is_active,
-                assignee_names: (item.assignees || []).map((childId) => childNames.get(childId)).filter(Boolean)
+                icon_value: item.icon_value
             })),
             rewards: config.rewards.map((item) => ({
                 title: item.title,
@@ -806,9 +935,7 @@ async function route(request, env) {
                 limit_period: item.limit_period,
                 limit_count: item.limit_count,
                 icon_type: item.icon_type,
-                icon_value: item.icon_value,
-                is_active: item.is_active,
-                assignee_names: (item.assignees || []).map((childId) => childNames.get(childId)).filter(Boolean)
+                icon_value: item.icon_value
             })),
             achievements: config.achievements.map((item) => ({
                 title: item.title,
@@ -824,8 +951,7 @@ async function route(request, env) {
                 description: item.description,
                 points: item.points,
                 icon_type: item.icon_type,
-                icon_value: item.icon_value,
-                is_active: item.is_active
+                icon_value: item.icon_value
             }))
         });
     }

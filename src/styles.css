@@ -412,6 +412,11 @@ textarea {
   background: #ffe5e1;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .list {
   display: grid;
   gap: 10px;
@@ -462,6 +467,33 @@ textarea {
 .row.unread {
   border-color: #9bd6ce;
   background: #f0fbf8;
+}
+
+.row .source-line {
+  color: #22577a;
+  font-weight: 800;
+}
+
+.config-list {
+  margin-top: 16px;
+}
+
+.config-row {
+  align-items: flex-start;
+}
+
+.row .config-main {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.config-main > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .positive {
@@ -766,8 +798,17 @@ textarea {
   overflow: visible;
 }
 
+.edit-modal {
+  width: min(720px, 100%);
+  max-height: min(86vh, 760px);
+  overflow-y: auto;
+}
+
 .ledger-list {
+  max-height: min(62vh, 520px);
+  overflow-y: auto;
   margin-top: 10px;
+  padding-right: 4px;
 }
 
 .readonly-value {

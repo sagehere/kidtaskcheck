@@ -38,7 +38,7 @@ type Category = { id: string; name: string; icon_type: string; icon_value: strin
 type Task = Record<string, any> & { assignees?: string[] };
 type Reward = Record<string, any> & { assignees?: string[] };
 type FeedbackTemplate = Record<string, any> & { id: string; kind: "praise" | "criticism"; title: string; description: string; points: number; icon_type: string; icon_value: string; is_active: number };
-type Notification = { id: string; title: string; body: string; read_at: string | null; created_at: string };
+type Notification = { id: string; title: string; body: string; read_at: string | null; created_at: string; sourceLabel?: string; sourceTypeLabel?: string };
 type LedgerRow = { id: string; amount: number; source_type: string; note: string; created_at: string; period_key?: string | null };
 type SystemSettings = { timezoneOffsetMinutes: number; timezoneLabel: string };
 const REFRESH_INTERVAL_MS = 12000;
@@ -107,6 +107,17 @@ function formatPeriod(value: string) {
     monthly: "每月",
     once: "一次性",
     none: "不限"
+  };
+  return labels[value] || value;
+}
+
+function formatMetric(value: string) {
+  const labels: Record<string, string> = {
+    tasks_completed: "累计完成任务",
+    total_earned: "累计获得积分",
+    balance: "当前积分余额",
+    streak_days: "连续打卡天数",
+    redemptions: "累计兑换奖励"
   };
   return labels[value] || value;
 }
@@ -397,6 +408,11 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     await run(() => api(path, { method: "PATCH", body: JSON.stringify(data) }), note);
   }
 
+  async function remove(path: string, note: string, confirmText: string) {
+    if (!window.confirm(confirmText)) return;
+    await run(() => api(path, { method: "DELETE" }), note);
+  }
+
   async function review(id: string, approved: boolean) {
     const note = approved ? "" : window.prompt("请输入驳回原因，孩子会看到这条说明", "") || "";
     await run(
@@ -513,24 +529,29 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
             <div className="panel-title"><Star /><h2>任务配置</h2></div>
             <div className="grid two">
               <CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} />
-              <CategoryOverview items={categories} onCreate={(data) => create("/task-categories", data, "任务分类已创建")} onUpdate={(item, data) => update(`/task-categories/${item.id}`, data, "任务分类已更新")} />
+              <CategoryOverview
+                items={categories}
+                onCreate={(data) => create("/task-categories", data, "任务分类已创建")}
+                onUpdate={(item, data) => update(`/task-categories/${item.id}`, data, "任务分类已更新")}
+                onDelete={(item) => remove(`/task-categories/${item.id}`, "任务分类已删除，分类下任务已一并删除", `确认删除任务分类「${item.name}」？该分类下所有任务会一并删除，历史记录会保留。`)}
+              />
             </div>
-            <Overview title="现有任务" items={tasks} kind="task" children={children} categories={categories} onUpdate={(item, data) => update(`/tasks/${item.id}`, data, "任务已更新")} />
+            <Overview title="现有任务" items={tasks} kind="task" children={children} categories={categories} onUpdate={(item, data) => update(`/tasks/${item.id}`, data, "任务已更新")} onDelete={(item) => remove(`/tasks/${item.id}`, "任务已删除", `确认删除任务「${item.title}」？历史记录会保留。`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><Gift /><h2>奖励配置</h2></div>
             <CreateReward children={children} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
-            <Overview title="现有奖励" items={rewards} kind="reward" children={children} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} />
+            <Overview title="现有奖励" items={rewards} kind="reward" children={children} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} onDelete={(item) => remove(`/rewards/${item.id}`, "奖励已删除", `确认删除奖励「${item.title}」？历史兑换记录会保留。`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><Award /><h2>成就称号</h2></div>
             <CreateAchievement onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
-            <Overview title="成就称号" items={achievements} kind="achievement" onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} />
+            <Overview title="成就称号" items={achievements} kind="achievement" onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
             <CreateFeedbackTemplate onCreate={(data) => create("/feedback-templates", data, "条款已创建")} />
-            <FeedbackOverview items={feedbackTemplates} onUpdate={(item, data) => update(`/feedback-templates/${item.id}`, data, "条款已更新")} />
+            <FeedbackOverview items={feedbackTemplates} onUpdate={(item, data) => update(`/feedback-templates/${item.id}`, data, "条款已更新")} onDelete={(item) => remove(`/feedback-templates/${item.id}`, "条款已删除", `确认删除${item.kind === "praise" ? "表扬" : "批评"}条款「${item.title}」？历史积分记录会保留。`)} />
           </section>
           <ConfigPortPanel onImported={load} />
           <section className="panel">
@@ -627,8 +648,10 @@ function RedemptionPanel({ items, onFinish }: { items: any[]; onFinish: (id: str
 
 function PraiseCriticismPanel({ children, templates, onSubmit }: { children: Child[]; templates: FeedbackTemplate[]; onSubmit: (data: { childId: string; templateId: string }) => void }) {
   const [data, setData] = useState({ childId: "", templateId: "" });
+  const [kind, setKind] = useState<"praise" | "criticism">("praise");
   const childId = data.childId || children[0]?.id || "";
-  const templateId = data.templateId || templates[0]?.id || "";
+  const visibleTemplates = templates.filter((item) => item.kind === kind);
+  const templateId = visibleTemplates.some((item) => item.id === data.templateId) ? data.templateId : visibleTemplates[0]?.id || "";
   if (!children.length || !templates.length) {
     return (
       <section className="panel">
@@ -638,18 +661,39 @@ function PraiseCriticismPanel({ children, templates, onSubmit }: { children: Chi
     );
   }
   return (
-    <FormPanel title="表扬与批评" icon={<MessageSquare />} submitLabel="记录" onSubmit={() => onSubmit({ childId, templateId })}>
-      <Field label="孩子">
-        <select value={childId} onChange={(e) => setData({ ...data, childId: e.target.value })}>
-          {children.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
-        </select>
-      </Field>
-      <Field label="条款">
-        <select value={templateId} onChange={(e) => setData({ ...data, templateId: e.target.value })}>
-          {templates.map((item) => <option key={item.id} value={item.id}>{item.kind === "praise" ? "表扬" : "批评"} · {item.title} · {item.kind === "praise" ? "+" : "-"}{item.points}</option>)}
-        </select>
-      </Field>
-    </FormPanel>
+    <section className="panel">
+      <div className="panel-title"><MessageSquare /><h2>表扬与批评</h2></div>
+      <form className="stack compact" onSubmit={(event) => { event.preventDefault(); if (templateId) onSubmit({ childId, templateId }); }}>
+        <Field label="孩子">
+          <select value={childId} onChange={(e) => setData({ ...data, childId: e.target.value })}>
+            {children.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
+          </select>
+        </Field>
+        <div className="field">
+          <span>类型</span>
+          <Tabs
+            value={kind}
+            onChange={(value) => {
+              const nextKind = value as "praise" | "criticism";
+              const nextTemplate = templates.find((item) => item.kind === nextKind)?.id || "";
+              setKind(nextKind);
+              setData({ ...data, templateId: nextTemplate });
+            }}
+            options={[
+              { value: "praise", label: "表扬" },
+              { value: "criticism", label: "批评" }
+            ]}
+          />
+        </div>
+        <Field label="条款">
+          <select value={templateId} onChange={(e) => setData({ ...data, templateId: e.target.value })} disabled={!visibleTemplates.length}>
+            {visibleTemplates.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.kind === "praise" ? "+" : "-"}{item.points}</option>)}
+          </select>
+        </Field>
+        {!visibleTemplates.length && <Empty text={`暂无可用${kind === "praise" ? "表扬" : "批评"}条款`} />}
+        <button className="primary" disabled={!templateId}><Plus size={18} />记录</button>
+      </form>
+    </section>
   );
 }
 
@@ -819,33 +863,34 @@ function CreateFeedbackTemplate({ onCreate }: { onCreate: (data: any) => void })
   );
 }
 
-function FeedbackOverview({ items, onUpdate }: { items: FeedbackTemplate[]; onUpdate: (item: FeedbackTemplate, data: any) => void }) {
-  const [editing, setEditing] = useState("");
+function FeedbackOverview({ items, onUpdate, onDelete }: { items: FeedbackTemplate[]; onUpdate: (item: FeedbackTemplate, data: any) => void; onDelete: (item: FeedbackTemplate) => void }) {
+  const [editing, setEditing] = useState<FeedbackTemplate | null>(null);
   return (
     <section className="panel">
       <div className="panel-title"><MessageSquare /><h2>现有条款</h2></div>
-      <div className="cards scroll-list">
+      <div className="list config-list scroll-list">
         {items.length ? items.map((item) => (
-          <article className={`mini-card item-card ${item.kind}`} key={item.id}>
-            {editing === item.id ? (
-              <EditFeedbackForm item={item} onCancel={() => setEditing("")} onSave={(data) => { onUpdate(item, data); setEditing(""); }} />
-            ) : (
-              <>
-                <div className="card-head">
-                  {icon(item.icon_type, item.icon_value, item.title)}
-                  <div>
-                    <strong>{item.title}</strong>
-                    <small>{item.kind === "praise" ? "表扬" : "批评"} · {item.is_active ? "启用" : "停用"}</small>
-                  </div>
-                </div>
-                {item.description && <small>{item.description}</small>}
-                <span className={item.kind === "praise" ? "positive" : "negative"}>{item.kind === "praise" ? "+" : "-"}{item.points} 积分</span>
-                <button className="secondary" onClick={() => setEditing(item.id)}><Edit3 size={16} />编辑</button>
-              </>
-            )}
+          <article className={`row config-row ${item.kind}`} key={item.id}>
+            <div className="config-main">
+              {icon(item.icon_type, item.icon_value, item.title)}
+              <div>
+                <strong>{item.title}</strong>
+                {item.description && <span>{item.description}</span>}
+                <small>{item.kind === "praise" ? "表扬" : "批评"} · {item.is_active ? "启用" : "停用"} · <span className={item.kind === "praise" ? "positive" : "negative"}>{item.kind === "praise" ? "+" : "-"}{item.points} 积分</span></small>
+              </div>
+            </div>
+            <div className="actions">
+              <button className="secondary" onClick={() => setEditing(item)}><Edit3 size={16} />编辑</button>
+              <button className="icon danger" title="删除" onClick={() => onDelete(item)}><Trash2 size={18} /></button>
+            </div>
           </article>
         )) : <Empty text="暂无表扬与批评条款" />}
       </div>
+      {editing && (
+        <EditDialog title="编辑条款" icon={<MessageSquare />} onClose={() => setEditing(null)}>
+          <EditFeedbackForm item={editing} onCancel={() => setEditing(null)} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} />
+        </EditDialog>
+      )}
     </section>
   );
 }
@@ -939,8 +984,23 @@ function FormPanel({ title, icon, children, onSubmit, submitLabel = "保存" }: 
   );
 }
 
-function CategoryOverview({ items, onCreate, onUpdate }: { items: Category[]; onCreate: (data: any) => void; onUpdate: (item: Category, data: any) => void }) {
-  const [editing, setEditing] = useState("");
+function EditDialog({ title, icon: dialogIcon, children, onClose }: { title: string; icon: ReactNode; children: ReactNode; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <section className="panel edit-modal">
+        <div className="panel-title compact-title">
+          {dialogIcon}
+          <h2>{title}</h2>
+          <button type="button" className="secondary" onClick={onClose}>关闭</button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function CategoryOverview({ items, onCreate, onUpdate, onDelete }: { items: Category[]; onCreate: (data: any) => void; onUpdate: (item: Category, data: any) => void; onDelete: (item: Category) => void }) {
+  const [editing, setEditing] = useState<Category | null>(null);
   const [data, setData] = useState({ name: "", iconValue: "📚" });
   return (
     <section className="panel">
@@ -950,22 +1010,28 @@ function CategoryOverview({ items, onCreate, onUpdate }: { items: Category[]; on
         <Field label="符号"><input required value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
         <button className="primary"><Plus size={18} />新建分类</button>
       </form>
-      <div className="cards scroll-list">
+      <div className="list config-list scroll-list">
         {items.length ? items.map((item) => (
-          <article className="mini-card" key={item.id}>
-            {editing === item.id ? (
-              <CategoryEditForm item={item} onCancel={() => setEditing("")} onSave={(data) => { onUpdate(item, data); setEditing(""); }} />
-            ) : (
-              <>
-                {icon(item.icon_type, item.icon_value, item.name)}
+          <article className="row config-row" key={item.id}>
+            <div className="config-main">
+              {icon(item.icon_type, item.icon_value, item.name)}
+              <div>
                 <strong>{item.name}</strong>
-                <small>{item.is_system ? "系统预置，编辑后仅影响当前家长" : "自定义分类"}</small>
-                <button className="secondary" onClick={() => setEditing(item.id)}><Edit3 size={16} />编辑</button>
-              </>
-            )}
+                <span>{item.is_system ? "系统预置，编辑后仅影响当前家长" : "自定义分类"}</span>
+              </div>
+            </div>
+            <div className="actions">
+              <button className="secondary" onClick={() => setEditing(item)}><Edit3 size={16} />编辑</button>
+              <button className="icon danger" title="删除" onClick={() => onDelete(item)}><Trash2 size={18} /></button>
+            </div>
           </article>
         )) : <Empty text="暂无分类" />}
       </div>
+      {editing && (
+        <EditDialog title="编辑任务分类" icon={<Star />} onClose={() => setEditing(null)}>
+          <CategoryEditForm item={editing} onCancel={() => setEditing(null)} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} />
+        </EditDialog>
+      )}
     </section>
   );
 }
@@ -981,37 +1047,39 @@ function CategoryEditForm({ item, onSave, onCancel }: { item: Category; onSave: 
   );
 }
 
-function Overview({ title, items, kind, children = [], categories = [], onUpdate }: { title: string; items: any[]; kind: "task" | "reward" | "achievement"; children?: Child[]; categories?: Category[]; onUpdate?: (item: any, data: any) => void }) {
-  const [editing, setEditing] = useState("");
+function Overview({ title, items, kind, children = [], categories = [], onUpdate, onDelete }: { title: string; items: any[]; kind: "task" | "reward" | "achievement"; children?: Child[]; categories?: Category[]; onUpdate?: (item: any, data: any) => void; onDelete?: (item: any) => void }) {
+  const [editing, setEditing] = useState<any | null>(null);
+  const titleLabel = kind === "reward" ? "奖励" : kind === "achievement" ? "成就称号" : "任务";
   return (
     <section className="panel">
       <div className="panel-title"><Star /><h2>{title}</h2></div>
-      <div className="cards scroll-list">
+      <div className="list config-list scroll-list">
         {items.length ? items.map((item) => (
-          <article className="mini-card item-card" key={item.id}>
-            {editing === item.id && onUpdate ? (
-              <EditItemForm kind={kind} item={item} children={children} categories={categories} onCancel={() => setEditing("")} onSave={(data) => { onUpdate(item, data); setEditing(""); }} />
-            ) : (
-              <>
-                <div className="card-head">
-                  {icon(item.icon_type, item.icon_value, item.title)}
-                  <div>
-                    <strong>{item.title}</strong>
-                    {(kind === "task" || kind === "reward") && <small>{item.is_active ? "启用" : "停用"}</small>}
-                  </div>
-                </div>
-                {item.description && <small>{item.description}</small>}
-                <span>
-                  {kind === "task" && `${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次`}
-                  {kind === "reward" && `${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`}`}
-                  {kind === "achievement" && `${item.metric} ≥ ${item.threshold}`}
-                </span>
-                {onUpdate && <button className="secondary" onClick={() => setEditing(item.id)}><Edit3 size={16} />编辑</button>}
-              </>
-            )}
+          <article className="row config-row" key={item.id}>
+            <div className="config-main">
+              {icon(item.icon_type, item.icon_value, item.title)}
+              <div>
+                <strong>{item.title}</strong>
+                {item.description && <span>{item.description}</span>}
+                <small>
+                  {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次`}
+                  {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`}`}
+                  {kind === "achievement" && `${formatMetric(item.metric)} ≥ ${item.threshold}`}
+                </small>
+              </div>
+            </div>
+            <div className="actions">
+              {onUpdate && <button className="secondary" onClick={() => setEditing(item)}><Edit3 size={16} />编辑</button>}
+              {onDelete && <button className="icon danger" title="删除" onClick={() => onDelete(item)}><Trash2 size={18} /></button>}
+            </div>
           </article>
         )) : <Empty text="暂无内容" />}
       </div>
+      {editing && onUpdate && (
+        <EditDialog title={`编辑${titleLabel}`} icon={kind === "reward" ? <Gift /> : kind === "achievement" ? <Award /> : <ClipboardCheck />} onClose={() => setEditing(null)}>
+          <EditItemForm kind={kind} item={editing} children={children} categories={categories} onCancel={() => setEditing(null)} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} />
+        </EditDialog>
+      )}
     </section>
   );
 }
@@ -1291,6 +1359,7 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
                       <div>
                         <strong>{item.title}</strong>
                         <span>{item.body}</span>
+                        <small className="source-line">{item.sourceLabel || item.sourceTypeLabel || "消息来源"}</small>
                         <small>{formatTime(item.created_at)}</small>
                       </div>
                       {!item.read_at && <button className="secondary" onClick={() => readOne(item.id)}>签收</button>}

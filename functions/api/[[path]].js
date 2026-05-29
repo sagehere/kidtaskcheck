@@ -8,6 +8,7 @@ const fail = (code, message, status = 400) => json({ error: { code, message } },
 const nowIso = () => new Date().toISOString();
 const id = () => crypto.randomUUID();
 const PBKDF2_ITERATIONS = 100000;
+let bootstrapPromise = null;
 const clampTimezoneOffset = (value) => Math.max(-840, Math.min(840, Number(value)));
 async function hashPassword(password) {
     const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -86,7 +87,6 @@ async function ensureSystemSettings(env) {
     await env.DB.prepare("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('timezone_offset_minutes', ?)").bind(String(DEFAULT_TIMEZONE_OFFSET_MINUTES)).run();
 }
 async function timezoneOffsetMinutes(env) {
-    await ensureSystemSettings(env);
     const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key='timezone_offset_minutes'").first();
     const value = Number(row?.value ?? DEFAULT_TIMEZONE_OFFSET_MINUTES);
     return Number.isFinite(value) ? clampTimezoneOffset(value) : DEFAULT_TIMEZONE_OFFSET_MINUTES;
@@ -142,6 +142,22 @@ async function ensureAchievementSchema(env) {
     if (!columns.includes("target_category_id")) {
         await env.DB.prepare("ALTER TABLE achievements ADD COLUMN target_category_id TEXT REFERENCES task_categories(id)").run();
     }
+}
+async function bootstrap(env) {
+    if (!bootstrapPromise) {
+        bootstrapPromise = (async () => {
+            await ensureAdmin(env);
+            await ensureNotificationsSchema(env);
+            await ensureSystemSettings(env);
+            await ensureFeedbackSchema(env);
+            await ensureCategorySchema(env);
+            await ensureAchievementSchema(env);
+        })().catch((error) => {
+            bootstrapPromise = null;
+            throw error;
+        });
+    }
+    await bootstrapPromise;
 }
 async function ensureRewardOnceSchema(env) {
     const schema = await env.DB.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='rewards'").first();
@@ -289,6 +305,15 @@ function countRowsInWindow(rows, dateKey, achievement, offset, now) {
 async function balance(env, childId) {
     const row = await env.DB.prepare("SELECT COALESCE(SUM(amount), 0) balance FROM point_ledger WHERE child_id=?").bind(childId).first();
     return Number(row?.balance || 0);
+}
+async function balancesForChildren(env, childIds) {
+    if (!childIds.length)
+        return new Map();
+    const placeholders = childIds.map(() => "?").join(",");
+    const rows = (await env.DB.prepare(`SELECT child_id, COALESCE(SUM(amount), 0) balance FROM point_ledger WHERE child_id IN (${placeholders}) GROUP BY child_id`)
+        .bind(...childIds)
+        .all()).results;
+    return new Map(rows.map((row) => [row.child_id, Number(row.balance || 0)]));
 }
 async function recalcAchievements(env, parentId, childId) {
     const achievements = await env.DB.prepare("SELECT * FROM achievements WHERE parent_id=? AND is_active=1 AND deleted_at IS NULL").bind(parentId).all();
@@ -500,6 +525,46 @@ async function childUsageForPeriod(env, table, idColumn, itemId, childId, period
         .first();
     return Number(row?.v || 0);
 }
+async function childUsageCountsForPeriods(env, table, idColumn, childId, itemPeriods, activeStatuses) {
+    if (!itemPeriods.length)
+        return new Map();
+    const itemIds = [...new Set(itemPeriods.map((item) => item.itemId))];
+    const periodKeys = [...new Set(itemPeriods.map((item) => item.periodKey))];
+    const statusPlaceholders = activeStatuses.map(() => "?").join(",");
+    const itemPlaceholders = itemIds.map(() => "?").join(",");
+    const periodPlaceholders = periodKeys.map(() => "?").join(",");
+    const rows = (await env.DB.prepare(`SELECT ${idColumn} item_id, period_key, COUNT(*) v FROM ${table} WHERE child_id=? AND status IN (${statusPlaceholders}) AND ${idColumn} IN (${itemPlaceholders}) AND period_key IN (${periodPlaceholders}) GROUP BY ${idColumn}, period_key`)
+        .bind(childId, ...activeStatuses, ...itemIds, ...periodKeys)
+        .all()).results;
+    return new Map(rows.map((row) => [`${row.item_id}:${row.period_key}`, Number(row.v || 0)]));
+}
+async function childLatestTaskStatuses(env, childId, itemPeriods) {
+    if (!itemPeriods.length)
+        return { latest: new Map(), rejected: new Map() };
+    const taskIds = [...new Set(itemPeriods.map((item) => item.itemId))];
+    const periodKeys = [...new Set(itemPeriods.map((item) => item.periodKey))];
+    const taskPlaceholders = taskIds.map(() => "?").join(",");
+    const periodPlaceholders = periodKeys.map(() => "?").join(",");
+    const latestRows = (await env.DB.prepare(`SELECT task_id, period_key, status, review_note FROM task_submissions WHERE child_id=? AND task_id IN (${taskPlaceholders}) AND period_key IN (${periodPlaceholders}) ORDER BY submitted_at DESC`)
+        .bind(childId, ...taskIds, ...periodKeys)
+        .all()).results;
+    const rejectedRows = (await env.DB.prepare(`SELECT task_id, period_key, status, review_note FROM task_submissions WHERE child_id=? AND status='rejected' AND task_id IN (${taskPlaceholders}) AND period_key IN (${periodPlaceholders}) ORDER BY reviewed_at DESC`)
+        .bind(childId, ...taskIds, ...periodKeys)
+        .all()).results;
+    const latest = new Map();
+    const rejected = new Map();
+    for (const row of latestRows) {
+        const key = `${row.task_id}:${row.period_key}`;
+        if (!latest.has(key))
+            latest.set(key, row);
+    }
+    for (const row of rejectedRows) {
+        const key = `${row.task_id}:${row.period_key}`;
+        if (row.status === "rejected" && !rejected.has(key))
+            rejected.set(key, row);
+    }
+    return { latest, rejected };
+}
 async function notify(env, input) {
     await env.DB.prepare("INSERT INTO notifications (id, recipient_type, recipient_id, actor_type, actor_id, title, body, event_type, related_type, related_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(id(), input.recipientType, input.recipientId, input.actorType, input.actorId || null, input.title, input.body || "", input.eventType, input.relatedType || null, input.relatedId || null, nowIso())
@@ -550,12 +615,7 @@ async function withNotificationSources(env, rows) {
     return Promise.all(rows.map(async (item) => ({ ...item, ...(await notificationSource(env, item)) })));
 }
 async function route(request, env) {
-    await ensureAdmin(env);
-    await ensureNotificationsSchema(env);
-    await ensureSystemSettings(env);
-    await ensureFeedbackSchema(env);
-    await ensureCategorySchema(env);
-    await ensureAchievementSchema(env);
+    await bootstrap(env);
     const url = new URL(request.url);
     const path = `/${(url.pathname.replace(/^\/api\/?/, "") || "").replace(/^\/|\/$/g, "")}`;
     const method = request.method;
@@ -1248,7 +1308,8 @@ WHERE id=?`)
     if (path === "/dashboard/parent" && method === "GET") {
         const a = requireRole(actor, ["parent"]);
         const children = (await env.DB.prepare("SELECT id, display_name FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(a.id).all()).results;
-        const childCards = await Promise.all(children.map(async (child) => ({ ...child, balance: await balance(env, child.id) })));
+        const balances = await balancesForChildren(env, children.map((child) => child.id));
+        const childCards = children.map((child) => ({ ...child, balance: balances.get(child.id) || 0 }));
         return ok({
             children: childCards,
             pendingSubmissions: (await env.DB.prepare("SELECT s.*, t.title, c.display_name child_name FROM task_submissions s JOIN tasks t ON t.id=s.task_id JOIN children c ON c.id=s.child_id WHERE s.parent_id=? AND s.status='pending' ORDER BY s.submitted_at").bind(a.id).all()).results,
@@ -1261,13 +1322,17 @@ WHERE id=?`)
         const currentTasks = await env.DB.prepare("SELECT t.*, tc.name category_name, tc.icon_type category_icon_type, tc.icon_value category_icon_value FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id JOIN task_categories tc ON tc.id=t.category_id WHERE ta.child_id=? AND t.is_active=1 AND t.deleted_at IS NULL ORDER BY tc.name, t.created_at DESC")
             .bind(a.id)
             .all();
-        const taskRows = await Promise.all(currentTasks.results.map(async (task) => {
-            const pkey = periodKey(task.period, undefined, offset);
-            const [activeCount, latest, rejected] = await Promise.all([
-                childUsageForPeriod(env, "task_submissions", "task_id", task.id, a.id, pkey, ["pending", "approved"]),
-                env.DB.prepare("SELECT status, review_note FROM task_submissions WHERE task_id=? AND child_id=? AND period_key=? ORDER BY submitted_at DESC LIMIT 1").bind(task.id, a.id, pkey).first(),
-                env.DB.prepare("SELECT status, review_note FROM task_submissions WHERE task_id=? AND child_id=? AND period_key=? AND status='rejected' ORDER BY reviewed_at DESC LIMIT 1").bind(task.id, a.id, pkey).first()
-            ]);
+        const taskPeriods = currentTasks.results.map((task) => ({ itemId: task.id, periodKey: periodKey(task.period, undefined, offset) }));
+        const [taskUsageCounts, taskStatuses] = await Promise.all([
+            childUsageCountsForPeriods(env, "task_submissions", "task_id", a.id, taskPeriods, ["pending", "approved"]),
+            childLatestTaskStatuses(env, a.id, taskPeriods)
+        ]);
+        const taskRows = currentTasks.results.map((task, index) => {
+            const pkey = taskPeriods[index].periodKey;
+            const key = `${task.id}:${pkey}`;
+            const activeCount = taskUsageCounts.get(key) || 0;
+            const latest = taskStatuses.latest.get(key);
+            const rejected = taskStatuses.rejected.get(key);
             const limitCount = Number(task.limit_count || 1);
             return {
                 ...task,
@@ -1280,14 +1345,16 @@ WHERE id=?`)
                 submissionStatus: latest?.status || null,
                 rejectionNote: rejected?.review_note || ""
             };
-        }));
+        });
         const rewardRows = await env.DB.prepare("SELECT r.* FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id WHERE ra.child_id=? AND r.is_active=1 AND r.deleted_at IS NULL ORDER BY r.cost_points")
             .bind(a.id)
             .all();
-        const rewards = await Promise.all(rewardRows.results.map(async (reward) => {
-            const pkey = periodKey(reward.limit_period, undefined, offset);
+        const rewardPeriods = rewardRows.results.map((reward) => ({ itemId: reward.id, periodKey: periodKey(reward.limit_period, undefined, offset) }));
+        const rewardUsageCounts = await childUsageCountsForPeriods(env, "reward_redemptions", "reward_id", a.id, rewardPeriods, ["pending", "redeemed"]);
+        const rewards = rewardRows.results.map((reward, index) => {
+            const pkey = rewardPeriods[index].periodKey;
             const limitCount = reward.limit_period === "none" || reward.limit_count === null ? null : Number(reward.limit_count);
-            const usedCount = limitCount === null ? 0 : await childUsageForPeriod(env, "reward_redemptions", "reward_id", reward.id, a.id, pkey, ["pending", "redeemed"]);
+            const usedCount = limitCount === null ? 0 : rewardUsageCounts.get(`${reward.id}:${pkey}`) || 0;
             return {
                 ...reward,
                 periodKey: pkey,
@@ -1297,7 +1364,7 @@ WHERE id=?`)
                 canRedeem: limitCount === null || usedCount < limitCount,
                 resetAt: nextPeriodReset(reward.limit_period, undefined, offset)
             };
-        }));
+        });
         return ok({
             child: a,
             balance: await balance(env, a.id),

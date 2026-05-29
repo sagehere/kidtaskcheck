@@ -892,16 +892,6 @@ function ChildManager({ children, onEdit, onToggle, onDelete }: { children: Chil
   );
 }
 
-function CreateCategory({ onCreate }: { onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ name: "", iconValue: "📚" });
-  return (
-    <FormPanel title="任务分类" icon={<Star />} onSubmit={() => onCreate({ ...data, iconType: "emoji" })}>
-      <Field label="名称"><input required value={data.name} onChange={(e) => setData({ ...data, name: e.target.value })} /></Field>
-      <Field label="符号"><input required value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
-    </FormPanel>
-  );
-}
-
 function AchievementRuleFields({ data, setData, tasks, categories }: { data: any; setData: (data: any) => void; tasks: Task[]; categories: Category[] }) {
   const needsCustomWindow = ["tasks_custom", "category_tasks_custom", "praise_custom", "no_criticism_custom"].includes(data.condition);
   const needsTask = data.condition === "same_task_streak";

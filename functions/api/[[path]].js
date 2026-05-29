@@ -664,6 +664,30 @@ async function route(request, env) {
         requireRole(actor, ["admin"]);
         return ok((await env.DB.prepare("SELECT id, username, display_name, status, created_at FROM users WHERE role='parent' AND deleted_at IS NULL ORDER BY created_at DESC").all()).results);
     }
+    if (path === "/admin/profile" && method === "PATCH") {
+        const a = requireRole(actor, ["admin"]);
+        const input = await body(request);
+        const currentPassword = String(input.currentPassword || "");
+        if (!currentPassword)
+            return fail("BAD_REQUEST", "请输入当前密码");
+        const admin = await env.DB.prepare("SELECT * FROM users WHERE id=? AND role='admin' AND status='active' AND deleted_at IS NULL").bind(a.id).first();
+        if (!admin)
+            return fail("NOT_FOUND", "管理员账号不存在", 404);
+        if (!(await verifyPassword(currentPassword, admin.password_hash)))
+            return fail("BAD_CREDENTIALS", "当前密码不正确", 401);
+        const username = String(input.username || "").trim();
+        if (!username)
+            return fail("BAD_REQUEST", "请输入账号");
+        if (await usernameExists(env, username, `user:${admin.id}`))
+            return fail("USERNAME_EXISTS", "账号已存在，请换一个用户名", 409);
+        const displayName = String(input.displayName || "").trim() || username;
+        const newPassword = String(input.newPassword || "");
+        const passwordHash = newPassword ? await hashPassword(newPassword) : admin.password_hash;
+        await env.DB.prepare("UPDATE users SET username=?, display_name=?, password_hash=?, updated_at=? WHERE id=? AND role='admin'")
+            .bind(username, displayName, passwordHash, nowIso(), admin.id)
+            .run();
+        return ok({ id: admin.id, username, displayName, role: "admin" });
+    }
     if (path === "/admin/system-settings") {
         requireRole(actor, ["admin"]);
         if (method === "GET") {

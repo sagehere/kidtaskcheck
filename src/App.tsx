@@ -302,6 +302,7 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [form, setForm] = useState({ username: "", displayName: "", password: "" });
+  const [profileForm, setProfileForm] = useState({ username: me.username, displayName: me.displayName, currentPassword: "", newPassword: "", confirmPassword: "" });
   const [imageForm, setImageForm] = useState({ name: "", url: "", usage: "general" });
   const [settings, setSettings] = useState<SystemSettings>({ timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" });
 
@@ -312,6 +313,9 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
     setSettings(settingRows);
   }
   useEffect(() => void load(), []);
+  useEffect(() => {
+    setProfileForm((current) => ({ ...current, username: me.username, displayName: me.displayName }));
+  }, [me.username, me.displayName]);
 
   async function run(action: () => Promise<void>, note: string) {
     setError("");
@@ -330,6 +334,28 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
       await api("/admin/users", { method: "POST", body: JSON.stringify(form) });
       setForm({ username: "", displayName: "", password: "" });
     }, "家长用户已创建");
+  }
+
+  async function updateProfile(event: FormEvent) {
+    event.preventDefault();
+    if (profileForm.newPassword !== profileForm.confirmPassword) {
+      setMessage("");
+      setError("两次输入的新密码不一致");
+      return;
+    }
+    await run(async () => {
+      const next = await api<{ username: string; displayName: string }>("/admin/profile", {
+        method: "PATCH",
+        body: JSON.stringify({
+          username: profileForm.username,
+          displayName: profileForm.displayName,
+          currentPassword: profileForm.currentPassword,
+          newPassword: profileForm.newPassword
+        })
+      });
+      setProfileForm({ username: next.username, displayName: next.displayName, currentPassword: "", newPassword: "", confirmPassword: "" });
+      refresh();
+    }, "管理员账号已更新");
   }
 
   async function createImage(event: FormEvent) {
@@ -373,6 +399,33 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
       </section>
       {message && <div className="success">{message}</div>}
       {error && <div className="error">{error}</div>}
+      <section className="panel setting-group">
+        <div className="panel-title">
+          <Shield />
+          <h2>管理员账号设置</h2>
+        </div>
+        <form className="stack compact" onSubmit={updateProfile}>
+          <Field label="管理员账号">
+            <input value={profileForm.username} onChange={(e) => setProfileForm({ ...profileForm, username: e.target.value })} autoComplete="username" required />
+          </Field>
+          <Field label="显示名">
+            <input value={profileForm.displayName} onChange={(e) => setProfileForm({ ...profileForm, displayName: e.target.value })} required />
+          </Field>
+          <Field label="当前密码">
+            <input value={profileForm.currentPassword} onChange={(e) => setProfileForm({ ...profileForm, currentPassword: e.target.value })} type="password" autoComplete="current-password" required />
+          </Field>
+          <Field label="新密码">
+            <input value={profileForm.newPassword} onChange={(e) => setProfileForm({ ...profileForm, newPassword: e.target.value })} type="password" autoComplete="new-password" />
+          </Field>
+          <Field label="确认新密码">
+            <input value={profileForm.confirmPassword} onChange={(e) => setProfileForm({ ...profileForm, confirmPassword: e.target.value })} type="password" autoComplete="new-password" />
+          </Field>
+          <button className="primary">
+            <KeyRound size={18} />
+            保存管理员账号
+          </button>
+        </form>
+      </section>
       <section className="panel setting-group">
         <div className="panel-title">
           <Settings />

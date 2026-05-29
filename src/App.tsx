@@ -71,6 +71,21 @@ function Empty(props: { text: string }) {
   return <div className="empty">{props.text}</div>;
 }
 
+function FeedbackToast({ message, error, onDismiss }: { message: string; error: string; onDismiss: () => void }) {
+  const text = error || message;
+  useEffect(() => {
+    if (!text) return;
+    const timer = window.setTimeout(onDismiss, 5000);
+    return () => window.clearTimeout(timer);
+  }, [text]);
+  if (!text) return null;
+  return (
+    <div className={`feedback-toast ${error ? "is-error" : "is-success"}`} role="status" aria-live="polite">
+      {text}
+    </div>
+  );
+}
+
 function formatReset(resetAt?: string | null) {
   if (!resetAt) return "已达上限";
   const ms = new Date(resetAt).getTime() - Date.now();
@@ -398,8 +413,7 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           <span>家长用户</span>
         </div>
       </section>
-      {message && <div className="success">{message}</div>}
-      {error && <div className="error">{error}</div>}
+      <FeedbackToast message={message} error={error} onDismiss={() => { setMessage(""); setError(""); }} />
       <section className="panel setting-group">
         <div className="panel-title">
           <Shield />
@@ -671,8 +685,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           </div>
         </div>
       </section>
-      {message && <div className="success">{message}</div>}
-      {error && <div className="error">{error}</div>}
+      <FeedbackToast message={message} error={error} onDismiss={() => { setMessage(""); setError(""); }} />
 
       <Tabs
         value={activeTab}
@@ -1415,7 +1428,6 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           <span>{task.usedCount}/{task.limitCount} 次</span>
           <span>{task.periodKey}</span>
         </div>
-        {task.rejectionNote && <small className="card-status warn">上次驳回：{task.rejectionNote}</small>}
         <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
           {busyId ? "提交中..." : limited ? formatReset(task.resetAt) : "提交完成"}
         </button>
@@ -1442,9 +1454,6 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           {reward.limitCount !== null && <span>{reward.usedCount}/{reward.limitCount} 次</span>}
         </div>
         {pinned && rewardProgress(reward)}
-        <small className={"card-status " + (disabled ? "warn" : "ready")}>
-          {limited ? formatReset(reward.resetAt) : dash.balance < reward.cost_points ? "积分还不够" : "可以兑换"}
-        </small>
         <button className="secondary card-action" disabled={disabled} onClick={() => redeem(reward)}>
           {busy === "reward:" + reward.id ? "兑换中..." : limited ? formatReset(reward.resetAt) : dash.balance < reward.cost_points ? "积分不足" : "兑换"}
         </button>
@@ -1513,8 +1522,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           <span>当前积分</span>
         </button>
       </section>
-      {message && <div className="success">{message}</div>}
-      {error && <div className="error">{error}</div>}
+      <FeedbackToast message={message} error={error} onDismiss={() => { setMessage(""); setError(""); }} />
       <section className="panel">
         <div className="panel-title"><Award /><h2>成就墙</h2></div>
         <div className="cards scroll-list">
@@ -1576,7 +1584,6 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
                       <span>{task.usedCount}/{task.limitCount} 次</span>
                       <span>{task.periodKey}</span>
                     </div>
-                    {task.rejectionNote && <small className="card-status warn">上次驳回：{task.rejectionNote}</small>}
                     <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
                       {busyId ? "提交中..." : limited ? formatReset(task.resetAt) : "提交完成"}
                     </button>
@@ -1609,9 +1616,6 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
                     <span className="cost"><Coins size={16} />{reward.cost_points} 积分</span>
                     {reward.limitCount !== null && <span>{reward.usedCount}/{reward.limitCount} 次</span>}
                   </div>
-                  <small className={`card-status ${disabled ? "warn" : "ready"}`}>
-                    {limited ? formatReset(reward.resetAt) : dash.balance < reward.cost_points ? "积分还不够" : "可以兑换"}
-                  </small>
                   <button className="secondary card-action" disabled={disabled} onClick={() => redeem(reward)}>
                     {busy === `reward:${reward.id}` ? "兑换中..." : limited ? formatReset(reward.resetAt) : dash.balance < reward.cost_points ? "积分不足" : "兑换"}
                   </button>

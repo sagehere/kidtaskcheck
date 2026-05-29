@@ -2,17 +2,19 @@ import { describe, expect, it } from "vitest";
 import { consecutiveDayStreak, nextPeriodReset, periodKey, signedPoints } from "../src/lib/domain";
 
 describe("periodKey", () => {
-  it("calculates daily, weekly, monthly and once keys", () => {
-    const at = "2026-05-25T10:30:00.000Z";
+  it("calculates daily, weekly, monthly and once keys in the default UTC+8 timezone", () => {
+    const at = "2026-05-24T16:30:00.000Z";
     expect(periodKey("daily", at)).toBe("2026-05-25");
     expect(periodKey("weekly", at)).toBe("2026-W22");
     expect(periodKey("monthly", at)).toBe("2026-05");
     expect(periodKey("once", at)).toBe("once");
   });
 
-  it("uses the submitted/requested timestamp for cross-period attribution", () => {
-    expect(periodKey("weekly", "2026-05-24T23:55:00.000Z")).toBe("2026-W21");
-    expect(periodKey("weekly", "2026-05-25T00:05:00.000Z")).toBe("2026-W22");
+  it("uses the configured timezone for cross-period attribution", () => {
+    expect(periodKey("daily", "2026-05-24T15:59:00.000Z")).toBe("2026-05-24");
+    expect(periodKey("daily", "2026-05-24T16:00:00.000Z")).toBe("2026-05-25");
+    expect(periodKey("weekly", "2026-05-25T03:00:00.000Z", 0)).toBe("2026-W22");
+    expect(periodKey("weekly", "2026-05-25T03:00:00.000Z", -240)).toBe("2026-W21");
   });
 });
 
@@ -24,11 +26,12 @@ describe("points", () => {
 });
 
 describe("nextPeriodReset", () => {
-  it("returns the next UTC reset boundary for repeating periods", () => {
+  it("returns the next reset boundary at midnight in the configured timezone", () => {
     const at = "2026-05-25T10:30:00.000Z";
-    expect(nextPeriodReset("daily", at)).toBe("2026-05-26T00:00:00.000Z");
-    expect(nextPeriodReset("weekly", at)).toBe("2026-06-01T00:00:00.000Z");
-    expect(nextPeriodReset("monthly", at)).toBe("2026-06-01T00:00:00.000Z");
+    expect(nextPeriodReset("daily", at)).toBe("2026-05-25T16:00:00.000Z");
+    expect(nextPeriodReset("weekly", at)).toBe("2026-05-31T16:00:00.000Z");
+    expect(nextPeriodReset("monthly", at)).toBe("2026-05-31T16:00:00.000Z");
+    expect(nextPeriodReset("daily", at, -240)).toBe("2026-05-26T04:00:00.000Z");
   });
 
   it("does not reset once-only or unlimited periods", () => {
@@ -38,7 +41,7 @@ describe("nextPeriodReset", () => {
 });
 
 describe("consecutiveDayStreak", () => {
-  it("counts consecutive approved submission days", () => {
-    expect(consecutiveDayStreak(["2026-05-24", "2026-05-23", "2026-05-21"])).toBe(2);
+  it("counts consecutive approved submission days in the configured timezone", () => {
+    expect(consecutiveDayStreak(["2026-05-24T16:30:00.000Z", "2026-05-23T16:30:00.000Z", "2026-05-21T16:30:00.000Z"])).toBe(2);
   });
 });

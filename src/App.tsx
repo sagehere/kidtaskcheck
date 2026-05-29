@@ -6,17 +6,21 @@ import {
   Check,
   ClipboardCheck,
   Coins,
+  Download,
   Edit3,
   Gift,
   Image,
   KeyRound,
   LogOut,
+  MessageSquare,
   Plus,
   RefreshCcw,
+  Settings,
   Shield,
   Sparkles,
   Star,
   Trash2,
+  Upload,
   UserRound,
   Users
 } from "lucide-react";
@@ -33,8 +37,10 @@ type Gallery = { id: string; name: string; url: string; usage: string };
 type Category = { id: string; name: string; icon_type: string; icon_value: string; is_system: number };
 type Task = Record<string, any> & { assignees?: string[] };
 type Reward = Record<string, any> & { assignees?: string[] };
+type FeedbackTemplate = Record<string, any> & { id: string; kind: "praise" | "criticism"; title: string; description: string; points: number; icon_type: string; icon_value: string; is_active: number };
 type Notification = { id: string; title: string; body: string; read_at: string | null; created_at: string };
 type LedgerRow = { id: string; amount: number; source_type: string; note: string; created_at: string; period_key?: string | null };
+type SystemSettings = { timezoneOffsetMinutes: number; timezoneLabel: string };
 const REFRESH_INTERVAL_MS = 12000;
 
 async function api<T>(path: string, options: RequestInit = {}) {
@@ -87,7 +93,9 @@ function formatSource(value: string) {
     task: "任务",
     reward: "奖励兑换",
     reward_cancel: "兑换退回",
-    manual_deduction: "即时扣分"
+    manual_deduction: "即时扣分",
+    praise: "表扬",
+    criticism: "批评"
   };
   return labels[value] || value;
 }
@@ -101,6 +109,15 @@ function formatPeriod(value: string) {
     none: "不限"
   };
   return labels[value] || value;
+}
+
+function timezoneOptions() {
+  const values = [-720, -600, -480, -300, -240, 0, 330, 480, 540, 600, 720];
+  return values.map((value) => {
+    const sign = value >= 0 ? "+" : "-";
+    const abs = Math.abs(value);
+    return { value, label: `UTC${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}` };
+  });
 }
 
 function Login({ onDone }: { onDone: () => void }) {
@@ -153,11 +170,13 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   const [error, setError] = useState("");
   const [form, setForm] = useState({ username: "", displayName: "", password: "" });
   const [imageForm, setImageForm] = useState({ name: "", url: "", usage: "general" });
+  const [settings, setSettings] = useState<SystemSettings>({ timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" });
 
   async function load() {
-    const [userRows, galleryRows] = await Promise.all([api<any[]>("/admin/users"), api<Gallery[]>("/admin/gallery-images")]);
+    const [userRows, galleryRows, settingRows] = await Promise.all([api<any[]>("/admin/users"), api<Gallery[]>("/admin/gallery-images"), api<SystemSettings>("/admin/system-settings")]);
     setUsers(userRows);
     setGallery(galleryRows);
+    setSettings(settingRows);
   }
   useEffect(() => void load(), []);
 
@@ -199,6 +218,13 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
     await run(() => api(`/admin/users/${id}`, { method: "DELETE" }), "家长用户及其子账号已归档");
   }
 
+  async function updateSettings(timezoneOffsetMinutes: number) {
+    await run(async () => {
+      const next = await api<SystemSettings>("/admin/system-settings", { method: "PATCH", body: JSON.stringify({ timezoneOffsetMinutes }) });
+      setSettings(next);
+    }, "系统设置已更新");
+  }
+
   return (
     <Shell me={me} refresh={refresh}>
       <section className="hero-band admin">
@@ -214,6 +240,24 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
       </section>
       {message && <div className="success">{message}</div>}
       {error && <div className="error">{error}</div>}
+      <section className="panel setting-group">
+        <div className="panel-title">
+          <Settings />
+          <h2>系统设置</h2>
+        </div>
+        <form className="stack compact" onSubmit={(event) => { event.preventDefault(); void updateSettings(settings.timezoneOffsetMinutes); }}>
+          <Field label="重置时区">
+            <select value={settings.timezoneOffsetMinutes} onChange={(e) => setSettings({ ...settings, timezoneOffsetMinutes: Number(e.target.value) })}>
+              {timezoneOptions().map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </Field>
+          <div className="field">
+            <span>当前设置</span>
+            <div className="readonly-value">{settings.timezoneLabel}</div>
+          </div>
+          <button className="primary"><Settings size={18} />保存系统设置</button>
+        </form>
+      </section>
       <div className="grid two">
         <section className="panel">
           <div className="panel-title">
@@ -294,6 +338,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   const [tasks, setTasks] = useState<Task[]>([]);
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [achievements, setAchievements] = useState<any[]>([]);
+  const [feedbackTemplates, setFeedbackTemplates] = useState<FeedbackTemplate[]>([]);
   const [dashboard, setDashboard] = useState<any>({ children: [], pendingSubmissions: [], pendingRedemptions: [] });
   const [activeTab, setActiveTab] = useState<"pending" | "children" | "settings">("pending");
   const [ledgerChild, setLedgerChild] = useState<{ id: string; display_name: string } | null>(null);
@@ -302,12 +347,13 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   const [error, setError] = useState("");
 
   async function load() {
-    const [childRows, categoryRows, taskRows, rewardRows, achievementRows, dash] = await Promise.all([
+    const [childRows, categoryRows, taskRows, rewardRows, achievementRows, feedbackRows, dash] = await Promise.all([
       api<Child[]>("/children"),
       api<Category[]>("/task-categories"),
       api<Task[]>("/tasks"),
       api<Reward[]>("/rewards"),
       api<any[]>("/achievements"),
+      api<FeedbackTemplate[]>("/feedback-templates"),
       api<any>("/dashboard/parent")
     ]);
     setChildren(childRows);
@@ -315,6 +361,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     setTasks(taskRows);
     setRewards(rewardRows);
     setAchievements(achievementRows);
+    setFeedbackTemplates(feedbackRows);
     setDashboard(dash);
   }
   useEffect(() => void load(), []);
@@ -386,10 +433,10 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     await run(() => api("/testing/reset-parent-progress", { method: "POST", body: JSON.stringify({}) }), "测试进度已重置");
   }
 
-  async function deductPoints(data: { childId: string; amount: number; note: string }) {
+  async function applyFeedback(data: { childId: string; templateId: string }) {
     await run(
-      () => api(`/children/${data.childId}/deductions`, { method: "POST", body: JSON.stringify({ amount: data.amount, note: data.note }) }),
-      "扣分已记录"
+      () => api(`/children/${data.childId}/feedback-events`, { method: "POST", body: JSON.stringify({ templateId: data.templateId }) }),
+      "表扬与批评已记录"
     );
   }
 
@@ -446,7 +493,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
             <RedemptionPanel items={dashboard.pendingRedemptions || []} onFinish={finishRedemption} />
           </div>
           <div className="grid two">
-            <DeductionPanel children={children} onSubmit={deductPoints} />
+            <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} />
           </div>
         </>
       )}
@@ -465,10 +512,9 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           <section className="setting-group">
             <div className="panel-title"><Star /><h2>任务配置</h2></div>
             <div className="grid two">
-              <CreateCategory onCreate={(data) => create("/task-categories", data, "任务分类已创建")} />
               <CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} />
+              <CategoryOverview items={categories} onCreate={(data) => create("/task-categories", data, "任务分类已创建")} onUpdate={(item, data) => update(`/task-categories/${item.id}`, data, "任务分类已更新")} />
             </div>
-            <CategoryOverview items={categories.filter((item) => !item.is_system)} onUpdate={(item, data) => update(`/task-categories/${item.id}`, data, "任务分类已更新")} />
             <Overview title="现有任务" items={tasks} kind="task" children={children} categories={categories} onUpdate={(item, data) => update(`/tasks/${item.id}`, data, "任务已更新")} />
           </section>
           <section className="setting-group">
@@ -481,6 +527,12 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
             <CreateAchievement onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
             <Overview title="成就称号" items={achievements} kind="achievement" onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} />
           </section>
+          <section className="setting-group">
+            <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
+            <CreateFeedbackTemplate onCreate={(data) => create("/feedback-templates", data, "条款已创建")} />
+            <FeedbackOverview items={feedbackTemplates} onUpdate={(item, data) => update(`/feedback-templates/${item.id}`, data, "条款已更新")} />
+          </section>
+          <ConfigPortPanel onImported={load} />
           <section className="panel">
             <div className="panel-title"><RefreshCcw /><h2>测试与维护</h2></div>
             <button className="secondary" onClick={resetProgress}>
@@ -573,33 +625,37 @@ function RedemptionPanel({ items, onFinish }: { items: any[]; onFinish: (id: str
   );
 }
 
-function DeductionPanel({ children, onSubmit }: { children: Child[]; onSubmit: (data: { childId: string; amount: number; note: string }) => void }) {
-  const [data, setData] = useState({ childId: "", amount: 1, note: "" });
+function PraiseCriticismPanel({ children, templates, onSubmit }: { children: Child[]; templates: FeedbackTemplate[]; onSubmit: (data: { childId: string; templateId: string }) => void }) {
+  const [data, setData] = useState({ childId: "", templateId: "" });
   const childId = data.childId || children[0]?.id || "";
-  if (!children.length) {
+  const templateId = data.templateId || templates[0]?.id || "";
+  if (!children.length || !templates.length) {
     return (
       <section className="panel">
-        <div className="panel-title"><Coins /><h2>即时扣分</h2></div>
-        <Empty text="先创建孩子账号后再扣分" />
+        <div className="panel-title"><MessageSquare /><h2>表扬与批评</h2></div>
+        <Empty text={!children.length ? "先创建孩子账号后再操作" : "先在设置中创建表扬与批评条款"} />
       </section>
     );
   }
   return (
-    <FormPanel title="即时扣分" icon={<Coins />} submitLabel="扣分" onSubmit={() => onSubmit({ ...data, childId })}>
+    <FormPanel title="表扬与批评" icon={<MessageSquare />} submitLabel="记录" onSubmit={() => onSubmit({ childId, templateId })}>
       <Field label="孩子">
         <select value={childId} onChange={(e) => setData({ ...data, childId: e.target.value })}>
           {children.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
         </select>
       </Field>
-      <Field label="扣除积分"><input type="number" min="1" value={data.amount} onChange={(e) => setData({ ...data, amount: Number(e.target.value) })} /></Field>
-      <Field label="原因"><input value={data.note} onChange={(e) => setData({ ...data, note: e.target.value })} placeholder="例如：未按约定完成事项" /></Field>
+      <Field label="条款">
+        <select value={templateId} onChange={(e) => setData({ ...data, templateId: e.target.value })}>
+          {templates.map((item) => <option key={item.id} value={item.id}>{item.kind === "praise" ? "表扬" : "批评"} · {item.title} · {item.kind === "praise" ? "+" : "-"}{item.points}</option>)}
+        </select>
+      </Field>
     </FormPanel>
   );
 }
 
 function LedgerList({ rows }: { rows: LedgerRow[] }) {
   return (
-    <div className="list scroll-list">
+    <div className="list ledger-list">
       {rows.length ? rows.map((row) => (
         <article className="row" key={row.id}>
           <div>
@@ -693,7 +749,7 @@ function CreateAchievement({ onCreate }: { onCreate: (data: any) => void }) {
 }
 
 function CreateTask({ children, categories, onCreate }: { children: Child[]; categories: Category[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, pointType: "earn", points: 5, iconValue: "✅", isActive: true, childIds: [] as string[] });
+  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, iconValue: "✅", isActive: true, childIds: [] as string[] });
   const categoryId = data.categoryId || categories[0]?.id || "";
   return (
     <FormPanel title="新任务" icon={<ClipboardCheck />} onSubmit={() => onCreate({ ...data, categoryId, iconType: "emoji" })}>
@@ -713,12 +769,6 @@ function CreateTask({ children, categories, onCreate }: { children: Child[]; cat
         </select>
       </Field>
       <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
-      <Field label="积分类型">
-        <select value={data.pointType} onChange={(e) => setData({ ...data, pointType: e.target.value })}>
-          <option value="earn">加分</option>
-          <option value="deduct">扣分</option>
-        </select>
-      </Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
       <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
@@ -747,6 +797,106 @@ function CreateReward({ children, onCreate }: { children: Child[]; onCreate: (da
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
       <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />
     </FormPanel>
+  );
+}
+
+function CreateFeedbackTemplate({ onCreate }: { onCreate: (data: any) => void }) {
+  const [data, setData] = useState({ kind: "praise", title: "", description: "", points: 5, iconValue: "✨", isActive: true });
+  return (
+    <FormPanel title="新条款" icon={<MessageSquare />} onSubmit={() => onCreate({ ...data, iconType: "emoji" })}>
+      <Field label="类型">
+        <select value={data.kind} onChange={(e) => setData({ ...data, kind: e.target.value, iconValue: e.target.value === "praise" ? "✨" : "⚠️" })}>
+          <option value="praise">表扬</option>
+          <option value="criticism">批评</option>
+        </select>
+      </Field>
+      <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
+      <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
+      <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
+      <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
+    </FormPanel>
+  );
+}
+
+function FeedbackOverview({ items, onUpdate }: { items: FeedbackTemplate[]; onUpdate: (item: FeedbackTemplate, data: any) => void }) {
+  const [editing, setEditing] = useState("");
+  return (
+    <section className="panel">
+      <div className="panel-title"><MessageSquare /><h2>现有条款</h2></div>
+      <div className="cards scroll-list">
+        {items.length ? items.map((item) => (
+          <article className={`mini-card item-card ${item.kind}`} key={item.id}>
+            {editing === item.id ? (
+              <EditFeedbackForm item={item} onCancel={() => setEditing("")} onSave={(data) => { onUpdate(item, data); setEditing(""); }} />
+            ) : (
+              <>
+                <div className="card-head">
+                  {icon(item.icon_type, item.icon_value, item.title)}
+                  <div>
+                    <strong>{item.title}</strong>
+                    <small>{item.kind === "praise" ? "表扬" : "批评"} · {item.is_active ? "启用" : "停用"}</small>
+                  </div>
+                </div>
+                {item.description && <small>{item.description}</small>}
+                <span className={item.kind === "praise" ? "positive" : "negative"}>{item.kind === "praise" ? "+" : "-"}{item.points} 积分</span>
+                <button className="secondary" onClick={() => setEditing(item.id)}><Edit3 size={16} />编辑</button>
+              </>
+            )}
+          </article>
+        )) : <Empty text="暂无表扬与批评条款" />}
+      </div>
+    </section>
+  );
+}
+
+function EditFeedbackForm({ item, onSave, onCancel }: { item: FeedbackTemplate; onSave: (data: any) => void; onCancel: () => void }) {
+  const [data, setData] = useState({ kind: item.kind, title: item.title, description: item.description || "", points: item.points || 0, iconValue: item.icon_value || "✨", isActive: item.is_active !== 0 });
+  return (
+    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, iconType: "emoji" }); }}>
+      <Field label="类型"><select value={data.kind} onChange={(e) => setData({ ...data, kind: e.target.value as "praise" | "criticism" })}><option value="praise">表扬</option><option value="criticism">批评</option></select></Field>
+      <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
+      <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
+      <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
+      <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
+      <div className="actions"><button className="primary">保存</button><button type="button" className="secondary" onClick={onCancel}>取消</button></div>
+    </form>
+  );
+}
+
+function ConfigPortPanel({ onImported }: { onImported: () => Promise<void> }) {
+  const [summary, setSummary] = useState("");
+  async function exportConfig() {
+    const data = await api<any>("/config/export");
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `任务打卡配置-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+  async function importConfig(file?: File) {
+    if (!file) return;
+    const data = JSON.parse(await file.text());
+    const stats = await api<Record<string, { created: number; skipped: number }>>("/config/import", { method: "POST", body: JSON.stringify(data) });
+    setSummary(Object.entries(stats).map(([key, value]) => `${key}: 新增 ${value.created}，跳过 ${value.skipped}`).join("；"));
+    await onImported();
+  }
+  return (
+    <section className="panel setting-group">
+      <div className="panel-title"><Upload /><h2>配置导入导出</h2></div>
+      <div className="actions wrap">
+        <button className="secondary" type="button" onClick={() => void exportConfig()}><Download size={18} />导出配置</button>
+        <label className="secondary file-action">
+          <Upload size={18} />
+          导入配置
+          <input type="file" accept="application/json,.json" onChange={(event) => void importConfig(event.target.files?.[0])} />
+        </label>
+      </div>
+      {summary && <div className="success">{summary}</div>}
+    </section>
   );
 }
 
@@ -789,11 +939,17 @@ function FormPanel({ title, icon, children, onSubmit, submitLabel = "保存" }: 
   );
 }
 
-function CategoryOverview({ items, onUpdate }: { items: Category[]; onUpdate: (item: Category, data: any) => void }) {
+function CategoryOverview({ items, onCreate, onUpdate }: { items: Category[]; onCreate: (data: any) => void; onUpdate: (item: Category, data: any) => void }) {
   const [editing, setEditing] = useState("");
+  const [data, setData] = useState({ name: "", iconValue: "📚" });
   return (
     <section className="panel">
       <div className="panel-title"><Star /><h2>任务分类</h2></div>
+      <form className="stack compact" onSubmit={(event) => { event.preventDefault(); onCreate({ ...data, iconType: "emoji" }); setData({ name: "", iconValue: "📚" }); }}>
+        <Field label="名称"><input required value={data.name} onChange={(e) => setData({ ...data, name: e.target.value })} /></Field>
+        <Field label="符号"><input required value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+        <button className="primary"><Plus size={18} />新建分类</button>
+      </form>
       <div className="cards scroll-list">
         {items.length ? items.map((item) => (
           <article className="mini-card" key={item.id}>
@@ -803,11 +959,12 @@ function CategoryOverview({ items, onUpdate }: { items: Category[]; onUpdate: (i
               <>
                 {icon(item.icon_type, item.icon_value, item.name)}
                 <strong>{item.name}</strong>
+                <small>{item.is_system ? "系统预置，编辑后仅影响当前家长" : "自定义分类"}</small>
                 <button className="secondary" onClick={() => setEditing(item.id)}><Edit3 size={16} />编辑</button>
               </>
             )}
           </article>
-        )) : <Empty text="暂无自定义分类" />}
+        )) : <Empty text="暂无分类" />}
       </div>
     </section>
   );
@@ -845,7 +1002,7 @@ function Overview({ title, items, kind, children = [], categories = [], onUpdate
                 </div>
                 {item.description && <small>{item.description}</small>}
                 <span>
-                  {kind === "task" && `${formatPeriod(item.period)} · ${item.point_type === "earn" ? "+" : "-"}${item.points} · ${item.limit_count || 1}次`}
+                  {kind === "task" && `${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次`}
                   {kind === "reward" && `${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`}`}
                   {kind === "achievement" && `${item.metric} ≥ ${item.threshold}`}
                 </span>
@@ -866,7 +1023,6 @@ function EditItemForm({ kind, item, children, categories, onSave, onCancel }: { 
     categoryId: item.category_id || categories[0]?.id || "",
     period: item.period || "daily",
     limitCount: item.limit_count || item.limitCount || 1,
-    pointType: item.point_type || "earn",
     points: item.points || 0,
     costPoints: item.cost_points || 0,
     limitPeriod: item.limit_period === "none" ? "daily" : item.limit_period || "daily",
@@ -885,7 +1041,6 @@ function EditItemForm({ kind, item, children, categories, onSave, onCancel }: { 
           <Field label="分类"><select value={data.categoryId} onChange={(e) => setData({ ...data, categoryId: e.target.value })}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
           <Field label="周期"><select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
           <Field label="次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
-          <Field label="积分类型"><select value={data.pointType} onChange={(e) => setData({ ...data, pointType: e.target.value })}><option value="earn">加分</option><option value="deduct">扣分</option></select></Field>
           <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
         </>
       )}

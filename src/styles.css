@@ -366,6 +366,10 @@ textarea {
   resize: vertical;
 }
 
+.compact textarea {
+  min-height: 40px;
+}
+
 .primary,
 .secondary,
 .icon {
@@ -471,6 +475,10 @@ textarea {
 .actions {
   display: flex;
   gap: 8px;
+}
+
+.actions.wrap {
+  flex-wrap: wrap;
 }
 
 .toggle {
@@ -755,12 +763,33 @@ textarea {
 
 .ledger-modal {
   width: min(620px, 100%);
-  max-height: min(720px, calc(100vh - 40px));
-  overflow: hidden;
+  overflow: visible;
 }
 
-.ledger-modal .scroll-list {
-  max-height: calc(100vh - 160px);
+.ledger-list {
+  margin-top: 10px;
+}
+
+.readonly-value {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #d4cec2;
+  border-radius: 8px;
+  background: #f8f5ee;
+  font-weight: 800;
+}
+
+.file-action {
+  position: relative;
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.file-action input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 @media (max-width: 840px) {

@@ -822,13 +822,13 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           </section>
           <section className="setting-group">
             <div className="panel-title"><Gift /><h2>奖励配置</h2></div>
-              <CreateReward children={children} tasks={tasks} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
-            <Overview title="现有奖励" items={rewards} kind="reward" children={children} tasks={tasks} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} onDelete={(item) => remove(`/rewards/${item.id}`, "奖励已删除", `确认删除奖励「${item.title}」？历史兑换记录会保留。`)} />
+              <CreateReward children={children} tasks={tasks} achievements={achievements} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
+            <Overview title="现有奖励" items={rewards} kind="reward" children={children} tasks={tasks} achievements={achievements} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} onDelete={(item) => remove(`/rewards/${item.id}`, "奖励已删除", `确认删除奖励「${item.title}」？历史兑换记录会保留。`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><Award /><h2>成就称号</h2></div>
-            <CreateAchievement tasks={tasks} categories={categories} rewards={rewards} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
-            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} rewards={rewards} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。${item.unlock_reward_id ? "若附带奖励未被其他配置复用，将一并删除。" : ""}`)} />
+            <CreateAchievement tasks={tasks} categories={categories} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
+            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
@@ -1135,14 +1135,13 @@ function AchievementRuleFields({ data, setData, tasks, categories }: { data: any
   );
 }
 
-function CreateAchievement({ tasks, categories, rewards, onCreate }: { tasks: Task[]; categories: Category[]; rewards: Reward[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", condition: "tasks_total", threshold: 5, windowStart: "", windowEnd: "", targetTaskId: "", targetCategoryId: "", unlockRewardId: "", iconValue: "🏅" });
+function CreateAchievement({ tasks, categories, onCreate }: { tasks: Task[]; categories: Category[]; onCreate: (data: any) => void }) {
+  const [data, setData] = useState({ title: "", description: "", condition: "tasks_total", threshold: 5, windowStart: "", windowEnd: "", targetTaskId: "", targetCategoryId: "", iconValue: "🏅" });
   return (
     <FormPanel title="成就称号" icon={<Award />} onSubmit={() => onCreate(achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "", targetCategoryId: data.targetCategoryId || categories[0]?.id || "" }))}>
       <Field label="称号"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
       <AchievementRuleFields data={data} setData={setData} tasks={tasks} categories={categories} />
-      <Field label="解锁奖励"><select value={data.unlockRewardId} onChange={(e) => setData({ ...data, unlockRewardId: e.target.value })}><option value="">不附带奖励</option>{rewards.map((reward) => <option key={reward.id} value={reward.id}>{reward.title}</option>)}</select></Field>
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
     </FormPanel>
   );
@@ -1169,7 +1168,7 @@ function CreateTask({ children, categories, onCreate }: { children: Child[]; cat
         </select>
       </Field>
       <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
-      <Field label="启用星期"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
+      <Field label="启用周几"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
@@ -1178,8 +1177,8 @@ function CreateTask({ children, categories, onCreate }: { children: Child[]; cat
   );
 }
 
-function CreateReward({ children, tasks, onCreate }: { children: Child[]; tasks: Task[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", costPoints: 10, limitPeriod: "daily", limitCount: 1, redeemWeekdays: [...DEFAULT_WEEKDAYS], prerequisites: [] as any[], iconValue: "🎁", isActive: true, childIds: [] as string[] });
+function CreateReward({ children, tasks, achievements, onCreate }: { children: Child[]; tasks: Task[]; achievements: any[]; onCreate: (data: any) => void }) {
+  const [data, setData] = useState({ title: "", description: "", costPoints: 10, limitPeriod: "daily", limitCount: 1, redeemWeekdays: [...DEFAULT_WEEKDAYS], prerequisites: [] as any[], requiredAchievementId: "", iconValue: "🎁", isActive: true, childIds: [] as string[] });
   return (
     <FormPanel title="新奖励" icon={<Gift />} onSubmit={() => onCreate({ ...data, limitCount: data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" })}>
       <Field label="名称"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
@@ -1194,8 +1193,14 @@ function CreateReward({ children, tasks, onCreate }: { children: Child[]; tasks:
         </select>
       </Field>
       {data.limitPeriod !== "once" && <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>}
-      <Field label="核销星期"><WeekdayPicker value={data.redeemWeekdays} onChange={(redeemWeekdays) => setData({ ...data, redeemWeekdays })} /></Field>
+      <Field label="核销周几"><WeekdayPicker value={data.redeemWeekdays} onChange={(redeemWeekdays) => setData({ ...data, redeemWeekdays })} /></Field>
       <PrerequisiteEditor tasks={tasks} value={data.prerequisites} onChange={(prerequisites) => setData({ ...data, prerequisites })} />
+      <Field label="解锁成就称号">
+        <select value={data.requiredAchievementId} onChange={(e) => setData({ ...data, requiredAchievementId: e.target.value })}>
+          <option value="">无条件</option>
+          {achievements.map((achievement) => <option key={achievement.id} value={achievement.id}>{achievement.title}</option>)}
+        </select>
+      </Field>
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
       <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />
@@ -1461,7 +1466,7 @@ function CategoryEditForm({ item, onSave, onCancel }: { item: Category; onSave: 
   );
 }
 
-function Overview({ title, items, kind, children = [], categories = [], tasks = [], rewards = [], onUpdate, onDelete }: { title: string; items: any[]; kind: "task" | "reward" | "achievement"; children?: Child[]; categories?: Category[]; tasks?: Task[]; rewards?: Reward[]; onUpdate?: (item: any, data: any) => void; onDelete?: (item: any) => void }) {
+function Overview({ title, items, kind, children = [], categories = [], tasks = [], achievements = [], onUpdate, onDelete }: { title: string; items: any[]; kind: "task" | "reward" | "achievement"; children?: Child[]; categories?: Category[]; tasks?: Task[]; achievements?: any[]; onUpdate?: (item: any, data: any) => void; onDelete?: (item: any) => void }) {
   const [editing, setEditing] = useState<any | null>(null);
   const titleLabel = kind === "reward" ? "奖励" : kind === "achievement" ? "成就称号" : "任务";
   return (
@@ -1477,7 +1482,7 @@ function Overview({ title, items, kind, children = [], categories = [], tasks = 
                 {item.description && <span>{item.description}</span>}
                 <small>
                   {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次 · ${weekdayLabel(item.enabled_weekdays || item.enabledWeekdays)}`}
-                  {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`} · 核销${weekdayLabel(item.redeem_weekdays || item.redeemWeekdays)}`}
+                  {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`} · 核销${weekdayLabel(item.redeem_weekdays || item.redeemWeekdays)}${item.requiredAchievementTitle ? ` · 解锁${item.requiredAchievementTitle}` : ""}`}
                   {kind === "achievement" && formatAchievementRule(item, tasks, categories)}
                 </small>
               </div>
@@ -1491,14 +1496,14 @@ function Overview({ title, items, kind, children = [], categories = [], tasks = 
       </div>
       {editing && onUpdate && (
         <EditDialog title={`编辑${titleLabel}`} icon={kind === "reward" ? <Gift /> : kind === "achievement" ? <Award /> : <ClipboardCheck />} onClose={() => setEditing(null)}>
-          <EditItemForm kind={kind} item={editing} children={children} categories={categories} tasks={tasks} rewards={rewards} onCancel={() => setEditing(null)} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} />
+          <EditItemForm kind={kind} item={editing} children={children} categories={categories} tasks={tasks} achievements={achievements} onCancel={() => setEditing(null)} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} />
         </EditDialog>
       )}
     </section>
   );
 }
 
-function EditItemForm({ kind, item, children, categories, tasks, rewards, onSave, onCancel }: { kind: "task" | "reward" | "achievement"; item: any; children: Child[]; categories: Category[]; tasks: Task[]; rewards: Reward[]; onSave: (data: any) => void; onCancel: () => void }) {
+function EditItemForm({ kind, item, children, categories, tasks, achievements, onSave, onCancel }: { kind: "task" | "reward" | "achievement"; item: any; children: Child[]; categories: Category[]; tasks: Task[]; achievements: any[]; onSave: (data: any) => void; onCancel: () => void }) {
   const [data, setData] = useState<any>(() => ({
     title: item.title || "",
     description: item.description || "",
@@ -1515,7 +1520,7 @@ function EditItemForm({ kind, item, children, categories, tasks, rewards, onSave
     windowEnd: item.window_end || "",
     targetTaskId: item.target_task_id || "",
     targetCategoryId: item.target_category_id || "",
-    unlockRewardId: item.unlock_reward_id || "",
+    requiredAchievementId: item.requiredAchievementId || item.required_achievement_id || "",
     enabledWeekdays: normalizeWeekdays(item.enabled_weekdays || item.enabledWeekdays),
     redeemWeekdays: normalizeWeekdays(item.redeem_weekdays || item.redeemWeekdays),
     prerequisites: item.prerequisites || [],
@@ -1532,7 +1537,7 @@ function EditItemForm({ kind, item, children, categories, tasks, rewards, onSave
           <Field label="分类"><select value={data.categoryId} onChange={(e) => setData({ ...data, categoryId: e.target.value })}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
           <Field label="周期"><select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
           <Field label="次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
-          <Field label="启用星期"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
+          <Field label="启用周几"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
           <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
         </>
       )}
@@ -1541,15 +1546,20 @@ function EditItemForm({ kind, item, children, categories, tasks, rewards, onSave
           <Field label="所需积分"><input type="number" min="0" value={data.costPoints} onChange={(e) => setData({ ...data, costPoints: Number(e.target.value) })} /></Field>
           <Field label="限制周期"><select value={data.limitPeriod} onChange={(e) => setData({ ...data, limitPeriod: e.target.value })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
           {data.limitPeriod !== "once" && <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>}
-          <Field label="核销星期"><WeekdayPicker value={data.redeemWeekdays} onChange={(redeemWeekdays) => setData({ ...data, redeemWeekdays })} /></Field>
+          <Field label="核销周几"><WeekdayPicker value={data.redeemWeekdays} onChange={(redeemWeekdays) => setData({ ...data, redeemWeekdays })} /></Field>
           <PrerequisiteEditor tasks={tasks} value={data.prerequisites} onChange={(prerequisites) => setData({ ...data, prerequisites })} />
+          <Field label="解锁成就称号">
+            <select value={data.requiredAchievementId} onChange={(e) => setData({ ...data, requiredAchievementId: e.target.value })}>
+              <option value="">无条件</option>
+              {achievements.map((achievement) => <option key={achievement.id} value={achievement.id}>{achievement.title}</option>)}
+            </select>
+          </Field>
         </>
       )}
       {kind === "achievement" && (
         <>
           <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
           <AchievementRuleFields data={data} setData={setData} tasks={tasks} categories={categories} />
-          <Field label="解锁奖励"><select value={data.unlockRewardId} onChange={(e) => setData({ ...data, unlockRewardId: e.target.value })}><option value="">不附带奖励</option>{rewards.map((reward) => <option key={reward.id} value={reward.id}>{reward.title}</option>)}</select></Field>
         </>
       )}
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>

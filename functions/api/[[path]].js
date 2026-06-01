@@ -382,8 +382,29 @@ WHERE a.unlock_reward_id=? AND a.is_active=1 AND a.deleted_at IS NULL`)
         .all()).results;
     return rows.length > 0 && rows.every((row) => !row.unlocked_at);
 }
+async function replaceRewardAchievementRequirement(env, parentId, rewardId, achievementId) {
+    const requiredAchievementId = String(achievementId || "").trim();
+    let achievement = null;
+    if (requiredAchievementId) {
+        achievement = await env.DB.prepare("SELECT id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(requiredAchievementId, parentId)
+            .first();
+        if (!achievement)
+            return false;
+    }
+    const now = nowIso();
+    await env.DB.prepare("UPDATE achievements SET unlock_reward_id=NULL, updated_at=? WHERE parent_id=? AND unlock_reward_id=? AND deleted_at IS NULL")
+        .bind(now, parentId, rewardId)
+        .run();
+    if (achievement) {
+        await env.DB.prepare("UPDATE achievements SET unlock_reward_id=?, updated_at=? WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(rewardId, now, achievement.id, parentId)
+            .run();
+    }
+    return true;
+}
 async function deleteAchievementWithExclusiveReward(env, parentId, achievementId) {
-    const achievement = await env.DB.prepare("SELECT id, unlock_reward_id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+    const achievement = await env.DB.prepare("SELECT id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
         .bind(achievementId, parentId)
         .first();
     if (!achievement)
@@ -392,26 +413,7 @@ async function deleteAchievementWithExclusiveReward(env, parentId, achievementId
     await env.DB.prepare("UPDATE achievements SET deleted_at=?, is_active=0, updated_at=? WHERE id=?")
         .bind(now, now, achievement.id)
         .run();
-    if (!achievement.unlock_reward_id)
-        return { deletedUnlockReward: false };
-    const otherRef = await env.DB.prepare("SELECT id FROM achievements WHERE unlock_reward_id=? AND id<>? AND parent_id=? AND deleted_at IS NULL AND is_active=1 LIMIT 1")
-        .bind(achievement.unlock_reward_id, achievement.id, parentId)
-        .first();
-    if (otherRef)
-        return { deletedUnlockReward: false };
-    const ordinaryAssignee = await env.DB.prepare(`SELECT ra.child_id
-FROM reward_assignees ra
-LEFT JOIN child_achievements ca ON ca.child_id=ra.child_id AND ca.achievement_id=?
-WHERE ra.reward_id=? AND ca.child_id IS NULL
-LIMIT 1`)
-        .bind(achievement.id, achievement.unlock_reward_id)
-        .first();
-    if (ordinaryAssignee)
-        return { deletedUnlockReward: false };
-    await env.DB.prepare("UPDATE rewards SET deleted_at=?, is_active=0, updated_at=? WHERE id=? AND parent_id=? AND deleted_at IS NULL")
-        .bind(now, now, achievement.unlock_reward_id, parentId)
-        .run();
-    return { deletedUnlockReward: true };
+    return { deletedUnlockReward: false };
 }
 const ACHIEVEMENT_RULE_TYPES = new Set([
     "tasks_completed",
@@ -534,15 +536,12 @@ WHERE s.child_id=? AND s.status='approved'`).bind(childId).all()).results;
                 .bind(childId, achievement.id, nowIso())
                 .run();
             if (!already && achievement.unlock_reward_id) {
-                await env.DB.prepare("INSERT OR IGNORE INTO reward_assignees (reward_id, child_id) VALUES (?, ?)")
-                    .bind(achievement.unlock_reward_id, childId)
-                    .run();
                 await notify(env, {
                     recipientType: "child",
                     recipientId: childId,
                     actorType: "system",
                     actorId: null,
-                    title: "成就解锁奖励",
+                    title: "奖励资格已解锁",
                     body: "你解锁了新的奖励兑换资格。",
                     eventType: "achievement_reward",
                     relatedType: "reward",
@@ -556,13 +555,20 @@ async function listWithAssignees(env, kind, parentId) {
     const rows = await env.DB.prepare(`SELECT * FROM ${kind} WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC`).bind(parentId).all();
     const table = kind === "tasks" ? "task_assignees" : "reward_assignees";
     const key = kind === "tasks" ? "task_id" : "reward_id";
-    return Promise.all(rows.results.map(async (row) => ({
-        ...row,
-        enabledWeekdays: normalizeWeekdays(row.enabled_weekdays),
-        redeemWeekdays: normalizeWeekdays(row.redeem_weekdays),
-        prerequisites: kind === "rewards" ? await rewardPrerequisites(env, row.id) : [],
-        assignees: (await env.DB.prepare(`SELECT child_id FROM ${table} WHERE ${key}=?`).bind(row.id).all()).results.map((x) => x.child_id)
-    })));
+    return Promise.all(rows.results.map(async (row) => {
+        const requiredAchievement = kind === "rewards"
+            ? await env.DB.prepare("SELECT id, title FROM achievements WHERE parent_id=? AND unlock_reward_id=? AND deleted_at IS NULL ORDER BY updated_at DESC, created_at DESC LIMIT 1").bind(parentId, row.id).first()
+            : null;
+        return {
+            ...row,
+            enabledWeekdays: normalizeWeekdays(row.enabled_weekdays),
+            redeemWeekdays: normalizeWeekdays(row.redeem_weekdays),
+            prerequisites: kind === "rewards" ? await rewardPrerequisites(env, row.id) : [],
+            requiredAchievementId: requiredAchievement?.id || "",
+            requiredAchievementTitle: requiredAchievement?.title || "",
+            assignees: (await env.DB.prepare(`SELECT child_id FROM ${table} WHERE ${key}=?`).bind(row.id).all()).results.map((x) => x.child_id)
+        };
+    }));
 }
 async function listConfig(env, parentId) {
     await ensureFeedbackSchema(env);
@@ -617,6 +623,7 @@ async function importConfig(env, parentId, input) {
     const childMap = new Map(children.map((child) => [child.display_name, child.id]));
     const categoryRows = (await env.DB.prepare("SELECT id, name FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL)) OR owner_id=?)").bind(parentId, parentId).all()).results;
     const categoryMap = new Map(categoryRows.map((category) => [category.name, category.id]));
+    const pendingRewardRequirements = [];
     for (const item of input.categories || []) {
         const name = String(item.name || "").trim();
         if (!name || categoryMap.has(name)) {
@@ -649,6 +656,8 @@ async function importConfig(env, parentId, input) {
             .run();
         await replaceAssignees(env, "reward_assignees", "reward_id", rewardId, (item.assignee_names || []).map((name) => childMap.get(name)).filter(Boolean));
         await replaceRewardPrerequisites(env, rewardId, item.prerequisites || []);
+        if (item.required_achievement_title || item.requiredAchievementTitle)
+            pendingRewardRequirements.push({ rewardId, achievementTitle: item.required_achievement_title || item.requiredAchievementTitle });
         stats.rewards.created += 1;
     }
     for (const item of input.achievements || []) {
@@ -672,9 +681,16 @@ WHERE parent_id=? AND title=? AND rule_type=? AND threshold=? AND window_type=?
   id, parent_id, title, description, metric, threshold, icon_type, icon_value,
   rule_type, window_type, window_start, window_end, target_task_id, target_category_id, unlock_reward_id
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .bind(id(), parentId, title, item.description || "", rule.metric, rule.threshold, item.icon_type || "emoji", item.icon_value || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId, rule.targetCategoryId, item.unlock_reward_id || item.unlockRewardId || null)
+            .bind(id(), parentId, title, item.description || "", rule.metric, rule.threshold, item.icon_type || "emoji", item.icon_value || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId, rule.targetCategoryId, null)
             .run();
         stats.achievements.created += 1;
+    }
+    for (const requirement of pendingRewardRequirements) {
+        const achievement = await env.DB.prepare("SELECT id FROM achievements WHERE parent_id=? AND title=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1")
+            .bind(parentId, requirement.achievementTitle)
+            .first();
+        if (achievement)
+            await replaceRewardAchievementRequirement(env, parentId, requirement.rewardId, achievement.id);
     }
     for (const item of input.feedbackTemplates || input.feedback_templates || []) {
         const title = String(item.title || "").trim();
@@ -1052,7 +1068,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
             env.DB.prepare("SELECT * FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(a.id).all()
         ]);
         const table = (headers, rows) => `<table><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
-        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 打印清单</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务</h2>${table(["标题","分类","周期","次数","积分","星期","状态","说明"], tasks.results.map((item) => [item.title, item.category_name || "", item.period, item.limit_count || 1, item.points, normalizeWeekdays(item.enabled_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>奖励</h2>${table(["名称","所需积分","限制周期","次数","核销星期","状态","说明"], rewards.results.map((item) => [item.title, item.cost_points, item.limit_period, item.limit_count || "", normalizeWeekdays(item.redeem_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>表扬与批评条款</h2>${table(["类型","标题","积分","状态","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, item.points, item.is_active ? "启用" : "停用", item.description || ""]))}</body></html>`;
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 打印清单</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务</h2>${table(["标题","分类","周期","次数","积分","周","状态","说明"], tasks.results.map((item) => [item.title, item.category_name || "", item.period, item.limit_count || 1, item.points, normalizeWeekdays(item.enabled_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>奖励</h2>${table(["名称","所需积分","限制周期","次数","核销周几","状态","说明"], rewards.results.map((item) => [item.title, item.cost_points, item.limit_period, item.limit_count || "", normalizeWeekdays(item.redeem_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>表扬与批评条款</h2>${table(["类型","标题","积分","状态","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, item.points, item.is_active ? "启用" : "停用", item.description || ""]))}</body></html>`;
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     const childWarehouse = path.match(/^\/children\/([^/]+)\/warehouse$/);
@@ -1267,11 +1283,20 @@ ORDER BY rr.requested_at DESC`).bind(child.id, a.id).all()).results);
         if (method === "POST") {
             await ensureRewardOnceSchema(env);
             const rewardId = id();
+            const requiredAchievementId = input.requiredAchievementId || input.required_achievement_id || "";
+            if (requiredAchievementId) {
+                const achievement = await env.DB.prepare("SELECT id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+                    .bind(requiredAchievementId, a.id)
+                    .first();
+                if (!achievement)
+                    return fail("NOT_FOUND", "成就称号不存在", 404);
+            }
             await env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, stock, limit_period, limit_count, redeem_weekdays, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(rewardId, a.id, input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "daily", input.limitPeriod === "once" ? 1 : input.limitCount ?? 1, weekdayJson(input.redeemWeekdays || input.redeem_weekdays), input.iconType || "emoji", input.iconValue || "🎁", input.isActive === false ? 0 : 1)
                 .run();
             await replaceAssignees(env, "reward_assignees", "reward_id", rewardId, input.childIds || []);
             await replaceRewardPrerequisites(env, rewardId, input.prerequisites || []);
+            await replaceRewardAchievementRequirement(env, a.id, rewardId, requiredAchievementId);
             return ok(true);
         }
     }
@@ -1285,6 +1310,9 @@ ORDER BY rr.requested_at DESC`).bind(child.id, a.id).all()).results);
             .first();
         if (!reward)
             return fail("NOT_FOUND", "奖励不存在", 404);
+        const requiredAchievementId = input.requiredAchievementId || input.required_achievement_id || "";
+        if (!(await replaceRewardAchievementRequirement(env, a.id, rewardPatch[1], requiredAchievementId)))
+            return fail("NOT_FOUND", "成就称号不存在", 404);
         await env.DB.prepare("UPDATE rewards SET title=?, description=?, cost_points=?, stock=?, limit_period=?, limit_count=?, redeem_weekdays=?, icon_type=?, icon_value=?, is_active=?, updated_at=? WHERE id=?")
             .bind(input.title, input.description || "", Number(input.costPoints || 0), input.stock ?? null, input.limitPeriod || "daily", input.limitPeriod === "once" ? 1 : input.limitCount ?? 1, weekdayJson(input.redeemWeekdays || input.redeem_weekdays), input.iconType || "emoji", input.iconValue || "🎁", input.isActive === false ? 0 : 1, nowIso(), rewardPatch[1])
             .run();
@@ -1316,7 +1344,7 @@ ORDER BY rr.requested_at DESC`).bind(child.id, a.id).all()).results);
   id, parent_id, title, description, metric, threshold, icon_type, icon_value,
   rule_type, window_type, window_start, window_end, target_task_id, target_category_id, unlock_reward_id
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-                .bind(id(), a.id, input.title, input.description || "", rule.metric, rule.threshold, input.iconType || "emoji", input.iconValue || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId, rule.targetCategoryId, input.unlockRewardId || input.unlock_reward_id || null)
+                .bind(id(), a.id, input.title, input.description || "", rule.metric, rule.threshold, input.iconType || "emoji", input.iconValue || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId, rule.targetCategoryId, null)
                 .run();
             return ok(true);
         }
@@ -1333,9 +1361,9 @@ ORDER BY rr.requested_at DESC`).bind(child.id, a.id).all()).results);
         const rule = normalizeAchievementInput(input);
         await env.DB.prepare(`UPDATE achievements
 SET title=?, description=?, metric=?, threshold=?, icon_type=?, icon_value=?,
-    rule_type=?, window_type=?, window_start=?, window_end=?, target_task_id=?, target_category_id=?, unlock_reward_id=?, updated_at=?
+    rule_type=?, window_type=?, window_start=?, window_end=?, target_task_id=?, target_category_id=?, updated_at=?
 WHERE id=?`)
-            .bind(input.title, input.description || "", rule.metric, rule.threshold, input.iconType || "emoji", input.iconValue || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId, rule.targetCategoryId, input.unlockRewardId || input.unlock_reward_id || null, nowIso(), achievementPatch[1])
+            .bind(input.title, input.description || "", rule.metric, rule.threshold, input.iconType || "emoji", input.iconValue || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId, rule.targetCategoryId, nowIso(), achievementPatch[1])
             .run();
         return ok(true);
     }
@@ -1379,6 +1407,7 @@ WHERE id=?`)
                 limit_count: item.limit_count,
                 redeem_weekdays: item.redeem_weekdays,
                 prerequisites: item.prerequisites,
+                required_achievement_title: item.requiredAchievementTitle,
                 icon_type: item.icon_type,
                 icon_value: item.icon_value
             })),
@@ -1394,7 +1423,6 @@ WHERE id=?`)
                 target_task_id: item.target_task_id,
                 target_category_id: item.target_category_id,
                 target_category_name: categoryNames.get(item.target_category_id) || "",
-                unlock_reward_id: item.unlock_reward_id,
                 icon_type: item.icon_type,
                 icon_value: item.icon_value
             })),
@@ -1536,7 +1564,7 @@ WHERE id=?`)
         if (redemptionAction[2] === "redeem") {
             const offset = await timezoneOffsetMinutes(env);
             if (!isWeekdayAllowed(redemption.redeem_weekdays, undefined, offset))
-                return fail("REDEEM_WEEKDAY_BLOCKED", "今天不是该奖励允许核销的星期", 409);
+                return fail("REDEEM_WEEKDAY_BLOCKED", "今天不是该奖励允许核销的周几", 409);
             await env.DB.prepare("UPDATE reward_redemptions SET status='redeemed', redeemed_at=? WHERE id=?").bind(nowIso(), redemption.id).run();
         }
         else {
@@ -1659,7 +1687,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
         return ok({
             children: childCards,
             pendingSubmissions: (await env.DB.prepare("SELECT s.*, t.title, c.display_name child_name FROM task_submissions s JOIN tasks t ON t.id=s.task_id JOIN children c ON c.id=s.child_id WHERE s.parent_id=? AND s.status='pending' ORDER BY s.submitted_at").bind(a.id).all()).results,
-            pendingRedemptions: (await env.DB.prepare("SELECT rr.*, r.title, c.display_name child_name FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id JOIN children c ON c.id=rr.child_id WHERE rr.parent_id=? AND rr.status='pending' ORDER BY rr.requested_at").bind(a.id).all()).results
+            pendingRedemptions: (await env.DB.prepare("SELECT rr.*, r.title, r.redeem_weekdays, c.display_name child_name FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id JOIN children c ON c.id=rr.child_id WHERE rr.parent_id=? AND rr.status='pending' ORDER BY rr.requested_at").bind(a.id).all()).results
         });
     }
     if (path === "/dashboard/child" && method === "GET") {

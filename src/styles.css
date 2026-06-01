@@ -355,11 +355,13 @@ button.child-tile {
 
 .warehouse-grid {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-items: start;
   gap: 10px;
 }
 
 .warehouse-card {
   min-height: 0;
+  align-self: start;
   gap: 8px;
   padding: 10px;
 }
@@ -394,6 +396,10 @@ button.child-tile {
 
 .refund-list {
   max-height: 360px;
+}
+
+.refund-list .selectable-row > div {
+  text-align: left;
 }
 
 .selectable-row {

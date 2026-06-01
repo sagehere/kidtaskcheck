@@ -1,6 +1,7 @@
 export type Period = "daily" | "weekly" | "monthly" | "once";
 export type RewardLimitPeriod = "none" | Period;
 export const DEFAULT_TIMEZONE_OFFSET_MINUTES = 480;
+export const DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
 const MINUTE_MS = 60000;
 
 function pad(value: number) {
@@ -37,6 +38,30 @@ export function periodKey(period: RewardLimitPeriod, input?: string | Date, time
   const yearStart = new Date(Date.UTC(weekYear, 0, 1));
   const week = Math.ceil(((copy.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
   return `${weekYear}-W${pad(week)}`;
+}
+
+export function weekdayInTimezone(input?: string | Date, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
+  return zonedDate(input, timezoneOffsetMinutes).getUTCDay();
+}
+
+export function normalizeWeekdays(value?: unknown) {
+  let items: unknown[] = [];
+  if (Array.isArray(value)) {
+    items = value;
+  } else if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      items = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      items = value.split(",");
+    }
+  }
+  const weekdays = [...new Set(items.map(Number).filter((item) => Number.isInteger(item) && item >= 0 && item <= 6))];
+  return weekdays.length ? weekdays : [...DEFAULT_WEEKDAYS];
+}
+
+export function isWeekdayAllowed(value?: unknown, input?: string | Date, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
+  return normalizeWeekdays(value).includes(weekdayInTimezone(input, timezoneOffsetMinutes));
 }
 
 export function nextPeriodReset(period: RewardLimitPeriod, input?: string | Date, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {

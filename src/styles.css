@@ -294,6 +294,54 @@ button.child-tile {
   background: #157f6f;
 }
 
+.emoji-picker,
+.weekday-picker,
+.inline-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.emoji-picker button,
+.weekday-picker button {
+  min-width: 42px;
+  min-height: 38px;
+  border: 1px solid #d8d3c8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.emoji-picker button.active,
+.weekday-picker button.active {
+  color: #ffffff;
+  border-color: #157f6f;
+  background: #157f6f;
+}
+
+.inline-fields select {
+  min-width: 160px;
+  flex: 1;
+}
+
+.inline-fields input {
+  width: 96px;
+}
+
+.ack-modal {
+  width: min(420px, calc(100vw - 32px));
+  padding: 22px;
+  text-align: center;
+}
+
+.blocking-ack {
+  z-index: 60;
+}
+
+.wall-card.redeemed {
+  filter: grayscale(1);
+}
+
 .panel {
   padding: 18px;
 }

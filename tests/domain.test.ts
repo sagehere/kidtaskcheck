@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, nextPeriodReset, periodKey, signedPoints } from "../src/lib/domain";
+import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, signedPoints, weekdayInTimezone } from "../src/lib/domain";
 
 describe("periodKey", () => {
   it("calculates daily, weekly, monthly and once keys in the default UTC+8 timezone", () => {
@@ -22,6 +22,21 @@ describe("points", () => {
   it("signs task points", () => {
     expect(signedPoints("earn", 10)).toBe(10);
     expect(signedPoints("deduct", 10)).toBe(-10);
+  });
+});
+
+describe("weekdays", () => {
+  it("normalizes weekday lists and falls back to every day", () => {
+    expect(normalizeWeekdays("[1,2,2,8]")).toEqual([1, 2]);
+    expect(normalizeWeekdays("")).toEqual([1, 2, 3, 4, 5, 6, 0]);
+  });
+
+  it("uses the configured timezone when checking allowed weekdays", () => {
+    const at = "2026-05-24T16:30:00.000Z";
+    expect(weekdayInTimezone(at, 480)).toBe(1);
+    expect(weekdayInTimezone(at, 0)).toBe(0);
+    expect(isWeekdayAllowed([1], at, 480)).toBe(true);
+    expect(isWeekdayAllowed([1], at, 0)).toBe(false);
   });
 });
 

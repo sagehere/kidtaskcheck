@@ -13,8 +13,11 @@ import {
   KeyRound,
   LogOut,
   MessageSquare,
+  Package,
   Pin,
   Plus,
+  Printer,
+  RotateCcw,
   Settings,
   Shield,
   Sparkles,
@@ -38,10 +41,23 @@ type Category = { id: string; name: string; icon_type: string; icon_value: strin
 type Task = Record<string, any> & { assignees?: string[] };
 type Reward = Record<string, any> & { assignees?: string[] };
 type FeedbackTemplate = Record<string, any> & { id: string; kind: "praise" | "criticism"; title: string; description: string; points: number; icon_type: string; icon_value: string; is_active: number };
-type Notification = { id: string; title: string; body: string; event_type?: string; read_at: string | null; created_at: string; sourceLabel?: string; sourceTypeLabel?: string };
-type LedgerRow = { id: string; amount: number; source_type: string; note: string; created_at: string; period_key?: string | null };
+type Notification = { id: string; title: string; body: string; event_type?: string; related_type?: string | null; related_id?: string | null; requires_ack?: number; read_at: string | null; created_at: string; sourceLabel?: string; sourceTypeLabel?: string };
+type LedgerRow = { id: string; amount: number; source_type: string; sourceLabel?: string; sourceTypeLabel?: string; note: string; created_at: string; localCreatedAt?: string; period_key?: string | null };
+type WarehouseItem = Record<string, any> & { id: string; title: string; status: "pending" | "redeemed" | "cancelled"; redeemed_at?: string | null };
+type LedgerResponse = { items: LedgerRow[]; timezoneOffsetMinutes: number; timezoneLabel: string };
 type SystemSettings = { timezoneOffsetMinutes: number; timezoneLabel: string };
 const REFRESH_INTERVAL_MS = 12000;
+const DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
+const WEEKDAY_OPTIONS = [
+  { value: 1, label: "周一" },
+  { value: 2, label: "周二" },
+  { value: 3, label: "周三" },
+  { value: 4, label: "周四" },
+  { value: 5, label: "周五" },
+  { value: 6, label: "周六" },
+  { value: 0, label: "周日" }
+];
+const EMOJI_OPTIONS = ["✅", "⭐", "🎁", "🏅", "✨", "⚠️", "📚", "🧹", "🌱", "🏃", "🎨", "🎮", "🍭", "🧸", "🎬", "🍀"];
 
 async function api<T>(path: string, options: RequestInit = {}) {
   const response = await fetch(`/api${path}`, {
@@ -101,6 +117,25 @@ function formatReset(resetAt?: string | null) {
 function formatTime(value?: string | null) {
   if (!value) return "";
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+function normalizeWeekdays(value: unknown) {
+  if (Array.isArray(value)) return value.map(Number).filter((item) => item >= 0 && item <= 6);
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map(Number).filter((item) => item >= 0 && item <= 6);
+    } catch {
+      return value.split(",").map(Number).filter((item) => item >= 0 && item <= 6);
+    }
+  }
+  return [...DEFAULT_WEEKDAYS];
+}
+
+function weekdayLabel(value: unknown) {
+  const days = normalizeWeekdays(value);
+  if (days.length === 7) return "周一至周日";
+  return WEEKDAY_OPTIONS.filter((item) => days.includes(item.value)).map((item) => item.label).join("、") || "未设置";
 }
 
 function formatSource(value: string) {
@@ -581,7 +616,8 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
 
   async function loadLedger(child: { id: string; display_name: string }) {
     setLedgerChild(child);
-    setLedger(await api<LedgerRow[]>(`/points/ledger?childId=${encodeURIComponent(child.id)}`).catch(() => []));
+    const data = await api<LedgerResponse>(`/points/ledger?childId=${encodeURIComponent(child.id)}`).catch(() => ({ items: [], timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" }));
+    setLedger(data.items);
   }
 
   async function run(action: () => Promise<void>, note: string) {
@@ -665,6 +701,23 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     );
   }
 
+  function exportChildPrint(child: Child) {
+    window.open(`/api/children/${encodeURIComponent(child.id)}/export-print`, "_blank", "noopener,noreferrer");
+  }
+
+  async function refundChildReward(child: Child) {
+    const rows = await api<WarehouseItem[]>(`/children/${encodeURIComponent(child.id)}/warehouse`).catch(() => []);
+    if (!rows.length) {
+      setMessage("该孩子没有可退还的奖励");
+      return;
+    }
+    const choice = window.prompt(rows.map((item, index) => `${index + 1}. ${item.title} · ${item.status === "redeemed" ? "已核销" : "待核销"} · ${item.cost_points}积分`).join("\n") + "\n请输入要退还的序号");
+    const target = rows[Number(choice) - 1];
+    if (!target) return;
+    if (!window.confirm(`确认退还「${target.title}」的 ${target.cost_points} 积分？`)) return;
+    await run(() => api(`/reward-redemptions/${target.id}/refund`, { method: "PATCH", body: JSON.stringify({}) }), "奖励积分已退还");
+  }
+
   return (
     <Shell me={me} refresh={refresh}>
       <section className="hero-band parent">
@@ -722,7 +775,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
         <>
           <div className="grid two">
             <CreateChild onCreate={(data) => create("/children", data, "孩子账号已创建")} />
-            <ChildManager children={children} onEdit={updateChild} onToggle={toggleChild} onDelete={deleteChild} />
+            <ChildManager children={children} onEdit={updateChild} onToggle={toggleChild} onDelete={deleteChild} onExport={exportChildPrint} onRefund={(child) => void refundChildReward(child)} />
           </div>
         </>
       )}
@@ -744,13 +797,13 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           </section>
           <section className="setting-group">
             <div className="panel-title"><Gift /><h2>奖励配置</h2></div>
-            <CreateReward children={children} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
-            <Overview title="现有奖励" items={rewards} kind="reward" children={children} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} onDelete={(item) => remove(`/rewards/${item.id}`, "奖励已删除", `确认删除奖励「${item.title}」？历史兑换记录会保留。`)} />
+              <CreateReward children={children} tasks={tasks} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
+            <Overview title="现有奖励" items={rewards} kind="reward" children={children} tasks={tasks} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} onDelete={(item) => remove(`/rewards/${item.id}`, "奖励已删除", `确认删除奖励「${item.title}」？历史兑换记录会保留。`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><Award /><h2>成就称号</h2></div>
-            <CreateAchievement tasks={tasks} categories={categories} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
-            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
+            <CreateAchievement tasks={tasks} categories={categories} rewards={rewards} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
+            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} rewards={rewards} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
@@ -766,15 +819,20 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
 }
 
 function ReviewPanel({ title, items, empty, approve, reject }: { title: string; items: any[]; empty: string; approve: (id: string) => void; reject: (id: string) => void }) {
+  const groups = [...new Map(items.map((item) => [item.child_id, { id: item.child_id, name: item.child_name }])).values()];
+  const [activeChildId, setActiveChildId] = useState("");
+  const selected = activeChildId && groups.some((child) => child.id === activeChildId) ? activeChildId : groups[0]?.id || "";
+  const visible = selected ? items.filter((item) => item.child_id === selected) : items;
   return (
     <section className="panel">
       <div className="panel-title">
         <ClipboardCheck />
         <h2>{title}</h2>
       </div>
+      {groups.length > 1 && <Tabs value={selected} onChange={setActiveChildId} options={groups.map((child) => ({ value: child.id, label: child.name }))} />}
       <div className="list scroll-list">
-        {items.length ? (
-          items.map((item: any) => (
+        {visible.length ? (
+          visible.map((item: any) => (
             <article className="row" key={item.id}>
               <div>
                 <strong>{item.title}</strong>
@@ -811,15 +869,20 @@ function Tabs({ value, options, onChange }: { value: string; options: { value: s
 }
 
 function RedemptionPanel({ items, onFinish }: { items: any[]; onFinish: (id: string, action: "redeem" | "cancel") => void }) {
+  const groups = [...new Map(items.map((item) => [item.child_id, { id: item.child_id, name: item.child_name }])).values()];
+  const [activeChildId, setActiveChildId] = useState("");
+  const selected = activeChildId && groups.some((child) => child.id === activeChildId) ? activeChildId : groups[0]?.id || "";
+  const visible = selected ? items.filter((item) => item.child_id === selected) : items;
   return (
     <section className="panel">
       <div className="panel-title">
         <Gift />
         <h2>奖励核销</h2>
       </div>
+      {groups.length > 1 && <Tabs value={selected} onChange={setActiveChildId} options={groups.map((child) => ({ value: child.id, label: child.name }))} />}
       <div className="list scroll-list">
-        {items.length ? (
-          items.map((item: any) => (
+        {visible.length ? (
+          visible.map((item: any) => (
             <article className="row" key={item.id}>
               <div>
                 <strong>{item.title}</strong>
@@ -901,9 +964,9 @@ function LedgerList({ rows }: { rows: LedgerRow[] }) {
         <article className="row" key={row.id}>
           <div>
             <strong className={row.amount >= 0 ? "positive" : "negative"}>{row.amount >= 0 ? "+" : ""}{row.amount}</strong>
-            <span>{row.note || formatSource(row.source_type)} · {formatTime(row.created_at)}</span>
+            <span>{row.sourceLabel || row.note || formatSource(row.source_type)} · {row.localCreatedAt || formatTime(row.created_at)}</span>
           </div>
-          <span>{formatSource(row.source_type)}</span>
+          <span>{row.sourceTypeLabel || formatSource(row.source_type)}</span>
         </article>
       )) : <Empty text="暂无积分记录" />}
     </div>
@@ -936,7 +999,7 @@ function CreateChild({ onCreate }: { onCreate: (data: any) => void }) {
   );
 }
 
-function ChildManager({ children, onEdit, onToggle, onDelete }: { children: Child[]; onEdit: (child: Child) => void; onToggle: (child: Child) => void; onDelete: (child: Child) => void }) {
+function ChildManager({ children, onEdit, onToggle, onDelete, onExport, onRefund }: { children: Child[]; onEdit: (child: Child) => void; onToggle: (child: Child) => void; onDelete: (child: Child) => void; onExport: (child: Child) => void; onRefund: (child: Child) => void }) {
   return (
     <section className="panel">
       <div className="panel-title"><Users /><h2>孩子账号管理</h2></div>
@@ -949,6 +1012,8 @@ function ChildManager({ children, onEdit, onToggle, onDelete }: { children: Chil
             </div>
             <div className="actions">
               <button className="secondary" onClick={() => onEdit(child)}>修改</button>
+              <button className="secondary" onClick={() => onExport(child)}><Printer size={16} />打印导出</button>
+              <button className="secondary" onClick={() => onRefund(child)}><RotateCcw size={16} />退还奖励</button>
               <button className="secondary" onClick={() => onToggle(child)}>{child.status === "active" ? "停用" : "启用"}</button>
               <button className="icon danger" title="归档" onClick={() => onDelete(child)}><Trash2 size={18} /></button>
             </div>
@@ -1000,20 +1065,21 @@ function AchievementRuleFields({ data, setData, tasks, categories }: { data: any
   );
 }
 
-function CreateAchievement({ tasks, categories, onCreate }: { tasks: Task[]; categories: Category[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", condition: "tasks_total", threshold: 5, windowStart: "", windowEnd: "", targetTaskId: "", targetCategoryId: "", iconValue: "🏅" });
+function CreateAchievement({ tasks, categories, rewards, onCreate }: { tasks: Task[]; categories: Category[]; rewards: Reward[]; onCreate: (data: any) => void }) {
+  const [data, setData] = useState({ title: "", description: "", condition: "tasks_total", threshold: 5, windowStart: "", windowEnd: "", targetTaskId: "", targetCategoryId: "", unlockRewardId: "", iconValue: "🏅" });
   return (
     <FormPanel title="成就称号" icon={<Award />} onSubmit={() => onCreate(achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "", targetCategoryId: data.targetCategoryId || categories[0]?.id || "" }))}>
       <Field label="称号"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
       <AchievementRuleFields data={data} setData={setData} tasks={tasks} categories={categories} />
-      <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Field label="解锁奖励"><select value={data.unlockRewardId} onChange={(e) => setData({ ...data, unlockRewardId: e.target.value })}><option value="">不附带奖励</option>{rewards.map((reward) => <option key={reward.id} value={reward.id}>{reward.title}</option>)}</select></Field>
+      <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
     </FormPanel>
   );
 }
 
 function CreateTask({ children, categories, onCreate }: { children: Child[]; categories: Category[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, iconValue: "✅", isActive: true, childIds: [] as string[] });
+  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, enabledWeekdays: [...DEFAULT_WEEKDAYS], iconValue: "✅", isActive: true, childIds: [] as string[] });
   const categoryId = data.categoryId || categories[0]?.id || "";
   return (
     <FormPanel title="新任务" icon={<ClipboardCheck />} onSubmit={() => onCreate({ ...data, categoryId, iconType: "emoji" })}>
@@ -1033,16 +1099,17 @@ function CreateTask({ children, categories, onCreate }: { children: Child[]; cat
         </select>
       </Field>
       <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
+      <Field label="启用星期"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
-      <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
       <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />
     </FormPanel>
   );
 }
 
-function CreateReward({ children, onCreate }: { children: Child[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", costPoints: 10, limitPeriod: "daily", limitCount: 1, iconValue: "🎁", isActive: true, childIds: [] as string[] });
+function CreateReward({ children, tasks, onCreate }: { children: Child[]; tasks: Task[]; onCreate: (data: any) => void }) {
+  const [data, setData] = useState({ title: "", description: "", costPoints: 10, limitPeriod: "daily", limitCount: 1, redeemWeekdays: [...DEFAULT_WEEKDAYS], prerequisites: [] as any[], iconValue: "🎁", isActive: true, childIds: [] as string[] });
   return (
     <FormPanel title="新奖励" icon={<Gift />} onSubmit={() => onCreate({ ...data, limitCount: data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" })}>
       <Field label="名称"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
@@ -1057,7 +1124,9 @@ function CreateReward({ children, onCreate }: { children: Child[]; onCreate: (da
         </select>
       </Field>
       {data.limitPeriod !== "once" && <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>}
-      <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Field label="核销星期"><WeekdayPicker value={data.redeemWeekdays} onChange={(redeemWeekdays) => setData({ ...data, redeemWeekdays })} /></Field>
+      <PrerequisiteEditor tasks={tasks} value={data.prerequisites} onChange={(prerequisites) => setData({ ...data, prerequisites })} />
+      <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
       <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />
     </FormPanel>
@@ -1076,7 +1145,7 @@ function CreateFeedbackTemplate({ onCreate }: { onCreate: (data: any) => void })
       </Field>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
-      <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
     </FormPanel>
   );
@@ -1121,7 +1190,7 @@ function EditFeedbackForm({ item, onSave, onCancel }: { item: FeedbackTemplate; 
       <Field label="类型"><select value={data.kind} onChange={(e) => setData({ ...data, kind: e.target.value as "praise" | "criticism" })}><option value="praise">表扬</option><option value="criticism">批评</option></select></Field>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
-      <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
       <div className="actions"><button className="primary">保存</button><button type="button" className="secondary" onClick={onCancel}>取消</button></div>
     </form>
@@ -1169,6 +1238,60 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
       <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
       <span>{label}</span>
     </label>
+  );
+}
+
+function EmojiSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <div className="emoji-picker" role="listbox">
+      {EMOJI_OPTIONS.map((item) => (
+        <button type="button" key={item} className={value === item ? "active" : ""} onClick={() => onChange(item)} title={item}>
+          {item}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function WeekdayPicker({ value, onChange }: { value: unknown; onChange: (value: number[]) => void }) {
+  const days = normalizeWeekdays(value);
+  function toggle(day: number) {
+    const next = days.includes(day) ? days.filter((item) => item !== day) : [...days, day];
+    onChange(next.length ? WEEKDAY_OPTIONS.map((item) => item.value).filter((item) => next.includes(item)) : [...DEFAULT_WEEKDAYS]);
+  }
+  return (
+    <div className="weekday-picker">
+      {WEEKDAY_OPTIONS.map((item) => (
+        <button type="button" key={item.value} className={days.includes(item.value) ? "active" : ""} onClick={() => toggle(item.value)}>
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PrerequisiteEditor({ tasks, value, onChange }: { tasks: Task[]; value: any[]; onChange: (value: any[]) => void }) {
+  const rows = value.length ? value : [];
+  function update(index: number, patch: any) {
+    onChange(rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
+  }
+  return (
+    <div className="field">
+      <span>前置任务</span>
+      <div className="stack compact">
+        {rows.map((row, index) => (
+          <div className="inline-fields" key={index}>
+            <select value={row.taskId || row.task_id || ""} onChange={(event) => update(index, { taskId: event.target.value })}>
+              <option value="">选择任务</option>
+              {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
+            </select>
+            <input type="number" min="1" value={row.requiredCount || row.required_count || 1} onChange={(event) => update(index, { requiredCount: Number(event.target.value) })} />
+            <button type="button" className="icon danger" title="删除" onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))}><Trash2 size={16} /></button>
+          </div>
+        ))}
+        <button type="button" className="secondary" disabled={!tasks.length} onClick={() => onChange([...rows, { taskId: tasks[0]?.id || "", requiredCount: 1 }])}><Plus size={16} />添加前置任务</button>
+      </div>
+    </div>
   );
 }
 
@@ -1225,7 +1348,7 @@ function CategoryOverview({ items, onCreate, onUpdate, onDelete }: { items: Cate
       <div className="panel-title"><Star /><h2>任务分类</h2></div>
       <form className="stack compact" onSubmit={(event) => { event.preventDefault(); onCreate({ ...data, iconType: "emoji" }); setData({ name: "", iconValue: "📚" }); }}>
         <Field label="名称"><input required value={data.name} onChange={(e) => setData({ ...data, name: e.target.value })} /></Field>
-        <Field label="符号"><input required value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+        <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
         <button className="primary"><Plus size={18} />新建分类</button>
       </form>
       <div className="list config-list scroll-list">
@@ -1259,13 +1382,13 @@ function CategoryEditForm({ item, onSave, onCancel }: { item: Category; onSave: 
   return (
     <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, iconType: "emoji" }); }}>
       <Field label="名称"><input required value={data.name} onChange={(e) => setData({ ...data, name: e.target.value })} /></Field>
-      <Field label="符号"><input required value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <div className="actions"><button className="primary">保存</button><button type="button" className="secondary" onClick={onCancel}>取消</button></div>
     </form>
   );
 }
 
-function Overview({ title, items, kind, children = [], categories = [], tasks = [], onUpdate, onDelete }: { title: string; items: any[]; kind: "task" | "reward" | "achievement"; children?: Child[]; categories?: Category[]; tasks?: Task[]; onUpdate?: (item: any, data: any) => void; onDelete?: (item: any) => void }) {
+function Overview({ title, items, kind, children = [], categories = [], tasks = [], rewards = [], onUpdate, onDelete }: { title: string; items: any[]; kind: "task" | "reward" | "achievement"; children?: Child[]; categories?: Category[]; tasks?: Task[]; rewards?: Reward[]; onUpdate?: (item: any, data: any) => void; onDelete?: (item: any) => void }) {
   const [editing, setEditing] = useState<any | null>(null);
   const titleLabel = kind === "reward" ? "奖励" : kind === "achievement" ? "成就称号" : "任务";
   return (
@@ -1280,8 +1403,8 @@ function Overview({ title, items, kind, children = [], categories = [], tasks = 
                 <strong>{item.title}</strong>
                 {item.description && <span>{item.description}</span>}
                 <small>
-                  {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次`}
-                  {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`}`}
+                  {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次 · ${weekdayLabel(item.enabled_weekdays || item.enabledWeekdays)}`}
+                  {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`} · 核销${weekdayLabel(item.redeem_weekdays || item.redeemWeekdays)}`}
                   {kind === "achievement" && formatAchievementRule(item, tasks, categories)}
                 </small>
               </div>
@@ -1295,14 +1418,14 @@ function Overview({ title, items, kind, children = [], categories = [], tasks = 
       </div>
       {editing && onUpdate && (
         <EditDialog title={`编辑${titleLabel}`} icon={kind === "reward" ? <Gift /> : kind === "achievement" ? <Award /> : <ClipboardCheck />} onClose={() => setEditing(null)}>
-          <EditItemForm kind={kind} item={editing} children={children} categories={categories} tasks={tasks} onCancel={() => setEditing(null)} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} />
+          <EditItemForm kind={kind} item={editing} children={children} categories={categories} tasks={tasks} rewards={rewards} onCancel={() => setEditing(null)} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} />
         </EditDialog>
       )}
     </section>
   );
 }
 
-function EditItemForm({ kind, item, children, categories, tasks, onSave, onCancel }: { kind: "task" | "reward" | "achievement"; item: any; children: Child[]; categories: Category[]; tasks: Task[]; onSave: (data: any) => void; onCancel: () => void }) {
+function EditItemForm({ kind, item, children, categories, tasks, rewards, onSave, onCancel }: { kind: "task" | "reward" | "achievement"; item: any; children: Child[]; categories: Category[]; tasks: Task[]; rewards: Reward[]; onSave: (data: any) => void; onCancel: () => void }) {
   const [data, setData] = useState<any>(() => ({
     title: item.title || "",
     description: item.description || "",
@@ -1319,6 +1442,10 @@ function EditItemForm({ kind, item, children, categories, tasks, onSave, onCance
     windowEnd: item.window_end || "",
     targetTaskId: item.target_task_id || "",
     targetCategoryId: item.target_category_id || "",
+    unlockRewardId: item.unlock_reward_id || "",
+    enabledWeekdays: normalizeWeekdays(item.enabled_weekdays || item.enabledWeekdays),
+    redeemWeekdays: normalizeWeekdays(item.redeem_weekdays || item.redeemWeekdays),
+    prerequisites: item.prerequisites || [],
     iconValue: item.icon_value || "⭐",
     isActive: item.is_active !== 0,
     childIds: item.assignees || []
@@ -1332,6 +1459,7 @@ function EditItemForm({ kind, item, children, categories, tasks, onSave, onCance
           <Field label="分类"><select value={data.categoryId} onChange={(e) => setData({ ...data, categoryId: e.target.value })}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
           <Field label="周期"><select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
           <Field label="次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
+          <Field label="启用星期"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
           <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
         </>
       )}
@@ -1340,15 +1468,18 @@ function EditItemForm({ kind, item, children, categories, tasks, onSave, onCance
           <Field label="所需积分"><input type="number" min="0" value={data.costPoints} onChange={(e) => setData({ ...data, costPoints: Number(e.target.value) })} /></Field>
           <Field label="限制周期"><select value={data.limitPeriod} onChange={(e) => setData({ ...data, limitPeriod: e.target.value })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
           {data.limitPeriod !== "once" && <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>}
+          <Field label="核销星期"><WeekdayPicker value={data.redeemWeekdays} onChange={(redeemWeekdays) => setData({ ...data, redeemWeekdays })} /></Field>
+          <PrerequisiteEditor tasks={tasks} value={data.prerequisites} onChange={(prerequisites) => setData({ ...data, prerequisites })} />
         </>
       )}
       {kind === "achievement" && (
         <>
           <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
           <AchievementRuleFields data={data} setData={setData} tasks={tasks} categories={categories} />
+          <Field label="解锁奖励"><select value={data.unlockRewardId} onChange={(e) => setData({ ...data, unlockRewardId: e.target.value })}><option value="">不附带奖励</option>{rewards.map((reward) => <option key={reward.id} value={reward.id}>{reward.title}</option>)}</select></Field>
         </>
       )}
-      <Field label="符号"><input value={data.iconValue} onChange={(e) => setData({ ...data, iconValue: e.target.value })} /></Field>
+      <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       {(kind === "task" || kind === "reward") && <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />}
       {(kind === "task" || kind === "reward") && <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />}
       <div className="actions"><button className="primary">保存</button><button type="button" className="secondary" onClick={onCancel}>取消</button></div>
@@ -1361,10 +1492,15 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  const [activeTab, setActiveTab] = useState<"tasks" | "rewards">("tasks");
+  const [activeTab, setActiveTab] = useState<"tasks" | "rewards" | "warehouse">("tasks");
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  const [warehouse, setWarehouse] = useState<WarehouseItem[]>([]);
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [, setTick] = useState(0);
+
+  async function loadWarehouse() {
+    setWarehouse(await api<WarehouseItem[]>("/warehouse").catch(() => []));
+  }
 
   async function togglePin(kind: "task" | "reward", item: any) {
     const itemId = item.isPinned ? null : item.id;
@@ -1466,6 +1602,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   const pinnedCount = Number(Boolean(pinnedTask)) + Number(Boolean(pinnedReward));
   async function load() {
     setDash(await api("/dashboard/child"));
+    await loadWarehouse();
   }
   useEffect(() => void load(), []);
   useEffect(() => {
@@ -1477,11 +1614,12 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
-    if (ledgerOpen) void api<LedgerRow[]>("/points/ledger").then(setLedger).catch(() => setLedger([]));
+    if (ledgerOpen) void api<LedgerResponse>("/points/ledger").then((data) => setLedger(data.items)).catch(() => setLedger([]));
   }, [dash, ledgerOpen]);
 
   async function openLedger() {
-    setLedger(await api<LedgerRow[]>("/points/ledger").catch(() => []));
+    const data = await api<LedgerResponse>("/points/ledger").catch(() => ({ items: [], timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" }));
+    setLedger(data.items);
     setLedgerOpen(true);
   }
 
@@ -1507,6 +1645,12 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   async function redeem(reward: any) {
     if (!window.confirm(`确认兑换“${reward.title}”？将扣除 ${reward.cost_points} 积分。`)) return;
     await run(`reward:${reward.id}`, () => api("/reward-redemptions", { method: "POST", body: JSON.stringify({ rewardId: reward.id }) }), "奖励已兑换，等待家长核销");
+  }
+
+  async function clearRedeemedWarehouse() {
+    if (!window.confirm("确认清理仓库内已核销奖励的显示？历史记录和积分不会删除。")) return;
+    await run("warehouse:clear", () => api("/warehouse/clear-redeemed", { method: "PATCH", body: JSON.stringify({}) }), "已清理已核销奖励");
+    await loadWarehouse();
   }
 
   return (
@@ -1556,7 +1700,8 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
         onChange={(value) => setActiveTab(value as typeof activeTab)}
         options={[
           { value: "tasks", label: "任务" },
-          { value: "rewards", label: "奖励" }
+          { value: "rewards", label: "奖励" },
+          { value: "warehouse", label: "仓库" }
         ]}
       />
       {activeTab === "tasks" && (
@@ -1625,6 +1770,29 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           </div>
         </section>
       )}
+      {activeTab === "warehouse" && (
+        <section className="panel child-panel">
+          <div className="panel-title compact-title">
+            <Package /><h2>仓库</h2>
+            <button className="secondary" disabled={!warehouse.some((item) => item.status === "redeemed")} onClick={() => void clearRedeemedWarehouse()}>一键清理已核销奖励</button>
+          </div>
+          <div className="wall-grid scroll-list">
+            {warehouse.length ? warehouse.map((item) => (
+              <article className={`mini-card wall-card reward-wall-card ${item.status === "redeemed" ? "is-muted redeemed" : ""}`} key={item.id}>
+                <div className="card-head wall-card-head">
+                  {icon(item.icon_type, item.icon_value, item.title)}
+                  <div>
+                    <strong>{item.title}</strong>
+                    <small>{item.status === "redeemed" && item.redeemed_at ? `${new Date(item.redeemed_at).toLocaleDateString("zh-CN")}已核销` : "待家长核销"}</small>
+                  </div>
+                </div>
+                {item.description && <small className="card-description">{item.description}</small>}
+                <div className="card-meta"><span className="cost"><Coins size={16} />{item.cost_points} 积分</span></div>
+              </article>
+            )) : <Empty text="仓库暂无奖励" />}
+          </div>
+        </section>
+      )}
       {ledgerOpen && <LedgerModal title="我的积分清单" rows={ledger} onClose={() => setLedgerOpen(false)} />}
     </Shell>
   );
@@ -1665,10 +1833,22 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
     await loadNotifications();
   }
 
+  async function quickAction(item: Notification, action: string) {
+    if (item.related_type === "task_submission") {
+      await api(`/task-submissions/${item.related_id}/review`, { method: "PATCH", body: JSON.stringify({ approved: action === "approve", note: action === "reject" ? "从消息中心驳回" : "" }) });
+    }
+    if (item.related_type === "reward_redemption") {
+      await api(`/reward-redemptions/${item.related_id}/${action}`, { method: "PATCH", body: JSON.stringify({}) });
+    }
+    await readOne(item.id);
+    refresh();
+  }
+
   async function logout() {
     await api("/auth/logout", { method: "POST" });
     refresh();
   }
+  const blockingAck = me.role === "child" ? notifications.find((item) => item.requires_ack && !item.read_at && (item.event_type === "praise" || item.event_type === "criticism")) : null;
   return (
     <div className="app">
       <header className="topbar">
@@ -1695,6 +1875,18 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
                         <small className="source-line">{formatNotificationSource(item)}</small>
                         <small>{formatTime(item.created_at)}</small>
                       </div>
+                      {me.role === "parent" && item.related_type === "task_submission" && (
+                        <div className="actions">
+                          <button className="icon good" title="通过" onClick={() => quickAction(item, "approve")}><Check size={16} /></button>
+                          <button className="icon danger" title="驳回" onClick={() => quickAction(item, "reject")}><Trash2 size={16} /></button>
+                        </div>
+                      )}
+                      {me.role === "parent" && item.related_type === "reward_redemption" && item.event_type === "reward_requested" && (
+                        <div className="actions">
+                          <button className="icon good" title="核销" onClick={() => quickAction(item, "redeem")}><BadgeCheck size={16} /></button>
+                          <button className="icon danger" title="取消" onClick={() => quickAction(item, "cancel")}><Trash2 size={16} /></button>
+                        </div>
+                      )}
                       {!item.read_at && <button className="secondary" onClick={() => readOne(item.id)}>签收</button>}
                     </article>
                   )) : <Empty text="暂无消息" />}
@@ -1706,6 +1898,16 @@ function Shell({ me, refresh, children }: { me: NonNullable<Me>; refresh: () => 
           <button className="icon" title="退出登录" onClick={logout}><LogOut size={18} /></button>
         </div>
       </header>
+      {blockingAck && (
+        <div className="modal-backdrop blocking-ack" role="dialog" aria-modal="true">
+          <section className="panel ack-modal">
+            <div className="panel-title"><MessageSquare /><h2>{blockingAck.title}</h2></div>
+            <p>{blockingAck.body}</p>
+            <small>{blockingAck.sourceLabel || formatNotificationSource(blockingAck)}</small>
+            <button className="primary" onClick={() => readOne(blockingAck.id)}>签收</button>
+          </section>
+        </div>
+      )}
       <main className="content">{children}</main>
     </div>
   );

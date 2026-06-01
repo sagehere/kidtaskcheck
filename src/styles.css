@@ -294,7 +294,6 @@ button.child-tile {
   background: #157f6f;
 }
 
-.emoji-picker,
 .weekday-picker,
 .inline-fields {
   display: flex;
@@ -304,30 +303,134 @@ button.child-tile {
 }
 
 .emoji-select {
+  display: inline-grid;
+  justify-items: start;
+}
+
+.emoji-trigger {
+  display: inline-grid;
+  place-items: center;
+  width: 52px;
+  height: 48px;
+  border: 1px solid #d8d3c8;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.emoji-trigger:hover,
+.emoji-trigger:focus-visible {
+  border-color: #157f6f;
+  box-shadow: 0 0 0 3px rgba(21, 127, 111, 0.14);
+}
+
+.emoji-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
   display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(34, 40, 37, 0.42);
+}
+
+.emoji-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(680px, calc(100vw - 24px));
+  max-height: min(720px, calc(100vh - 28px));
+  border: 1px solid #ddd5c8;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 22px 70px rgba(31, 36, 33, 0.28);
+  overflow: hidden;
+}
+
+.emoji-modal-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 14px;
+  border-bottom: 1px solid #e8dfd0;
+}
+
+.emoji-current {
+  display: inline-grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  background: #f2eadb;
+  font-size: 26px;
+}
+
+.emoji-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid #d8d3c8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #65726f;
+}
+
+.emoji-search input {
+  min-width: 0;
+  height: 42px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.emoji-modal-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+.emoji-section + .emoji-section {
+  margin-top: 18px;
+}
+
+.emoji-section h3 {
+  margin: 0 0 10px;
+  color: #35424d;
+  font-size: 14px;
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
   gap: 8px;
 }
 
-.emoji-custom-input {
-  width: 96px;
-  text-align: center;
-  font-size: 22px;
-}
-
-.emoji-picker button,
+.emoji-grid button,
 .weekday-picker button {
   min-width: 42px;
   min-height: 38px;
   border: 1px solid #d8d3c8;
   border-radius: 8px;
   background: #ffffff;
+  font-size: 22px;
 }
 
-.emoji-picker button.active,
+.emoji-grid button.active,
 .weekday-picker button.active {
   color: #ffffff;
   border-color: #157f6f;
   background: #157f6f;
+}
+
+.emoji-grid button:hover,
+.emoji-grid button:focus-visible {
+  border-color: #157f6f;
+  outline: 0;
 }
 
 .inline-fields select {
@@ -769,7 +872,7 @@ button:disabled {
   font-weight: 900;
 }
 
-.pinned-card {
+.wall-card.pinned-card {
   display: flex;
   flex-direction: column;
   height: 100%;

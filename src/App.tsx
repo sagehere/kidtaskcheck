@@ -70,7 +70,6 @@ type EmojiSource = {
   skin_variations?: Record<string, { unified: string }>;
 };
 type EmojiOption = { emoji: string; name: string; shortNames: string[]; category: string; sortOrder: number; search: string; rank: number };
-type EmojiGroup = { category: string; items: EmojiOption[] };
 const RECOMMENDED_EMOJI = [
   "✅", "⭐", "🎁", "🏅", "✨", "⚠️", "📚", "🧹", "🌱", "🏃", "💪", "🧠", "📝", "📖", "🧮", "🎨", "🎵", "⚽", "🏀", "🏊",
   "🍎", "🥛", "🪥", "🧸", "🎮", "🎬", "🍭", "🍀", "🌈", "🚀", "🔥", "💎", "🎯", "🏆", "🥇", "👏", "💖", "🙂", "😄", "😎"
@@ -80,18 +79,6 @@ const TASK_RELEVANCE_TERMS = [
   "memo", "pencil", "brain", "abacus", "broom", "soap", "toothbrush", "bath", "bed", "seedling", "running", "muscle", "soccer",
   "basketball", "swim", "apple", "milk", "art", "musical", "game", "clap", "heart", "smile", "fire", "gem", "dart"
 ];
-const CATEGORY_LABELS: Record<string, string> = {
-  "Smileys & Emotion": "表情",
-  "People & Body": "人物",
-  "Animals & Nature": "动物与自然",
-  "Food & Drink": "食物",
-  "Travel & Places": "旅行与地点",
-  Activities: "活动",
-  Objects: "物品",
-  Symbols: "符号",
-  Flags: "旗帜"
-};
-
 function unifiedToEmoji(unified: string) {
   return unified.split("-").map((part) => String.fromCodePoint(parseInt(part, 16))).join("");
 }
@@ -129,16 +116,6 @@ function buildEmojiOptions() {
 }
 
 const ALL_EMOJI_OPTIONS = buildEmojiOptions();
-const RECOMMENDED_OPTIONS = ALL_EMOJI_OPTIONS.filter((item) => item.rank < Number.MAX_SAFE_INTEGER).slice(0, 96);
-const EMOJI_GROUPS = ALL_EMOJI_OPTIONS.reduce<EmojiGroup[]>((groups, item) => {
-  let group = groups.find((candidate) => candidate.category === item.category);
-  if (!group) {
-    group = { category: item.category, items: [] };
-    groups.push(group);
-  }
-  group.items.push(item);
-  return groups;
-}, []);
 
 async function api<T>(path: string, options: RequestInit = {}) {
   const response = await fetch(`/api${path}`, {
@@ -1399,8 +1376,8 @@ function EmojiSelect({ value, onChange }: { value: string; onChange: (value: str
   const [query, setQuery] = useState("");
   const search = query.trim().toLowerCase();
   const selected = value || "⭐";
-  const filtered = useMemo(() => {
-    if (!search) return [];
+  const visibleOptions = useMemo(() => {
+    if (!search) return ALL_EMOJI_OPTIONS;
     return ALL_EMOJI_OPTIONS.filter((item) => item.search.includes(search)).slice(0, 240);
   }, [search]);
 
@@ -1450,32 +1427,12 @@ function EmojiSelect({ value, onChange }: { value: string; onChange: (value: str
               <button type="button" className="icon" title="关闭" onClick={() => setOpen(false)}><X size={18} /></button>
             </div>
             <div className="emoji-modal-body">
-              {search ? (
-                <section className="emoji-section">
-                  <h3>搜索结果</h3>
-                  {filtered.length ? (
-                    <div className="emoji-grid" role="listbox">
-                      {filtered.map((item) => <EmojiButton key={`${item.emoji}-${item.shortNames[0]}`} item={item} />)}
-                    </div>
-                  ) : <Empty text="没有匹配的 emoji" />}
-                </section>
+              {visibleOptions.length ? (
+                <div className="emoji-grid" role="listbox">
+                  {visibleOptions.map((item) => <EmojiButton key={`${item.emoji}-${item.shortNames[0]}`} item={item} />)}
+                </div>
               ) : (
-                <>
-                  <section className="emoji-section">
-                    <h3>推荐</h3>
-                    <div className="emoji-grid" role="listbox">
-                      {RECOMMENDED_OPTIONS.map((item) => <EmojiButton key={`${item.emoji}-${item.shortNames[0]}`} item={item} />)}
-                    </div>
-                  </section>
-                  {EMOJI_GROUPS.map((group) => (
-                    <section className="emoji-section" key={group.category}>
-                      <h3>{CATEGORY_LABELS[group.category] || group.category}</h3>
-                      <div className="emoji-grid" role="listbox">
-                        {group.items.map((item) => <EmojiButton key={`${item.emoji}-${item.shortNames[0]}`} item={item} />)}
-                      </div>
-                    </section>
-                  ))}
-                </>
+                <Empty text="没有匹配的 emoji" />
               )}
             </div>
           </div>

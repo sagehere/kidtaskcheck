@@ -391,33 +391,29 @@ button.child-tile {
 .emoji-modal-body {
   min-height: 0;
   overflow: auto;
-  padding: 14px;
-}
-
-.emoji-section + .emoji-section {
-  margin-top: 18px;
-}
-
-.emoji-section h3 {
-  margin: 0 0 10px;
-  color: #35424d;
-  font-size: 14px;
+  padding: 16px;
 }
 
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+  gap: 10px;
+  align-items: stretch;
 }
 
 .emoji-grid button,
 .weekday-picker button {
-  min-width: 42px;
-  min-height: 38px;
+  display: inline-grid;
+  place-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  aspect-ratio: 1;
   border: 1px solid #d8d3c8;
   border-radius: 8px;
   background: #ffffff;
   font-size: 22px;
+  line-height: 1;
 }
 
 .emoji-grid button.active,
@@ -430,6 +426,7 @@ button.child-tile {
 .emoji-grid button:hover,
 .emoji-grid button:focus-visible {
   border-color: #157f6f;
+  background: #f7f2e8;
   outline: 0;
 }
 

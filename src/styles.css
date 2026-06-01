@@ -353,13 +353,13 @@ button.child-tile {
   filter: grayscale(1);
 }
 
-.warehouse-grid {
+.wall-grid.warehouse-grid {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   align-items: start;
   gap: 10px;
 }
 
-.warehouse-card {
+.wall-card.warehouse-card {
   min-height: 0;
   align-self: start;
   gap: 8px;
@@ -398,14 +398,20 @@ button.child-tile {
   max-height: 360px;
 }
 
-.refund-list .selectable-row > div {
-  text-align: left;
-}
-
 .selectable-row {
   display: grid;
   cursor: pointer;
   grid-template-columns: auto minmax(0, 1fr);
+}
+
+.refund-list .selectable-row {
+  justify-content: normal;
+}
+
+.refund-list .selectable-row > div {
+  justify-self: stretch;
+  width: 100%;
+  text-align: left;
 }
 
 .selectable-row input {

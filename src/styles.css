@@ -396,14 +396,15 @@ button.child-tile {
 
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, 48px);
+  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
   gap: 10px;
-  justify-content: start;
+  align-items: start;
 }
 
 .emoji-grid button {
   display: inline-grid;
   place-items: center;
+  justify-self: center;
   width: 48px;
   height: 48px;
   min-width: 0;

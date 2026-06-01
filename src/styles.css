@@ -396,16 +396,16 @@ button.child-tile {
 
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+  grid-template-columns: repeat(auto-fill, 48px);
   gap: 10px;
-  align-items: stretch;
+  justify-content: start;
 }
 
-.emoji-grid button,
-.weekday-picker button {
+.emoji-grid button {
   display: inline-grid;
   place-items: center;
-  width: 100%;
+  width: 48px;
+  height: 48px;
   min-width: 0;
   min-height: 48px;
   aspect-ratio: 1;
@@ -416,6 +416,23 @@ button.child-tile {
   line-height: 1;
 }
 
+.weekday-picker button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 48px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid #d8d3c8;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .emoji-grid button.active,
 .weekday-picker button.active {
   color: #ffffff;
@@ -424,10 +441,18 @@ button.child-tile {
 }
 
 .emoji-grid button:hover,
-.emoji-grid button:focus-visible {
+.emoji-grid button:focus-visible,
+.weekday-picker button:hover,
+.weekday-picker button:focus-visible {
   border-color: #157f6f;
   background: #f7f2e8;
   outline: 0;
+}
+
+.weekday-picker button.active:hover,
+.weekday-picker button.active:focus-visible {
+  color: #ffffff;
+  background: #157f6f;
 }
 
 .inline-fields select {
@@ -594,6 +619,12 @@ textarea {
   border: 1px solid #d4cec2;
   border-radius: 8px;
   background: #fffdfa;
+}
+
+input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
+  padding: 0;
 }
 
 textarea {

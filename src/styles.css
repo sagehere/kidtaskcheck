@@ -598,9 +598,9 @@ button.child-tile {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.compact button,
-.compact .picker,
-.compact .toggle {
+.compact > button,
+.compact > .picker,
+.compact > .toggle {
   grid-column: 1 / -1;
 }
 

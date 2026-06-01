@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, signedPoints, weekdayInTimezone } from "../src/lib/domain";
+import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, signedPoints, weekdayInTimezone } from "../src/lib/domain";
 
 describe("periodKey", () => {
   it("calculates daily, weekly, monthly and once keys in the default UTC+8 timezone", () => {
@@ -8,6 +8,14 @@ describe("periodKey", () => {
     expect(periodKey("weekly", at)).toBe("2026-W22");
     expect(periodKey("monthly", at)).toBe("2026-05");
     expect(periodKey("once", at)).toBe("once");
+  });
+
+  it("uses task periods for reward prerequisite windows", () => {
+    const at = "2026-05-24T16:30:00.000Z";
+    expect(prerequisitePeriodKey("daily", at)).toBe("2026-05-25");
+    expect(prerequisitePeriodKey("weekly", at)).toBe("2026-W22");
+    expect(prerequisitePeriodKey("monthly", at)).toBe("2026-05");
+    expect(prerequisitePeriodKey("once", at)).toBeNull();
   });
 
   it("uses the configured timezone for cross-period attribution", () => {

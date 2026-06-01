@@ -34,6 +34,9 @@ export function periodKey(period, input, timezoneOffsetMinutes = DEFAULT_TIMEZON
     const week = Math.ceil(((copy.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
     return `${weekYear}-W${pad(week)}`;
 }
+export function prerequisitePeriodKey(period, input, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
+    return period === "once" || period === "none" ? null : periodKey(period, input, timezoneOffsetMinutes);
+}
 export function weekdayInTimezone(input, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
     return zonedDate(input, timezoneOffsetMinutes).getUTCDay();
 }

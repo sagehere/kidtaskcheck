@@ -1,4 +1,4 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, DEFAULT_WEEKDAYS, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, signedPoints, weekdayInTimezone } from "../../src/lib/domain.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, DEFAULT_WEEKDAYS, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, signedPoints, weekdayInTimezone } from "../../src/lib/domain.js";
 const json = (data, init) => new Response(JSON.stringify(data), {
     ...init,
     headers: { "content-type": "application/json; charset=utf-8", ...(init?.headers || {}) }
@@ -345,28 +345,73 @@ async function replaceRewardPrerequisites(env, rewardId, prerequisites = []) {
     }
 }
 async function rewardPrerequisites(env, rewardId) {
-    return (await env.DB.prepare(`SELECT rp.task_id, rp.required_count, t.title
+    return (await env.DB.prepare(`SELECT rp.task_id, rp.required_count, t.title, t.period
 FROM reward_prerequisites rp
 JOIN tasks t ON t.id=rp.task_id
 WHERE rp.reward_id=?
 ORDER BY t.created_at DESC`).bind(rewardId).all()).results;
 }
-async function completedTaskCount(env, childId, taskId) {
-    const row = await env.DB.prepare("SELECT COUNT(*) v FROM task_submissions WHERE child_id=? AND task_id=? AND status='approved'")
-        .bind(childId, taskId)
+async function completedTaskCount(env, childId, taskId, periodKeyValue = null) {
+    const periodClause = periodKeyValue ? " AND period_key=?" : "";
+    const params = periodKeyValue ? [childId, taskId, periodKeyValue] : [childId, taskId];
+    const row = await env.DB.prepare(`SELECT COUNT(*) v FROM task_submissions WHERE child_id=? AND task_id=? AND status='approved'${periodClause}`)
+        .bind(...params)
         .first();
     return Number(row?.v || 0);
 }
-async function unmetRewardPrerequisites(env, rewardId, childId) {
+async function unmetRewardPrerequisites(env, rewardId, childId, at = nowIso()) {
     const rows = await rewardPrerequisites(env, rewardId);
+    const offset = await timezoneOffsetMinutes(env);
     const unmet = [];
     for (const row of rows) {
-        const completed = await completedTaskCount(env, childId, row.task_id);
+        const taskPeriod = row.period || "once";
+        const pkey = prerequisitePeriodKey(taskPeriod, at, offset);
+        const completed = await completedTaskCount(env, childId, row.task_id, pkey);
         if (completed < Number(row.required_count || 1)) {
             unmet.push({ ...row, completed });
         }
     }
     return unmet;
+}
+async function rewardLockedByAchievement(env, rewardId, childId) {
+    const rows = (await env.DB.prepare(`SELECT a.id, ca.unlocked_at
+FROM achievements a
+LEFT JOIN child_achievements ca ON ca.achievement_id=a.id AND ca.child_id=?
+WHERE a.unlock_reward_id=? AND a.is_active=1 AND a.deleted_at IS NULL`)
+        .bind(childId, rewardId)
+        .all()).results;
+    return rows.length > 0 && rows.every((row) => !row.unlocked_at);
+}
+async function deleteAchievementWithExclusiveReward(env, parentId, achievementId) {
+    const achievement = await env.DB.prepare("SELECT id, unlock_reward_id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+        .bind(achievementId, parentId)
+        .first();
+    if (!achievement)
+        return null;
+    const now = nowIso();
+    await env.DB.prepare("UPDATE achievements SET deleted_at=?, is_active=0, updated_at=? WHERE id=?")
+        .bind(now, now, achievement.id)
+        .run();
+    if (!achievement.unlock_reward_id)
+        return { deletedUnlockReward: false };
+    const otherRef = await env.DB.prepare("SELECT id FROM achievements WHERE unlock_reward_id=? AND id<>? AND parent_id=? AND deleted_at IS NULL AND is_active=1 LIMIT 1")
+        .bind(achievement.unlock_reward_id, achievement.id, parentId)
+        .first();
+    if (otherRef)
+        return { deletedUnlockReward: false };
+    const ordinaryAssignee = await env.DB.prepare(`SELECT ra.child_id
+FROM reward_assignees ra
+LEFT JOIN child_achievements ca ON ca.child_id=ra.child_id AND ca.achievement_id=?
+WHERE ra.reward_id=? AND ca.child_id IS NULL
+LIMIT 1`)
+        .bind(achievement.id, achievement.unlock_reward_id)
+        .first();
+    if (ordinaryAssignee)
+        return { deletedUnlockReward: false };
+    await env.DB.prepare("UPDATE rewards SET deleted_at=?, is_active=0, updated_at=? WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+        .bind(now, now, achievement.unlock_reward_id, parentId)
+        .run();
+    return { deletedUnlockReward: true };
 }
 const ACHIEVEMENT_RULE_TYPES = new Set([
     "tasks_completed",
@@ -374,6 +419,7 @@ const ACHIEVEMENT_RULE_TYPES = new Set([
     "balance",
     "streak_days",
     "redemptions",
+    "specific_task_completed",
     "same_task_streak",
     "category_tasks",
     "category_streak",
@@ -391,9 +437,9 @@ function normalizeAchievementInput(input = {}) {
     const threshold = ruleType === "no_criticism_window" ? 1 : Math.max(0, Number(input.threshold || 1));
     const windowStart = windowType === "custom" ? String(input.windowStart || input.window_start || "").slice(0, 10) || null : null;
     const windowEnd = windowType === "custom" ? String(input.windowEnd || input.window_end || "").slice(0, 10) || null : null;
-    const targetTaskId = ruleType === "same_task_streak" ? String(input.targetTaskId || input.target_task_id || "") || null : null;
+    const targetTaskId = ruleType === "same_task_streak" || ruleType === "specific_task_completed" ? String(input.targetTaskId || input.target_task_id || "") || null : null;
     const targetCategoryId = ruleType === "category_tasks" || ruleType === "category_streak" ? String(input.targetCategoryId || input.target_category_id || "") || null : null;
-    const metric = ["same_task_streak", "category_tasks", "category_streak"].includes(ruleType) ? "tasks_completed"
+    const metric = ["same_task_streak", "specific_task_completed", "category_tasks", "category_streak"].includes(ruleType) ? "tasks_completed"
         : ["praise_count", "praise_streak", "no_criticism_days", "no_criticism_window"].includes(ruleType) ? "total_earned"
             : ruleType;
     return { ruleType, metric, threshold, windowType, windowStart, windowEnd, targetTaskId, targetCategoryId };
@@ -443,6 +489,10 @@ WHERE s.child_id=? AND s.status='approved'`).bind(childId).all()).results;
         else if (normalized.rule_type === "same_task_streak") {
             const taskIds = normalized.target_task_id ? [normalized.target_task_id] : [...new Set(approvedTasks.map((row) => row.task_id))];
             value = Math.max(0, ...taskIds.map((taskId) => consecutiveSameTaskStreak(approvedTasks.filter((row) => row.task_id === taskId).map((row) => row.submitted_at), offset)));
+        }
+        else if (normalized.rule_type === "specific_task_completed") {
+            const rows = normalized.target_task_id ? approvedTasks.filter((row) => row.task_id === normalized.target_task_id) : approvedTasks;
+            value = countRowsInWindow(rows, "submitted_at", normalized, offset, now);
         }
         else if (normalized.rule_type === "category_tasks") {
             const rows = approvedTasks.filter((row) => !normalized.target_category_id || row.category_id === normalized.target_category_id);
@@ -914,7 +964,7 @@ async function route(request, env) {
     if (path === "/notifications" && method === "GET") {
         const a = requireRole(actor, ["parent", "child"]);
         const recipient = notificationRecipient(a);
-        const rows = (await env.DB.prepare("SELECT * FROM notifications WHERE recipient_type=? AND recipient_id=? ORDER BY created_at DESC LIMIT 50")
+        const rows = (await env.DB.prepare("SELECT * FROM notifications WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL ORDER BY created_at DESC LIMIT 50")
             .bind(recipient.type, recipient.id)
             .all()).results;
         const unread = Number((await env.DB.prepare("SELECT COUNT(*) v FROM notifications WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL")
@@ -1011,9 +1061,9 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const child = await env.DB.prepare("SELECT id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(childWarehouse[1], a.id).first();
         if (!child)
             return fail("NOT_FOUND", "孩子账号不存在", 404);
-        return ok((await env.DB.prepare(`SELECT rr.*, r.title, r.description, r.icon_type, r.icon_value, r.cost_points
+        return ok((await env.DB.prepare(`SELECT rr.*, r.title, r.description, r.icon_type, r.icon_value, r.cost_points, r.redeem_weekdays
 FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id
-WHERE rr.child_id=? AND rr.parent_id=? AND rr.status IN ('pending','redeemed')
+WHERE rr.child_id=? AND rr.parent_id=? AND rr.status='redeemed'
 ORDER BY rr.requested_at DESC`).bind(child.id, a.id).all()).results);
     }
     const feedbackEvent = path.match(/^\/children\/([^/]+)\/feedback-events$/);
@@ -1291,15 +1341,10 @@ WHERE id=?`)
     }
     if (achievementPatch && method === "DELETE") {
         const a = requireRole(actor, ["parent"]);
-        const achievement = await env.DB.prepare("SELECT id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
-            .bind(achievementPatch[1], a.id)
-            .first();
-        if (!achievement)
+        const result = await deleteAchievementWithExclusiveReward(env, a.id, achievementPatch[1]);
+        if (!result)
             return fail("NOT_FOUND", "成就称号不存在", 404);
-        await env.DB.prepare("UPDATE achievements SET deleted_at=?, is_active=0, updated_at=? WHERE id=?")
-            .bind(nowIso(), nowIso(), achievementPatch[1])
-            .run();
-        return ok(true);
+        return ok(result);
     }
     if (path === "/config/export" && method === "GET") {
         const a = requireRole(actor, ["parent"]);
@@ -1441,6 +1486,8 @@ WHERE id=?`)
             return fail("NOT_ASSIGNED", "奖励不存在或未分配给当前孩子", 404);
         if ((await balance(env, a.id)) < Number(reward.cost_points))
             return fail("LOW_BALANCE", "积分不足", 409);
+        if (await rewardLockedByAchievement(env, reward.id, a.id))
+            return fail("REWARD_LOCKED", "该奖励需要先解锁对应成就称号", 409);
         if (reward.stock !== null) {
             const used = Number((await env.DB.prepare("SELECT COUNT(*) v FROM reward_redemptions WHERE reward_id=? AND status IN ('pending','redeemed')").bind(reward.id).first())?.v || 0);
             if (used >= Number(reward.stock))
@@ -1449,6 +1496,9 @@ WHERE id=?`)
         const requestedAt = nowIso();
         const offset = await timezoneOffsetMinutes(env);
         const pkey = periodKey(reward.limit_period, requestedAt, offset);
+        const unmet = await unmetRewardPrerequisites(env, reward.id, a.id, requestedAt);
+        if (unmet.length)
+            return fail("PREREQUISITE_NOT_MET", `前置任务未完成：${unmet.map((item) => `${item.title} ${item.completed}/${item.required_count}`).join("；")}`, 409);
         if (reward.limit_period !== "none" && reward.limit_count !== null) {
             const count = await childUsageForPeriod(env, "reward_redemptions", "reward_id", reward.id, a.id, pkey, ["pending", "redeemed"]);
             if (count >= Number(reward.limit_count))
@@ -1487,9 +1537,6 @@ WHERE id=?`)
             const offset = await timezoneOffsetMinutes(env);
             if (!isWeekdayAllowed(redemption.redeem_weekdays, undefined, offset))
                 return fail("REDEEM_WEEKDAY_BLOCKED", "今天不是该奖励允许核销的星期", 409);
-            const unmet = await unmetRewardPrerequisites(env, redemption.reward_id, redemption.child_id);
-            if (unmet.length)
-                return fail("PREREQUISITE_NOT_MET", `前置任务未完成：${unmet.map((item) => `${item.title} ${item.completed}/${item.required_count}`).join("，")}`, 409);
             await env.DB.prepare("UPDATE reward_redemptions SET status='redeemed', redeemed_at=? WHERE id=?").bind(nowIso(), redemption.id).run();
         }
         else {
@@ -1515,7 +1562,7 @@ WHERE id=?`)
     const redemptionRefund = path.match(/^\/reward-redemptions\/([^/]+)\/refund$/);
     if (redemptionRefund && method === "PATCH") {
         const a = requireRole(actor, ["parent"]);
-        const redemption = await env.DB.prepare("SELECT rr.*, r.cost_points FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id WHERE rr.id=? AND rr.parent_id=? AND rr.status IN ('pending','redeemed')")
+        const redemption = await env.DB.prepare("SELECT rr.*, r.cost_points FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id WHERE rr.id=? AND rr.parent_id=? AND rr.status='redeemed'")
             .bind(redemptionRefund[1], a.id)
             .first();
         if (!redemption)
@@ -1569,7 +1616,7 @@ ON CONFLICT(child_id, item_type) DO UPDATE SET item_id=excluded.item_id, updated
     }
     if (path === "/warehouse" && method === "GET") {
         const a = requireRole(actor, ["child"]);
-        return ok((await env.DB.prepare(`SELECT rr.*, r.title, r.description, r.icon_type, r.icon_value, r.cost_points
+        return ok((await env.DB.prepare(`SELECT rr.*, r.title, r.description, r.icon_type, r.icon_value, r.cost_points, r.redeem_weekdays
 FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id
 WHERE rr.child_id=? AND rr.status IN ('pending','redeemed') AND rr.hidden_from_child_at IS NULL
 ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
@@ -1654,9 +1701,14 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
         const rewardRows = await env.DB.prepare("SELECT r.* FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id WHERE ra.child_id=? AND r.is_active=1 AND r.deleted_at IS NULL ORDER BY r.cost_points")
             .bind(a.id)
             .all();
-        const rewardPeriods = rewardRows.results.map((reward) => ({ itemId: reward.id, periodKey: periodKey(reward.limit_period, undefined, offset) }));
+        const rewardsWithLocks = [];
+        for (const reward of rewardRows.results) {
+            if (!(await rewardLockedByAchievement(env, reward.id, a.id)))
+                rewardsWithLocks.push(reward);
+        }
+        const rewardPeriods = rewardsWithLocks.map((reward) => ({ itemId: reward.id, periodKey: periodKey(reward.limit_period, undefined, offset) }));
         const rewardUsageCounts = await childUsageCountsForPeriods(env, "reward_redemptions", "reward_id", a.id, rewardPeriods, ["pending", "redeemed"]);
-        const rewards = rewardRows.results.map((reward, index) => {
+        const rewards = rewardsWithLocks.map((reward, index) => {
             const pkey = rewardPeriods[index].periodKey;
             const limitCount = reward.limit_period === "none" || reward.limit_count === null ? null : Number(reward.limit_count);
             const usedCount = limitCount === null ? 0 : rewardUsageCounts.get(`${reward.id}:${pkey}`) || 0;

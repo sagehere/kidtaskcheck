@@ -303,6 +303,17 @@ button.child-tile {
   align-items: center;
 }
 
+.emoji-select {
+  display: grid;
+  gap: 8px;
+}
+
+.emoji-custom-input {
+  width: 96px;
+  text-align: center;
+  font-size: 22px;
+}
+
 .emoji-picker button,
 .weekday-picker button {
   min-width: 42px;
@@ -340,6 +351,65 @@ button.child-tile {
 
 .wall-card.redeemed {
   filter: grayscale(1);
+}
+
+.warehouse-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.warehouse-card {
+  min-height: 0;
+  gap: 8px;
+  padding: 10px;
+}
+
+.warehouse-card .wall-card-head {
+  grid-template-columns: 38px minmax(0, 1fr);
+  padding-top: 2px;
+}
+
+.warehouse-card .wall-card-head .emoji,
+.warehouse-card .wall-card-head .visual {
+  width: 38px;
+  height: 38px;
+}
+
+.warehouse-card .wall-card-head .emoji {
+  font-size: 22px;
+}
+
+.warehouse-card .wall-card-head strong {
+  font-size: 14px;
+}
+
+.warehouse-card .card-description,
+.warehouse-card .card-meta span {
+  font-size: 12px;
+}
+
+.refund-modal {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.refund-list {
+  max-height: 360px;
+}
+
+.selectable-row {
+  display: grid;
+  cursor: pointer;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.selectable-row input {
+  width: 18px;
+  height: 18px;
+}
+
+.muted-text {
+  color: #66727d;
+  font-size: 14px;
 }
 
 .panel {

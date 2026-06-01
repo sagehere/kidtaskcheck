@@ -57,7 +57,10 @@ const WEEKDAY_OPTIONS = [
   { value: 6, label: "周六" },
   { value: 0, label: "周日" }
 ];
-const EMOJI_OPTIONS = ["✅", "⭐", "🎁", "🏅", "✨", "⚠️", "📚", "🧹", "🌱", "🏃", "🎨", "🎮", "🍭", "🧸", "🎬", "🍀"];
+const EMOJI_OPTIONS = [
+  "✅", "⭐", "🎁", "🏅", "✨", "⚠️", "📚", "🧹", "🌱", "🏃", "💪", "🧠", "📝", "📖", "🧮", "🎨", "🎵", "⚽", "🏀", "🏊",
+  "🍎", "🥛", "🪥", "🧸", "🎮", "🎬", "🍭", "🍀", "🌈", "🚀", "🔥", "💎", "🎯", "🏆", "🥇", "👏", "💖", "🙂", "😄", "😎"
+];
 
 async function api<T>(path: string, options: RequestInit = {}) {
   const response = await fetch(`/api${path}`, {
@@ -138,6 +141,16 @@ function weekdayLabel(value: unknown) {
   return WEEKDAY_OPTIONS.filter((item) => days.includes(item.value)).map((item) => item.label).join("、") || "未设置";
 }
 
+function weekdayLimitSuffix(value: unknown) {
+  const days = normalizeWeekdays(value);
+  if (days.length === 7) return "";
+  return `（限${WEEKDAY_OPTIONS.filter((item) => days.includes(item.value)).map((item) => item.label.replace("周", "周")).join("、")}）`;
+}
+
+function rewardDisplayTitle(item: any) {
+  return `${item.title}${weekdayLimitSuffix(item.redeem_weekdays || item.redeemWeekdays)}`;
+}
+
 function formatSource(value: string) {
   const labels: Record<string, string> = {
     task: "任务",
@@ -189,6 +202,7 @@ function formatMetric(value: string) {
 
 const ACHIEVEMENT_CONDITIONS = [
   { value: "tasks_total", label: "累计完成任务" },
+  { value: "specific_task_completed", label: "完成指定任务" },
   { value: "tasks_week", label: "一周内完成任务" },
   { value: "tasks_month", label: "一月内完成任务" },
   { value: "tasks_custom", label: "固定日期范围内完成任务" },
@@ -219,6 +233,7 @@ function conditionFromAchievement(item: any) {
   if (ruleType === "tasks_completed" && windowType === "current_month") return "tasks_month";
   if (ruleType === "tasks_completed" && windowType === "custom") return "tasks_custom";
   if (ruleType === "tasks_completed") return "tasks_total";
+  if (ruleType === "specific_task_completed") return "specific_task_completed";
   if (ruleType === "category_tasks" && windowType === "current_week") return "category_tasks_week";
   if (ruleType === "category_tasks" && windowType === "current_month") return "category_tasks_month";
   if (ruleType === "category_tasks" && windowType === "custom") return "category_tasks_custom";
@@ -238,6 +253,7 @@ function achievementRuleFromCondition(condition: string) {
   if (condition === "tasks_week") return { ruleType: "tasks_completed", metric: "tasks_completed", windowType: "current_week" };
   if (condition === "tasks_month") return { ruleType: "tasks_completed", metric: "tasks_completed", windowType: "current_month" };
   if (condition === "tasks_custom") return { ruleType: "tasks_completed", metric: "tasks_completed", windowType: "custom" };
+  if (condition === "specific_task_completed") return { ruleType: "specific_task_completed", metric: "tasks_completed", windowType: "all_time" };
   if (condition === "same_task_streak") return { ruleType: "same_task_streak", metric: "tasks_completed", windowType: "all_time" };
   if (condition === "category_tasks_total") return { ruleType: "category_tasks", metric: "tasks_completed", windowType: "all_time" };
   if (condition === "category_tasks_week") return { ruleType: "category_tasks", metric: "tasks_completed", windowType: "current_week" };
@@ -267,7 +283,7 @@ function achievementPayload(data: any) {
     ...rule,
     windowStart: rule.windowType === "custom" ? data.windowStart : null,
     windowEnd: rule.windowType === "custom" ? data.windowEnd : null,
-    targetTaskId: rule.ruleType === "same_task_streak" ? data.targetTaskId : null,
+    targetTaskId: rule.ruleType === "same_task_streak" || rule.ruleType === "specific_task_completed" ? data.targetTaskId : null,
     targetCategoryId: rule.ruleType === "category_tasks" || rule.ruleType === "category_streak" ? data.targetCategoryId : null
   };
 }
@@ -287,6 +303,10 @@ function formatAchievementRule(item: any, tasks: Task[] = [], categories: Catego
   if (condition === "same_task_streak") {
     const task = tasks.find((entry) => entry.id === item.target_task_id);
     return `${task?.title || "指定任务"}连续完成 ≥ ${item.threshold} 天`;
+  }
+  if (condition === "specific_task_completed") {
+    const task = tasks.find((entry) => entry.id === item.target_task_id);
+    return `${task?.title || "指定任务"}完成 ≥ ${item.threshold}次`;
   }
   if (condition === "category_streak") return `${category?.name || "指定分类"}连续打卡 ≥ ${item.threshold}天`;
   if (condition.startsWith("category_tasks_")) return `${category?.name || "指定分类"}${label.replace("指定分类", "")} ≥ ${item.threshold}次`;
@@ -578,6 +598,8 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   const [dashboard, setDashboard] = useState<any>({ children: [], pendingSubmissions: [], pendingRedemptions: [] });
   const [activeTab, setActiveTab] = useState<"pending" | "children" | "settings">("pending");
   const [ledgerChild, setLedgerChild] = useState<{ id: string; display_name: string } | null>(null);
+  const [refundChild, setRefundChild] = useState<Child | null>(null);
+  const [refundRows, setRefundRows] = useState<WarehouseItem[]>([]);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -707,15 +729,18 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
 
   async function refundChildReward(child: Child) {
     const rows = await api<WarehouseItem[]>(`/children/${encodeURIComponent(child.id)}/warehouse`).catch(() => []);
-    if (!rows.length) {
-      setMessage("该孩子没有可退还的奖励");
-      return;
-    }
-    const choice = window.prompt(rows.map((item, index) => `${index + 1}. ${item.title} · ${item.status === "redeemed" ? "已核销" : "待核销"} · ${item.cost_points}积分`).join("\n") + "\n请输入要退还的序号");
-    const target = rows[Number(choice) - 1];
-    if (!target) return;
-    if (!window.confirm(`确认退还「${target.title}」的 ${target.cost_points} 积分？`)) return;
-    await run(() => api(`/reward-redemptions/${target.id}/refund`, { method: "PATCH", body: JSON.stringify({}) }), "奖励积分已退还");
+    setRefundRows(rows);
+    setRefundChild(child);
+  }
+
+  async function refundSelectedRewards(ids: string[]) {
+    if (!ids.length) return;
+    await run(
+      () => Promise.all(ids.map((id) => api(`/reward-redemptions/${id}/refund`, { method: "PATCH", body: JSON.stringify({}) }))).then(() => undefined),
+      ids.length > 1 ? "奖励积分已批量退还" : "奖励积分已退还"
+    );
+    setRefundChild(null);
+    setRefundRows([]);
   }
 
   return (
@@ -803,7 +828,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           <section className="setting-group">
             <div className="panel-title"><Award /><h2>成就称号</h2></div>
             <CreateAchievement tasks={tasks} categories={categories} rewards={rewards} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
-            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} rewards={rewards} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
+            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} rewards={rewards} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。${item.unlock_reward_id ? "若附带奖励未被其他配置复用，将一并删除。" : ""}`)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
@@ -814,6 +839,14 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
         </>
       )}
       {ledgerChild && <LedgerModal title={`${ledgerChild.display_name} 的积分清单`} rows={ledger} onClose={() => setLedgerChild(null)} />}
+      {refundChild && (
+        <RefundRewardDialog
+          child={refundChild}
+          rows={refundRows}
+          onClose={() => { setRefundChild(null); setRefundRows([]); }}
+          onRefund={(ids) => void refundSelectedRewards(ids)}
+        />
+      )}
     </Shell>
   );
 }
@@ -885,7 +918,7 @@ function RedemptionPanel({ items, onFinish }: { items: any[]; onFinish: (id: str
           visible.map((item: any) => (
             <article className="row" key={item.id}>
               <div>
-                <strong>{item.title}</strong>
+                <strong>{rewardDisplayTitle(item)}</strong>
                 <span>{item.child_name} · {item.period_key}</span>
               </div>
               <div className="actions">
@@ -988,6 +1021,43 @@ function LedgerModal({ title, rows, onClose }: { title: string; rows: LedgerRow[
   );
 }
 
+function RefundRewardDialog({ child, rows, onRefund, onClose }: { child: Child; rows: WarehouseItem[]; onRefund: (ids: string[]) => void; onClose: () => void }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const total = rows.filter((item) => selected.includes(item.id)).reduce((sum, item) => sum + Number(item.cost_points || 0), 0);
+  function toggle(id: string, checked: boolean) {
+    setSelected((current) => checked ? [...current, id] : current.filter((item) => item !== id));
+  }
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <section className="panel refund-modal">
+        <div className="panel-title compact-title">
+          <RotateCcw />
+          <h2>退还奖励</h2>
+          <button type="button" className="secondary" onClick={onClose}>关闭</button>
+        </div>
+        <p className="muted-text">{child.display_name} 已核销的奖励可在这里退还积分。待核销奖励请在奖励核销区域使用取消按钮。</p>
+        <div className="list scroll-list refund-list">
+          {rows.length ? rows.map((item) => (
+            <label className="row selectable-row" key={item.id}>
+              <input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => toggle(item.id, event.target.checked)} />
+              <div>
+                <strong>{rewardDisplayTitle(item)}</strong>
+                <span>{item.redeemed_at ? `${formatTime(item.redeemed_at)} 已核销` : "已核销"} · {item.cost_points}积分</span>
+              </div>
+            </label>
+          )) : <Empty text="该孩子没有已核销且可退还的奖励" />}
+        </div>
+        <div className="actions">
+          <button className="primary" disabled={!selected.length} onClick={() => onRefund(selected)}>
+            <RotateCcw size={18} />退还{selected.length ? ` ${selected.length} 项 · ${total} 积分` : ""}
+          </button>
+          <button type="button" className="secondary" onClick={onClose}>取消</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function CreateChild({ onCreate }: { onCreate: (data: any) => void }) {
   const [data, setData] = useState({ username: "", displayName: "", password: "" });
   return (
@@ -1026,7 +1096,7 @@ function ChildManager({ children, onEdit, onToggle, onDelete, onExport, onRefund
 
 function AchievementRuleFields({ data, setData, tasks, categories }: { data: any; setData: (data: any) => void; tasks: Task[]; categories: Category[] }) {
   const needsCustomWindow = ["tasks_custom", "category_tasks_custom", "praise_custom", "no_criticism_custom"].includes(data.condition);
-  const needsTask = data.condition === "same_task_streak";
+  const needsTask = data.condition === "same_task_streak" || data.condition === "specific_task_completed";
   const needsCategory = data.condition.startsWith("category_");
   const needsThreshold = !["no_criticism_week", "no_criticism_month", "no_criticism_custom"].includes(data.condition);
   const targetTaskId = data.targetTaskId || tasks[0]?.id || "";
@@ -1243,12 +1313,15 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 
 function EmojiSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   return (
-    <div className="emoji-picker" role="listbox">
-      {EMOJI_OPTIONS.map((item) => (
-        <button type="button" key={item} className={value === item ? "active" : ""} onClick={() => onChange(item)} title={item}>
-          {item}
-        </button>
-      ))}
+    <div className="emoji-select">
+      <div className="emoji-picker" role="listbox">
+        {EMOJI_OPTIONS.map((item) => (
+          <button type="button" key={item} className={value === item ? "active" : ""} onClick={() => onChange(item)} title={item}>
+            {item}
+          </button>
+        ))}
+      </div>
+      <input className="emoji-custom-input" value={value || ""} onChange={(event) => onChange(event.target.value)} maxLength={4} aria-label="自定义符号" />
     </div>
   );
 }
@@ -1400,7 +1473,7 @@ function Overview({ title, items, kind, children = [], categories = [], tasks = 
             <div className="config-main">
               {icon(item.icon_type, item.icon_value, item.title)}
               <div>
-                <strong>{item.title}</strong>
+                <strong>{kind === "reward" ? rewardDisplayTitle(item) : item.title}</strong>
                 {item.description && <span>{item.description}</span>}
                 <small>
                   {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次 · ${weekdayLabel(item.enabled_weekdays || item.enabledWeekdays)}`}
@@ -1579,7 +1652,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
         <div className="card-head wall-card-head with-pin">
           {icon(reward.icon_type, reward.icon_value, reward.title)}
           <div>
-            <strong>{reward.title}</strong>
+            <strong>{rewardDisplayTitle(reward)}</strong>
             <small>{formatPeriod(reward.limit_period)}</small>
           </div>
           {pinButton("reward", reward)}
@@ -1751,7 +1824,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
                   <div className="card-head wall-card-head with-pin">
                     {icon(reward.icon_type, reward.icon_value, reward.title)}
                     <div>
-                      <strong>{reward.title}</strong>
+                      <strong>{rewardDisplayTitle(reward)}</strong>
                       <small>{formatPeriod(reward.limit_period)}</small>
                     </div>
                     {pinButton("reward", reward)}
@@ -1776,13 +1849,13 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
             <Package /><h2>仓库</h2>
             <button className="secondary" disabled={!warehouse.some((item) => item.status === "redeemed")} onClick={() => void clearRedeemedWarehouse()}>一键清理已核销奖励</button>
           </div>
-          <div className="wall-grid scroll-list">
+          <div className="wall-grid warehouse-grid scroll-list">
             {warehouse.length ? warehouse.map((item) => (
-              <article className={`mini-card wall-card reward-wall-card ${item.status === "redeemed" ? "is-muted redeemed" : ""}`} key={item.id}>
+              <article className={`mini-card wall-card reward-wall-card warehouse-card ${item.status === "redeemed" ? "is-muted redeemed" : ""}`} key={item.id}>
                 <div className="card-head wall-card-head">
                   {icon(item.icon_type, item.icon_value, item.title)}
                   <div>
-                    <strong>{item.title}</strong>
+                    <strong>{rewardDisplayTitle(item)}</strong>
                     <small>{item.status === "redeemed" && item.redeemed_at ? `${new Date(item.redeemed_at).toLocaleDateString("zh-CN")}已核销` : "待家长核销"}</small>
                   </div>
                 </div>

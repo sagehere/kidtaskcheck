@@ -40,6 +40,10 @@ export function periodKey(period: RewardLimitPeriod, input?: string | Date, time
   return `${weekYear}-W${pad(week)}`;
 }
 
+export function prerequisitePeriodKey(period: RewardLimitPeriod, input?: string | Date, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
+  return period === "once" || period === "none" ? null : periodKey(period, input, timezoneOffsetMinutes);
+}
+
 export function weekdayInTimezone(input?: string | Date, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
   return zonedDate(input, timezoneOffsetMinutes).getUTCDay();
 }

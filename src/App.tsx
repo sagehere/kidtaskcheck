@@ -109,8 +109,8 @@ function buildEmojiOptions() {
     });
   }
   for (const source of emojiData as EmojiSource[]) {
+    if (source.short_name?.startsWith("flag-") || source.short_names?.some((n) => n.startsWith("flag-"))) continue;
     add(source, source.unified);
-    for (const variation of Object.values(source.skin_variations || {})) add(source, variation.unified);
   }
   return options.sort((a, b) => a.rank - b.rank || a.category.localeCompare(b.category) || a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 }
@@ -127,9 +127,15 @@ async function api<T>(path: string, options: RequestInit = {}) {
   return payload.data as T;
 }
 
+const ALLOWED_EMOJI = new Set(ALL_EMOJI_OPTIONS.map((item) => item.emoji));
+const DEFAULT_EMOJI = "⭐";
+function normalizeEmoji(value: string) {
+  return value && ALLOWED_EMOJI.has(value) ? value : DEFAULT_EMOJI;
+}
+
 function icon(type: string, value: string, label: string) {
   if (type === "gallery_image") return <img className="visual" src={value} alt={label} />;
-  return <span className="emoji">{value || "⭐"}</span>;
+  return <span className="emoji">{normalizeEmoji(value)}</span>;
 }
 
 function Field(props: { label: string; children: ReactNode }) {
@@ -211,9 +217,12 @@ function formatSource(value: string) {
     task: "任务",
     reward: "奖励兑换",
     reward_cancel: "兑换退回",
+    reward_refund: "奖励退还",
     manual_deduction: "即时扣分",
     praise: "表扬",
-    criticism: "批评"
+    criticism: "批评",
+    recall: "撤回",
+    archive: "归档"
   };
   return labels[value] || value;
 }
@@ -656,6 +665,8 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   const [refundChild, setRefundChild] = useState<Child | null>(null);
   const [refundRows, setRefundRows] = useState<WarehouseItem[]>([]);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  const [recallChildId, setRecallChildId] = useState("");
+  const [recallEvents, setRecallEvents] = useState<any[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const resetTapCount = useRef(0);
@@ -716,6 +727,20 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     await run(() => api(path, { method: "PATCH", body: JSON.stringify(data) }), note);
   }
 
+  async function deleteAchievement(item: any) {
+    if (!window.confirm(`确认删除成就称号「${item.title}」？关联的解锁奖励将被停用，已解锁历史会保留。`)) return;
+    try {
+      setError("");
+      const result = await api<{ disabledUnlockRewardIds?: string[] }>(`/achievements/${item.id}`, { method: "DELETE" });
+      const note = result.disabledUnlockRewardIds?.length
+        ? `成就称号已删除，${result.disabledUnlockRewardIds.length} 个关联的解锁奖励已停用`
+        : "成就称号已删除";
+      setMessage(note);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "操作失败");
+    }
+  }
   async function remove(path: string, note: string, confirmText: string) {
     if (!window.confirm(confirmText)) return;
     await run(() => api(path, { method: "DELETE" }), note);
@@ -776,10 +801,33 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
       () => api(`/children/${data.childId}/feedback-events`, { method: "POST", body: JSON.stringify({ templateId: data.templateId }) }),
       "表扬与批评已记录"
     );
+    if (data.childId === recallChildId) await loadFeedbackEvents(data.childId);
+  }
+
+  async function loadFeedbackEvents(childId: string) {
+    try {
+      const events = await api<any[]>(`/children/${encodeURIComponent(childId)}/feedback-events`);
+      setRecallEvents(events);
+      setRecallChildId(childId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载失败");
+    }
+  }
+
+  async function recallFeedback(ledgerId: string) {
+    await run(
+      () => api(`/feedback-events/${encodeURIComponent(ledgerId)}/recall`, { method: "PATCH", body: JSON.stringify({}) }),
+      "表扬/批评已撤回"
+    );
+    if (recallChildId) await loadFeedbackEvents(recallChildId);
   }
 
   function exportChildPrint(child: Child) {
     window.open(`/api/children/${encodeURIComponent(child.id)}/export-print`, "_blank", "noopener,noreferrer");
+  }
+
+  function reportChild(child: Child, period: "weekly" | "monthly") {
+    window.open(`/api/children/${encodeURIComponent(child.id)}/report?period=${period}`, "_blank", "noopener,noreferrer");
   }
 
   async function refundChildReward(child: Child) {
@@ -847,6 +895,13 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           </div>
           <div className="grid two">
             <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} />
+            <FeedbackRecallPanel
+              children={children}
+              events={recallEvents}
+              selectedChildId={recallChildId}
+              onSelectChild={(id) => { setRecallChildId(id); if (id) loadFeedbackEvents(id); else setRecallEvents([]); }}
+              onRecall={recallFeedback}
+            />
           </div>
         </>
       )}
@@ -855,7 +910,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
         <>
           <div className="grid two">
             <CreateChild onCreate={(data) => create("/children", data, "孩子账号已创建")} />
-            <ChildManager children={children} onEdit={updateChild} onToggle={toggleChild} onDelete={deleteChild} onExport={exportChildPrint} onRefund={(child) => void refundChildReward(child)} />
+            <ChildManager children={children} onEdit={updateChild} onToggle={toggleChild} onDelete={deleteChild} onExport={exportChildPrint} onReport={reportChild} onRefund={(child) => void refundChildReward(child)} />
           </div>
         </>
       )}
@@ -883,7 +938,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           <section className="setting-group">
             <div className="panel-title"><Award /><h2>成就称号</h2></div>
             <CreateAchievement tasks={tasks} categories={categories} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
-            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
+            <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => deleteAchievement(item)} />
           </section>
           <section className="setting-group">
             <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
@@ -1045,6 +1100,47 @@ function PraiseCriticismPanel({ children, templates, onSubmit }: { children: Chi
   );
 }
 
+function FeedbackRecallPanel({ children, events, selectedChildId, onSelectChild, onRecall }: { children: Child[]; events: any[]; selectedChildId: string; onSelectChild: (id: string) => void; onRecall: (ledgerId: string) => void }) {
+  if (!children.length) {
+    return (
+      <section className="panel">
+        <div className="panel-title"><RotateCcw /><h2>撤回表扬/批评</h2></div>
+        <Empty text="先创建孩子账号后再操作" />
+      </section>
+    );
+  }
+  return (
+    <section className="panel">
+      <div className="panel-title"><RotateCcw /><h2>撤回表扬/批评</h2></div>
+      <div className="stack compact">
+        <Field label="孩子">
+          <select value={selectedChildId} onChange={(e) => onSelectChild(e.target.value)}>
+            <option value="">请选择孩子</option>
+            {children.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
+          </select>
+        </Field>
+      </div>
+      {selectedChildId && (
+        <div className="list scroll-list">
+          {events.length ? events.map((item) => (
+            <article className="row" key={item.id}>
+              <div>
+                <strong className={item.amount >= 0 ? "positive" : "negative"}>
+                  {item.source_type === "praise" ? "表扬" : "批评"} · {item.amount >= 0 ? "+" : ""}{item.amount}
+                </strong>
+                <span>{item.title || item.description || formatNotificationSource(item)} · {formatTime(item.created_at)}</span>
+              </div>
+              <div className="actions">
+                <button className="secondary" onClick={() => onRecall(item.id)}><RotateCcw size={14} />撤回</button>
+              </div>
+            </article>
+          )) : <Empty text="近 7 天无可撤回的表扬或批评记录" />}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function LedgerList({ rows }: { rows: LedgerRow[] }) {
   return (
     <div className="list ledger-list">
@@ -1124,7 +1220,7 @@ function CreateChild({ onCreate }: { onCreate: (data: any) => void }) {
   );
 }
 
-function ChildManager({ children, onEdit, onToggle, onDelete, onExport, onRefund }: { children: Child[]; onEdit: (child: Child) => void; onToggle: (child: Child) => void; onDelete: (child: Child) => void; onExport: (child: Child) => void; onRefund: (child: Child) => void }) {
+function ChildManager({ children, onEdit, onToggle, onDelete, onExport, onReport, onRefund }: { children: Child[]; onEdit: (child: Child) => void; onToggle: (child: Child) => void; onDelete: (child: Child) => void; onExport: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onRefund: (child: Child) => void }) {
   return (
     <section className="panel">
       <div className="panel-title"><Users /><h2>孩子账号管理</h2></div>
@@ -1137,6 +1233,8 @@ function ChildManager({ children, onEdit, onToggle, onDelete, onExport, onRefund
             </div>
             <div className="actions">
               <button className="secondary" onClick={() => onEdit(child)}>修改</button>
+              <button className="secondary" onClick={() => onReport(child, "weekly")}>周报</button>
+              <button className="secondary" onClick={() => onReport(child, "monthly")}>月报</button>
               <button className="secondary" onClick={() => onExport(child)}><Printer size={16} />打印导出</button>
               <button className="secondary" onClick={() => onRefund(child)}><RotateCcw size={16} />退还奖励</button>
               <button className="secondary" onClick={() => onToggle(child)}>{child.status === "active" ? "停用" : "启用"}</button>
@@ -1375,7 +1473,7 @@ function EmojiSelect({ value, onChange }: { value: string; onChange: (value: str
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const search = query.trim().toLowerCase();
-  const selected = value || "⭐";
+  const selected = normalizeEmoji(value);
   const visibleOptions = useMemo(() => {
     if (!search) return ALL_EMOJI_OPTIONS;
     return ALL_EMOJI_OPTIONS.filter((item) => item.search.includes(search)).slice(0, 240);
@@ -1391,7 +1489,7 @@ function EmojiSelect({ value, onChange }: { value: string; onChange: (value: str
   }, [open]);
 
   function choose(emoji: string) {
-    onChange(emoji);
+    onChange(normalizeEmoji(emoji));
     setOpen(false);
     setQuery("");
   }
@@ -1416,15 +1514,15 @@ function EmojiSelect({ value, onChange }: { value: string; onChange: (value: str
         {selected}
       </button>
       {open && (
-        <div className="emoji-modal-backdrop" role="presentation" onMouseDown={() => setOpen(false)}>
-          <div className="emoji-modal" role="dialog" aria-modal="true" aria-label="选择 emoji 图标" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="emoji-modal-backdrop" role="presentation" onPointerDown={() => setOpen(false)}>
+          <div className="emoji-modal" role="dialog" aria-modal="true" aria-label="选择 emoji 图标" onPointerDown={(event) => event.stopPropagation()}>
             <div className="emoji-modal-head">
               <div className="emoji-current" aria-label="当前图标">{selected}</div>
               <label className="emoji-search">
                 <Search size={16} />
                 <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 emoji" />
               </label>
-              <button type="button" className="icon" title="关闭" onClick={() => setOpen(false)}><X size={18} /></button>
+              <button type="button" className="icon" title="关闭" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setOpen(false); }}><X size={18} /></button>
             </div>
             <div className="emoji-modal-body">
               {visibleOptions.length ? (

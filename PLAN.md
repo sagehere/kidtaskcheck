@@ -1,131 +1,68 @@
-# 儿童任务打卡激励系统开发计划
+# 数据清理、报告、撤回与 Emoji 修复计划
 
 ## Summary
-从空工作区新建 Cloudflare Pages 响应式 Web 应用，使用 React + TypeScript 前端、Pages Functions API、D1 数据库。第一版完成管理员、家长、子用户三角色闭环：任务打卡、积分结算、奖励兑换/核销、成就称号、任务分类、图像标识和可视化面板。
 
-默认规则：密码登录；管理员通过环境变量初始化；D1 为核心存储；任务由孩子提交、家长审核后结算；跨周期审核按孩子提交时间归属；奖励兑换按申请时间占用周期次数；管理员删除家长时软删除归档该家长及其所有子账户与配置。
+实现一轮后端 + 前端改造：数据库每日懒执行清理；旧明细保留 12 个月并按月归档；奖励退还和已撤回表扬/批评记录保留 7 天；删除成就后停用其解锁奖励；儿童管理中增加周报/月报打印页；Emoji 选择器移除肤色变体和 `flag-` 国家图标，并修复移动端关闭按钮。
 
 ## Key Changes
-- 技术栈：
-  - Vite + React + TypeScript 构建前端。
-  - Cloudflare Pages Functions 提供 `/api/*`。
-  - D1 存储账号、任务、记录、积分、奖励、成就、分类、图库等核心数据。
-  - 首版不强依赖 KV/R2；图像使用 Emoji 和管理员维护的内置图库 URL。
 
-- 角色与权限：
-  - 管理员管理家长用户、系统参数、默认任务分类、内置图库。
-  - 家长管理自己的孩子、任务、分类、奖励、成就、审核与核销。
-  - 子用户完成任务、查看积分、兑换奖励、查看成就。
-  - 家长与子用户数据严格按归属隔离。
+- 新增迁移 `0010_retention_reports_feedback_recall.sql`：
+  
+  - `point_ledger` 增加 `revoked_at`、`revoke_ledger_id`、`retention_until`，用于表扬/批评撤回和 7 天清理。
+  - `reward_redemptions` 增加 `refunded_at`、`retention_until`，区分“待核销取消”和“已核销退还”。
+  - 新增 `activity_archives`，按 `parent_id + child_id + month_key` 汇总旧明细的净积分、任务数、奖励数、表扬/批评数、成就数等。
+  - `system_settings` 增加清理配置键：`cleanup_last_run_at`、`detail_retention_days=365`、`short_record_retention_days=7`。
 
-- 删除策略：
-  - 管理员删除家长用户时执行软删除。
-  - 该家长、其子用户、任务、分类、奖励、成就、待处理记录都标记为不可用。
-  - 历史审核、兑换、积分流水保留，用于审计和误删恢复。
-  - 被删除的家长和子用户不能登录，前台列表默认不显示。
+- 数据清理机制：
+  
+  - 在后端 bootstrap 后执行 `maybeRunMaintenance(env)`，每天最多运行一次。
+  - 7 天后清理奖励退还记录：删除 `reward_refund` 流水、对应原奖励扣分流水、退还通知、已退还 redemption，确保净积分不变。
+  - 7 天后清理已撤回表扬/批评：删除原反馈流水、反向冲正流水、相关通知，确保净积分不变。
+  - 12 个月前的非待处理任务、奖励、通知、成就解锁等明细先写入 `activity_archives`，再删除明细；余额通过保留/生成月度汇总流水保证仍可由 `point_ledger` 求和得出。
+  - 已软删配置超过 12 个月且无仍保留明细引用后再硬删除；软删家长及其子数据超过 12 个月后整体清理。
 
-- 图像与分类：
-  - 任务、任务分类、奖励、成就均支持视觉标识。
-  - 标识类型支持 `emoji` 和 `gallery_image`。
-  - 管理员维护系统图库，家长可从图库中选择图片。
-  - 任务分类支持系统默认分类和家长自定义分类；默认分类包括学习、劳动、品德等，家长可新增、禁用或调整自己的分类。
-  - 每个任务必须选择一个分类，可选图像标识用于孩子端展示。
+- 成就删除后的奖励处理：
+  
+  - `deleteAchievementWithExclusiveReward` 改为查找 `unlock_reward_id` 指向被删成就的奖励。
+  - 删除成就时软删成就、删除对应 `child_achievements` 可见关联，并将该成就解锁的奖励设为 `is_active=0`。
+  - 返回 `{ disabledUnlockRewardIds: [...] }`，前端提示“成就已删除，关联奖励已停用”。
 
-- 任务系统：
-  - 任务支持每日、每周、每月、一次性周期。
-  - 任务支持加分和扣分。
-  - 任务可分配给一个或多个孩子。
-  - 孩子在当前可用周期内提交完成记录；同一任务同一孩子同一周期只能有一条有效通过记录。
-  - 任务完成情况按周期自动重置：新周期开始后孩子可再次提交周期性任务。
-  - 跨周期审核按提交时间归属：例如周日提交、周一审核，通过后仍计入周日所在周期，并影响该周期完成率和连续打卡。
+- 表扬/批评撤回：
+  
+  - 新增 `GET /api/children/:id/feedback-events`，儿童管理中展示近 7 天可撤回反馈。
+  - 新增 `PATCH /api/feedback-events/:ledgerId/recall`。
+  - 撤回时插入一条反向冲正流水，原流水标记 `revoked_at`，对应孩子通知改为“已撤回”并保留 7 天。
+  - 成就重算时排除 `revoked_at IS NOT NULL` 的表扬/批评，避免已撤回反馈继续影响表扬/未批评类成就。
 
-- 积分系统：
-  - 积分余额由 `point_ledger` 流水汇总计算。
-  - 家长审核任务通过后写入积分流水。
-  - 加分任务增加积分，扣分任务减少积分。
-  - 驳回任务不产生积分流水。
-  - 积分流水记录来源类型、来源 ID、归属孩子、积分值、业务发生周期和创建时间。
+- 周/月度报告：
+  
+  - 新增 `GET /api/children/:id/report?period=weekly|monthly&anchor=YYYY-MM-DD`，返回可打印 HTML。
+  - 儿童管理每个孩子增加“周报”“月报”按钮，默认生成当前系统时区内的本周/本月报告。
+  - 报告包含：周期范围、当前余额、周期积分变化、任务完成/驳回/待审统计、奖励申请/核销/退还统计、表扬/批评记录、成就解锁、分类完成分布。
+  - 新增 domain helper 计算周/月报告窗口，并同步更新 `src/lib/domain.ts` 与 `src/lib/domain.js`。
 
-- 奖励兑换/核销：
-  - 奖励支持图像标识、所需积分、库存、适用孩子、启用状态。
-  - 奖励可设置周期兑换次数限制，周期支持每日、每周、每月或不限。
-  - 孩子兑换时校验积分、库存、适用范围和当前周期兑换次数。
-  - 兑换申请成功后立即扣积分，并生成待核销记录。
-  - 周期次数限制按兑换申请时间计算；家长跨周期核销不改变原周期占用。
-  - 家长可核销已兑换奖励；未核销兑换可取消并退回积分。
-
-- 成就称号：
-  - 成就由家长配置，支持图像标识、称号名、说明、统计条件和阈值。
-  - 第一版自动解锁，不做手动授予。
-  - 统计条件包括累计获得积分、当前积分余额、累计完成任务数、连续打卡天数、累计兑换奖励次数。
-  - 任务审核通过、奖励兑换、兑换取消后触发对应孩子的成就重新计算。
-  - 跨周期任务按提交周期参与统计。
-
-- 面板界面：
-  - 家长端采用行动优先面板：待审核任务、待核销奖励、孩子积分概览、今日/本周完成情况、异常提醒。
-  - 子用户端采用行动优先面板：当前周期任务、积分余额、可兑换奖励、近期成就、分类化任务入口。
-  - 面板提供进度条、徽章、分类图标、奖励图像、成就墙等可视化元素。
-  - 响应式设计优先照顾手机端孩子使用，同时保证桌面端家长管理效率。
-
-## Public Interfaces
-- API 统一使用 `/api/*`：
-  - `POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/auth/me`
-  - `GET/POST/PATCH/DELETE /api/admin/users`
-  - `GET/POST/PATCH/DELETE /api/admin/gallery-images`
-  - `GET/POST/PATCH/DELETE /api/children`
-  - `GET/POST/PATCH/DELETE /api/task-categories`
-  - `GET/POST/PATCH/DELETE /api/tasks`
-  - `POST /api/task-submissions`、`PATCH /api/task-submissions/:id/review`
-  - `GET/POST/PATCH/DELETE /api/rewards`
-  - `POST /api/reward-redemptions`、`PATCH /api/reward-redemptions/:id/redeem`、`PATCH /api/reward-redemptions/:id/cancel`
-  - `GET/POST/PATCH/DELETE /api/achievements`
-  - `GET /api/points/ledger`
-  - `GET /api/dashboard/parent`、`GET /api/dashboard/child`
-- API 响应统一 JSON：成功返回 `data`，失败返回 `error.code` 和 `error.message`。
-- 会话使用 HttpOnly Cookie；密码使用安全哈希存储。
-
-## Data Model
-- `users`：管理员和家长账号，包含角色、用户名、密码哈希、状态、删除标记。
-- `children`：子账户，归属家长，包含账号、密码哈希、状态、删除标记。
-- `gallery_images`：管理员维护的图库图片，包含名称、URL、用途、启用状态。
-- `task_categories`：系统默认分类和家长自定义分类，包含名称、图像标识、归属用户。
-- `tasks`：任务定义，包含周期、积分类型、积分值、分类、图像标识、启用状态。
-- `task_assignees`：任务适用孩子。
-- `task_submissions`：孩子提交记录，包含提交时间、归属周期、审核状态、审核时间。
-- `point_ledger`：积分流水，记录积分变动来源和归属周期。
-- `rewards`：奖励定义，包含图像标识、所需积分、库存、周期兑换限制。
-- `reward_assignees`：奖励适用孩子。
-- `reward_redemptions`：兑换记录，包含申请时间、归属周期、核销状态、取消状态。
-- `achievements`：成就定义，包含图像标识、统计类型、阈值、启用状态。
-- `child_achievements`：孩子已解锁成就。
-- `system_settings`：系统参数和初始化状态。
+- Emoji 与移动端修复：
+  
+  - `buildEmojiOptions` 不再加入 `skin_variations`，只保留默认黄皮肤基础 emoji。
+  - 过滤 `short_name` 或 `short_names` 以 `flag-` 开头的国家旗帜图标。
+  - 已保存的不允许 emoji 在 UI 中回退显示默认图标，编辑保存后写入允许图标。
+  - Emoji 弹层关闭逻辑改为 pointer 事件：backdrop 用 `onPointerDown`，弹层内部阻止冒泡，关闭按钮显式 `preventDefault + stopPropagation + setOpen(false)`，并加移动端尺寸/层级检查。
 
 ## Test Plan
-- 单元测试：
-  - 每日、每周、每月、一次性任务周期计算和自动重置。
-  - 跨周期提交/审核归属：按提交时间计入原周期。
-  - 奖励周期兑换限制：按申请时间占用周期次数。
-  - 积分流水汇总、加分任务、扣分任务、兑换扣分、取消退分。
-  - 成就自动解锁统计。
-- API 测试：
-  - 三角色登录和权限隔离。
-  - 家长不能访问其他家长的数据。
-  - 子用户不能提交未分配任务或兑换未分配奖励。
-  - 重复提交、余额不足、库存不足、超出周期兑换次数、重复核销等失败场景。
-  - 管理员删除家长后，该家长和所有子用户均不可登录。
-- 前端验收：
-  - 管理员可维护家长、系统图库和默认分类。
-  - 家长可维护孩子、分类、任务、奖励、成就，并完成审核/核销。
-  - 子用户可按分类查看任务、提交任务、查看积分、兑换奖励、查看成就墙。
-  - 家长和子用户面板在手机与桌面端无明显溢出、遮挡或不可操作控件。
-- 部署验收：
-  - 本地 `wrangler pages dev` 可运行。
-  - D1 migration 可从空库初始化。
-  - Cloudflare Pages 绑定 D1 后可完成完整业务闭环。
+
+- `npm test`：补充报告周/月窗口、归档汇总计算、撤回后成就统计排除逻辑的单元测试。
+- `npm run build`：验证 TypeScript 和 Vite 构建。
+- `npm run db:migrate:local`：验证新迁移可应用。
+- 手动浏览器验证：
+  - 移动端打开 Emoji 选择框，关闭按钮和点击遮罩都可关闭。
+  - 删除成就后，关联奖励在孩子端不可见、家长端显示停用。
+  - 表扬/批评撤回后积分恢复、孩子通知显示已撤回、7 天后清理策略不破坏余额。
+  - 儿童管理周报/月报可打开并打印。
 
 ## Assumptions
-- 第一版不做第三方登录、短信、邮箱验证、支付和推送通知。
-- 第一版图像不做用户上传，使用 Emoji 和管理员配置的图库图片 URL。
-- 删除采用软删除归档，不物理清除历史数据。
-- 成就第一版只支持自动解锁，不支持家长手动授予。
-- KV/R2 可作为后续扩展，不进入首版必需范围。
+
+- 旧明细保留周期采用用户选择的 12 个月。
+- 删除成就后采用用户选择的“停用该奖励”，不一并删除奖励。
+- 表扬/批评撤回采用用户选择的“显示已撤回 7 天”。
+- 数据清理采用用户选择的“每日懒执行”，不新增 Cloudflare Cron。
+- 报告采用用户选择的“网页打印版”。

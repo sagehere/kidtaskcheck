@@ -184,3 +184,43 @@ export function daysWithoutEvents(inputs: (string | Date)[], input?: string | Da
   }
   return days;
 }
+
+export type ReportPeriod = "weekly" | "monthly";
+
+export function reportWindowRange(
+  period: ReportPeriod,
+  input?: string | Date,
+  timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES
+) {
+  const date = zonedDate(input, timezoneOffsetMinutes);
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const day = date.getUTCDate();
+
+  if (period === "monthly") {
+    return {
+      start: utcFromZonedParts(year, month, 1, timezoneOffsetMinutes).toISOString(),
+      end: utcFromZonedParts(year, month + 1, 1, timezoneOffsetMinutes).toISOString()
+    };
+  }
+
+  const weekday = date.getUTCDay() || 7;
+  return {
+    start: utcFromZonedParts(year, month, day - weekday + 1, timezoneOffsetMinutes).toISOString(),
+    end: utcFromZonedParts(year, month, day + (8 - weekday), timezoneOffsetMinutes).toISOString()
+  };
+}
+
+export function reportPeriodLabel(period: ReportPeriod, input?: string | Date, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
+  const range = reportWindowRange(period, input, timezoneOffsetMinutes);
+  const format = (iso: string) => {
+    const d = zonedDate(iso, timezoneOffsetMinutes);
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  };
+  return `${format(range.start)} 至 ${format(new Date(new Date(range.end).getTime() - 1).toISOString())}`;
+}
+
+export function reportMonthKey(input?: string | Date, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
+  const date = zonedDate(input, timezoneOffsetMinutes);
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}`;
+}

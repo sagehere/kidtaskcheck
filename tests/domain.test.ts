@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, signedPoints, weekdayInTimezone } from "../src/lib/domain";
+import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints, weekdayInTimezone } from "../src/lib/domain";
 
 describe("periodKey", () => {
   it("calculates daily, weekly, monthly and once keys in the default UTC+8 timezone", () => {
@@ -85,6 +85,21 @@ describe("achievement windows", () => {
     expect(inAchievementWindow("2026-09-01T00:00:00.000Z", "custom", "2026-10-01T00:00:00.000Z", 480, "2026-09-01", "2027-01-20")).toBe(true);
     expect(inAchievementWindow("2027-01-20T15:59:59.000Z", "custom", "2026-10-01T00:00:00.000Z", 480, "2026-09-01", "2027-01-20")).toBe(true);
     expect(inAchievementWindow("2027-01-20T16:00:00.000Z", "custom", "2026-10-01T00:00:00.000Z", 480, "2026-09-01", "2027-01-20")).toBe(false);
+  });
+});
+
+describe("report windows", () => {
+  it("builds weekly and monthly report windows in the configured timezone", () => {
+    expect(reportWindowRange("weekly", "2026-05-27T10:00:00.000Z")).toEqual({
+      start: "2026-05-24T16:00:00.000Z",
+      end: "2026-05-31T16:00:00.000Z",
+      label: "2026-W22"
+    });
+    expect(reportWindowRange("monthly", "2026-05-27T10:00:00.000Z")).toEqual({
+      start: "2026-04-30T16:00:00.000Z",
+      end: "2026-05-31T16:00:00.000Z",
+      label: "2026-05"
+    });
   });
 });
 

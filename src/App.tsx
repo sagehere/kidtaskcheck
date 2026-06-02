@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Award,
   BadgeCheck,
@@ -47,6 +47,7 @@ type FeedbackTemplate = Record<string, any> & { id: string; kind: "praise" | "cr
 type Notification = { id: string; title: string; body: string; event_type?: string; related_type?: string | null; related_id?: string | null; requires_ack?: number; read_at: string | null; created_at: string; sourceLabel?: string; sourceTypeLabel?: string };
 type LedgerRow = { id: string; amount: number; source_type: string; sourceLabel?: string; sourceTypeLabel?: string; note: string; created_at: string; localCreatedAt?: string; period_key?: string | null };
 type WarehouseItem = Record<string, any> & { id: string; title: string; status: "pending" | "redeemed" | "cancelled"; redeemed_at?: string | null };
+type FeedbackEvent = Record<string, any> & { id: string; source_type: "praise" | "criticism"; amount: number; note: string; created_at: string; localCreatedAt?: string; template_title?: string; revoked_at?: string | null };
 type LedgerResponse = { items: LedgerRow[]; timezoneOffsetMinutes: number; timezoneLabel: string };
 type SystemSettings = { timezoneOffsetMinutes: number; timezoneLabel: string };
 const REFRESH_INTERVAL_MS = 12000;
@@ -109,8 +110,9 @@ function buildEmojiOptions() {
     });
   }
   for (const source of emojiData as EmojiSource[]) {
+    const names = source.short_names?.length ? source.short_names : [source.short_name];
+    if (names.some((name) => name?.startsWith("flag-"))) continue;
     add(source, source.unified);
-    for (const variation of Object.values(source.skin_variations || {})) add(source, variation.unified);
   }
   return options.sort((a, b) => a.rank - b.rank || a.category.localeCompare(b.category) || a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 }
@@ -655,6 +657,8 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
   const [ledgerChild, setLedgerChild] = useState<{ id: string; display_name: string } | null>(null);
   const [refundChild, setRefundChild] = useState<Child | null>(null);
   const [refundRows, setRefundRows] = useState<WarehouseItem[]>([]);
+  const [feedbackChild, setFeedbackChild] = useState<Child | null>(null);
+  const [feedbackRows, setFeedbackRows] = useState<FeedbackEvent[]>([]);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -782,6 +786,10 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     window.open(`/api/children/${encodeURIComponent(child.id)}/export-print`, "_blank", "noopener,noreferrer");
   }
 
+  function exportChildReport(child: Child, period: "weekly" | "monthly") {
+    window.open(`/api/children/${encodeURIComponent(child.id)}/report?period=${period}`, "_blank", "noopener,noreferrer");
+  }
+
   async function refundChildReward(child: Child) {
     const rows = await api<WarehouseItem[]>(`/children/${encodeURIComponent(child.id)}/warehouse`).catch(() => []);
     setRefundRows(rows);
@@ -796,6 +804,24 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
     );
     setRefundChild(null);
     setRefundRows([]);
+  }
+
+  async function openFeedbackRecall(child: Child) {
+    const rows = await api<FeedbackEvent[]>(`/children/${encodeURIComponent(child.id)}/feedback-events`).catch(() => []);
+    setFeedbackRows(rows);
+    setFeedbackChild(child);
+  }
+
+  async function recallFeedback(id: string) {
+    if (!window.confirm("确认撤回这条表扬/批评？积分会自动冲正。")) return;
+    await run(
+      () => api(`/feedback-events/${encodeURIComponent(id)}/recall`, { method: "PATCH", body: JSON.stringify({}) }),
+      "表扬/批评已撤回"
+    );
+    if (feedbackChild) {
+      const rows = await api<FeedbackEvent[]>(`/children/${encodeURIComponent(feedbackChild.id)}/feedback-events`).catch(() => []);
+      setFeedbackRows(rows);
+    }
   }
 
   return (
@@ -855,7 +881,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
         <>
           <div className="grid two">
             <CreateChild onCreate={(data) => create("/children", data, "孩子账号已创建")} />
-            <ChildManager children={children} onEdit={updateChild} onToggle={toggleChild} onDelete={deleteChild} onExport={exportChildPrint} onRefund={(child) => void refundChildReward(child)} />
+            <ChildManager children={children} onEdit={updateChild} onToggle={toggleChild} onDelete={deleteChild} onExport={exportChildPrint} onReport={exportChildReport} onRefund={(child) => void refundChildReward(child)} onFeedbackRecall={(child) => void openFeedbackRecall(child)} />
           </div>
         </>
       )}
@@ -900,6 +926,14 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
           rows={refundRows}
           onClose={() => { setRefundChild(null); setRefundRows([]); }}
           onRefund={(ids) => void refundSelectedRewards(ids)}
+        />
+      )}
+      {feedbackChild && (
+        <FeedbackRecallDialog
+          child={feedbackChild}
+          rows={feedbackRows}
+          onClose={() => { setFeedbackChild(null); setFeedbackRows([]); }}
+          onRecall={(id) => void recallFeedback(id)}
         />
       )}
     </Shell>
@@ -1113,6 +1147,34 @@ function RefundRewardDialog({ child, rows, onRefund, onClose }: { child: Child; 
   );
 }
 
+function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child: Child; rows: FeedbackEvent[]; onRecall: (id: string) => void; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <section className="panel refund-modal">
+        <div className="panel-title compact-title">
+          <RotateCcw />
+          <h2>撤回反馈</h2>
+          <button type="button" className="secondary" onClick={onClose}>关闭</button>
+        </div>
+        <p className="muted-text">{child.display_name} 近7天的表扬与批评可在这里撤回。撤回后积分会自动冲正，记录保留7天。</p>
+        <div className="list scroll-list refund-list">
+          {rows.length ? rows.map((item) => (
+            <article className="row" key={item.id}>
+              <div>
+                <strong>{item.source_type === "praise" ? "表扬" : "批评"} · {item.template_title || item.note || "反馈"}</strong>
+                <span>{item.localCreatedAt || formatTime(item.created_at)} · {item.amount >= 0 ? "+" : ""}{item.amount} 积分{item.revoked_at ? " · 已撤回" : ""}</span>
+              </div>
+              <button className="secondary" disabled={!!item.revoked_at} onClick={() => onRecall(item.id)}>
+                <RotateCcw size={16} />撤回
+              </button>
+            </article>
+          )) : <Empty text="近7天没有可撤回的表扬或批评" />}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function CreateChild({ onCreate }: { onCreate: (data: any) => void }) {
   const [data, setData] = useState({ username: "", displayName: "", password: "" });
   return (
@@ -1124,7 +1186,7 @@ function CreateChild({ onCreate }: { onCreate: (data: any) => void }) {
   );
 }
 
-function ChildManager({ children, onEdit, onToggle, onDelete, onExport, onRefund }: { children: Child[]; onEdit: (child: Child) => void; onToggle: (child: Child) => void; onDelete: (child: Child) => void; onExport: (child: Child) => void; onRefund: (child: Child) => void }) {
+function ChildManager({ children, onEdit, onToggle, onDelete, onExport, onReport, onRefund, onFeedbackRecall }: { children: Child[]; onEdit: (child: Child) => void; onToggle: (child: Child) => void; onDelete: (child: Child) => void; onExport: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onRefund: (child: Child) => void; onFeedbackRecall: (child: Child) => void }) {
   return (
     <section className="panel">
       <div className="panel-title"><Users /><h2>孩子账号管理</h2></div>
@@ -1137,7 +1199,10 @@ function ChildManager({ children, onEdit, onToggle, onDelete, onExport, onRefund
             </div>
             <div className="actions">
               <button className="secondary" onClick={() => onEdit(child)}>修改</button>
-              <button className="secondary" onClick={() => onExport(child)}><Printer size={16} />打印导出</button>
+              <button className="secondary" onClick={() => onExport(child)}><Printer size={16} />打印清单</button>
+              <button className="secondary" onClick={() => onReport(child, "weekly")}><Printer size={16} />周报</button>
+              <button className="secondary" onClick={() => onReport(child, "monthly")}><Printer size={16} />月报</button>
+              <button className="secondary" onClick={() => onFeedbackRecall(child)}><RotateCcw size={16} />撤回反馈</button>
               <button className="secondary" onClick={() => onRefund(child)}><RotateCcw size={16} />退还奖励</button>
               <button className="secondary" onClick={() => onToggle(child)}>{child.status === "active" ? "停用" : "启用"}</button>
               <button className="icon danger" title="归档" onClick={() => onDelete(child)}><Trash2 size={18} /></button>
@@ -1396,6 +1461,12 @@ function EmojiSelect({ value, onChange }: { value: string; onChange: (value: str
     setQuery("");
   }
 
+  function closePicker(event?: { preventDefault: () => void; stopPropagation: () => void }) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    setOpen(false);
+  }
+
   function EmojiButton({ item }: { item: EmojiOption }) {
     return (
       <button
@@ -1416,15 +1487,15 @@ function EmojiSelect({ value, onChange }: { value: string; onChange: (value: str
         {selected}
       </button>
       {open && (
-        <div className="emoji-modal-backdrop" role="presentation" onMouseDown={() => setOpen(false)}>
-          <div className="emoji-modal" role="dialog" aria-modal="true" aria-label="选择 emoji 图标" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="emoji-modal-backdrop" role="presentation" onPointerDown={closePicker}>
+          <div className="emoji-modal" role="dialog" aria-modal="true" aria-label="选择 emoji 图标" onPointerDown={(event) => event.stopPropagation()}>
             <div className="emoji-modal-head">
               <div className="emoji-current" aria-label="当前图标">{selected}</div>
               <label className="emoji-search">
                 <Search size={16} />
                 <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 emoji" />
               </label>
-              <button type="button" className="icon" title="关闭" onClick={() => setOpen(false)}><X size={18} /></button>
+              <button type="button" className="icon emoji-close" title="关闭" onPointerDown={closePicker} onClick={closePicker}><X size={18} /></button>
             </div>
             <div className="emoji-modal-body">
               {visibleOptions.length ? (

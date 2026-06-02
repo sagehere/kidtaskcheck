@@ -356,6 +356,11 @@ button.child-tile {
   border-bottom: 1px solid #e8dfd0;
 }
 
+.emoji-close {
+  touch-action: manipulation;
+  z-index: 1;
+}
+
 .emoji-current {
   display: inline-grid;
   place-items: center;

@@ -97,6 +97,7 @@ export function todayKey(input?: string | Date, timezoneOffsetMinutes = DEFAULT_
 }
 
 export type AchievementWindowType = "all_time" | "current_week" | "current_month" | "custom";
+export type ReportPeriod = "weekly" | "monthly";
 
 export function localDateKey(input?: string | Date, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
   return todayKey(input, timezoneOffsetMinutes);
@@ -138,6 +139,34 @@ export function achievementWindowRange(
   return {
     start: utcFromZonedParts(year, month, day - weekday + 1, timezoneOffsetMinutes).toISOString(),
     end: utcFromZonedParts(year, month, day + (8 - weekday), timezoneOffsetMinutes).toISOString()
+  };
+}
+
+export function reportWindowRange(
+  period: ReportPeriod,
+  input?: string | Date,
+  timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES
+) {
+  const date = zonedDate(input, timezoneOffsetMinutes);
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const day = date.getUTCDate();
+
+  if (period === "monthly") {
+    return {
+      start: utcFromZonedParts(year, month, 1, timezoneOffsetMinutes).toISOString(),
+      end: utcFromZonedParts(year, month + 1, 1, timezoneOffsetMinutes).toISOString(),
+      label: `${year}-${pad(month + 1)}`
+    };
+  }
+
+  const weekday = date.getUTCDay() || 7;
+  const startDate = utcFromZonedParts(year, month, day - weekday + 1, timezoneOffsetMinutes);
+  const endDate = utcFromZonedParts(year, month, day + (8 - weekday), timezoneOffsetMinutes);
+  return {
+    start: startDate.toISOString(),
+    end: endDate.toISOString(),
+    label: periodKey("weekly", input, timezoneOffsetMinutes)
   };
 }
 

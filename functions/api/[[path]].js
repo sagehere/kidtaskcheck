@@ -1,4 +1,4 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, DEFAULT_WEEKDAYS, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, signedPoints, weekdayInTimezone } from "../../src/lib/domain.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, DEFAULT_WEEKDAYS, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints, weekdayInTimezone } from "../../src/lib/domain.js";
 const json = (data, init) => new Response(JSON.stringify(data), {
     ...init,
     headers: { "content-type": "application/json; charset=utf-8", ...(init?.headers || {}) }
@@ -8,6 +8,7 @@ const fail = (code, message, status = 400) => json({ error: { code, message } },
 const nowIso = () => new Date().toISOString();
 const id = () => crypto.randomUUID();
 const PBKDF2_ITERATIONS = 100000;
+const DAY_MS = 86400000;
 let bootstrapPromise = null;
 const clampTimezoneOffset = (value) => Math.max(-840, Math.min(840, Number(value)));
 async function hashPassword(password) {
@@ -199,6 +200,119 @@ async function ensureIterationSchema(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_redemptions_child_status ON reward_redemptions(child_id, status, requested_at)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_submissions_child_task_status ON task_submissions(child_id, task_id, status)").run();
 }
+async function ensureRetentionSchema(env) {
+    await ensureColumn(env, "point_ledger", "revoked_at", "revoked_at TEXT");
+    await ensureColumn(env, "point_ledger", "revoke_ledger_id", "revoke_ledger_id TEXT REFERENCES point_ledger(id)");
+    await ensureColumn(env, "point_ledger", "retention_until", "retention_until TEXT");
+    await ensureColumn(env, "reward_redemptions", "refunded_at", "refunded_at TEXT");
+    await ensureColumn(env, "reward_redemptions", "retention_until", "retention_until TEXT");
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS activity_archives (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT NOT NULL REFERENCES users(id),
+  child_id TEXT NOT NULL REFERENCES children(id),
+  month_key TEXT NOT NULL,
+  net_points INTEGER NOT NULL DEFAULT 0,
+  tasks_approved INTEGER NOT NULL DEFAULT 0,
+  tasks_rejected INTEGER NOT NULL DEFAULT 0,
+  rewards_requested INTEGER NOT NULL DEFAULT 0,
+  rewards_redeemed INTEGER NOT NULL DEFAULT 0,
+  rewards_cancelled INTEGER NOT NULL DEFAULT 0,
+  praise_count INTEGER NOT NULL DEFAULT 0,
+  criticism_count INTEGER NOT NULL DEFAULT 0,
+  achievements_unlocked INTEGER NOT NULL DEFAULT 0,
+  archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(parent_id, child_id, month_key)
+)`).run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_activity_archives_child_month ON activity_archives(child_id, month_key)").run();
+    await env.DB.prepare(`INSERT OR IGNORE INTO system_settings (key, value) VALUES
+('detail_retention_days', '365'),
+('short_record_retention_days', '7'),
+('cleanup_last_run_at', '')`).run();
+}
+async function settingNumber(env, key, fallback) {
+    const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key=?").bind(key).first();
+    const value = Number(row?.value);
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+async function updateSetting(env, key, value) {
+    await env.DB.prepare("INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at")
+        .bind(key, String(value), nowIso())
+        .run();
+}
+async function cleanupShortRetention(env, cutoffIso) {
+    const refunded = (await env.DB.prepare("SELECT id FROM reward_redemptions WHERE refunded_at IS NOT NULL AND retention_until IS NOT NULL AND retention_until<=?").bind(cutoffIso).all()).results.map((row) => row.id);
+    for (const redemptionId of refunded) {
+        await env.DB.prepare("DELETE FROM notifications WHERE related_type='reward_redemption' AND related_id=?").bind(redemptionId).run();
+        await env.DB.prepare("DELETE FROM point_ledger WHERE source_id=? AND source_type IN ('reward','reward_refund')").bind(redemptionId).run();
+        await env.DB.prepare("DELETE FROM reward_redemptions WHERE id=?").bind(redemptionId).run();
+    }
+    const recalled = (await env.DB.prepare("SELECT id, revoke_ledger_id FROM point_ledger WHERE revoked_at IS NOT NULL AND retention_until IS NOT NULL AND retention_until<=?").bind(cutoffIso).all()).results;
+    for (const row of recalled) {
+        await env.DB.prepare("DELETE FROM notifications WHERE related_type='point_ledger' AND related_id IN (?, ?)").bind(row.id, row.revoke_ledger_id || "").run();
+        await env.DB.prepare("DELETE FROM point_ledger WHERE id IN (?, ?)").bind(row.id, row.revoke_ledger_id || "").run();
+    }
+}
+async function archiveOldActivity(env, cutoffIso) {
+    const groups = (await env.DB.prepare(`SELECT child_id, parent_id, substr(created_at, 1, 7) month_key, COALESCE(SUM(amount), 0) net_points
+FROM point_ledger
+WHERE created_at<? AND source_type!='activity_archive'
+GROUP BY child_id, parent_id, substr(created_at, 1, 7)`).bind(cutoffIso).all()).results;
+    for (const group of groups) {
+        const archiveId = `archive:${group.child_id}:${group.month_key}`;
+        const monthStart = `${group.month_key}-01T00:00:00.000Z`;
+        const monthEnd = new Date(Date.UTC(Number(group.month_key.slice(0, 4)), Number(group.month_key.slice(5, 7)), 1)).toISOString();
+        const [tasksApproved, tasksRejected, rewardsRequested, rewardsRedeemed, rewardsCancelled, praiseCount, criticismCount, achievementsUnlocked] = await Promise.all([
+            env.DB.prepare("SELECT COUNT(*) v FROM task_submissions WHERE child_id=? AND status='approved' AND submitted_at>=? AND submitted_at<?").bind(group.child_id, monthStart, monthEnd).first(),
+            env.DB.prepare("SELECT COUNT(*) v FROM task_submissions WHERE child_id=? AND status='rejected' AND submitted_at>=? AND submitted_at<?").bind(group.child_id, monthStart, monthEnd).first(),
+            env.DB.prepare("SELECT COUNT(*) v FROM reward_redemptions WHERE child_id=? AND requested_at>=? AND requested_at<?").bind(group.child_id, monthStart, monthEnd).first(),
+            env.DB.prepare("SELECT COUNT(*) v FROM reward_redemptions WHERE child_id=? AND status='redeemed' AND redeemed_at>=? AND redeemed_at<?").bind(group.child_id, monthStart, monthEnd).first(),
+            env.DB.prepare("SELECT COUNT(*) v FROM reward_redemptions WHERE child_id=? AND status='cancelled' AND cancelled_at>=? AND cancelled_at<?").bind(group.child_id, monthStart, monthEnd).first(),
+            env.DB.prepare("SELECT COUNT(*) v FROM point_ledger WHERE child_id=? AND source_type='praise' AND revoked_at IS NULL AND created_at>=? AND created_at<?").bind(group.child_id, monthStart, monthEnd).first(),
+            env.DB.prepare("SELECT COUNT(*) v FROM point_ledger WHERE child_id=? AND source_type='criticism' AND revoked_at IS NULL AND created_at>=? AND created_at<?").bind(group.child_id, monthStart, monthEnd).first(),
+            env.DB.prepare("SELECT COUNT(*) v FROM child_achievements WHERE child_id=? AND unlocked_at>=? AND unlocked_at<?").bind(group.child_id, monthStart, monthEnd).first()
+        ]);
+        await env.DB.prepare(`INSERT OR IGNORE INTO activity_archives (
+  id, parent_id, child_id, month_key, net_points, tasks_approved, tasks_rejected,
+  rewards_requested, rewards_redeemed, rewards_cancelled, praise_count, criticism_count, achievements_unlocked, archived_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .bind(archiveId, group.parent_id, group.child_id, group.month_key, Number(group.net_points || 0), Number(tasksApproved?.v || 0), Number(tasksRejected?.v || 0), Number(rewardsRequested?.v || 0), Number(rewardsRedeemed?.v || 0), Number(rewardsCancelled?.v || 0), Number(praiseCount?.v || 0), Number(criticismCount?.v || 0), Number(achievementsUnlocked?.v || 0), nowIso())
+            .run();
+        const ledger = await env.DB.prepare("SELECT id FROM point_ledger WHERE source_type='activity_archive' AND source_id=?").bind(archiveId).first();
+        if (!ledger && Number(group.net_points || 0) !== 0) {
+            await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, created_at) VALUES (?, ?, ?, ?, 'activity_archive', ?, ?, ?, ?)")
+                .bind(id(), group.child_id, group.parent_id, Number(group.net_points || 0), archiveId, group.month_key, "月度历史汇总", monthEnd)
+                .run();
+        }
+    }
+    await env.DB.prepare("DELETE FROM point_ledger WHERE created_at<? AND source_type!='activity_archive'").bind(cutoffIso).run();
+    await env.DB.prepare("DELETE FROM task_submissions WHERE submitted_at<? AND status!='pending'").bind(cutoffIso).run();
+    await env.DB.prepare("DELETE FROM reward_redemptions WHERE requested_at<? AND status!='pending'").bind(cutoffIso).run();
+    await env.DB.prepare("DELETE FROM notifications WHERE created_at<? AND read_at IS NOT NULL").bind(cutoffIso).run();
+}
+async function hardDeleteSoftDeleted(env, cutoffIso) {
+    await env.DB.prepare("DELETE FROM sessions WHERE expires_at<?").bind(nowIso()).run();
+    await env.DB.prepare("DELETE FROM task_assignees WHERE task_id IN (SELECT id FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at<?)").bind(cutoffIso).run();
+    await env.DB.prepare("DELETE FROM reward_assignees WHERE reward_id IN (SELECT id FROM rewards WHERE deleted_at IS NOT NULL AND deleted_at<?)").bind(cutoffIso).run();
+    await env.DB.prepare("DELETE FROM reward_prerequisites WHERE reward_id IN (SELECT id FROM rewards WHERE deleted_at IS NOT NULL AND deleted_at<?)").bind(cutoffIso).run();
+    await env.DB.prepare("DELETE FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at<?").bind(cutoffIso).run();
+    await env.DB.prepare("DELETE FROM rewards WHERE deleted_at IS NOT NULL AND deleted_at<?").bind(cutoffIso).run();
+    await env.DB.prepare("DELETE FROM achievements WHERE deleted_at IS NOT NULL AND deleted_at<?").bind(cutoffIso).run();
+    await env.DB.prepare("DELETE FROM feedback_templates WHERE deleted_at IS NOT NULL AND deleted_at<?").bind(cutoffIso).run();
+}
+async function maybeRunMaintenance(env) {
+    const last = await env.DB.prepare("SELECT value FROM system_settings WHERE key='cleanup_last_run_at'").first();
+    const now = nowIso();
+    if (last?.value && Date.parse(now) - Date.parse(last.value) < DAY_MS)
+        return;
+    const detailDays = await settingNumber(env, "detail_retention_days", 365);
+    const shortDays = await settingNumber(env, "short_record_retention_days", 7);
+    const detailCutoff = new Date(Date.now() - detailDays * DAY_MS).toISOString();
+    const shortCutoff = new Date(Date.now() - shortDays * DAY_MS).toISOString();
+    await cleanupShortRetention(env, shortCutoff);
+    await archiveOldActivity(env, detailCutoff);
+    await hardDeleteSoftDeleted(env, detailCutoff);
+    await updateSetting(env, "cleanup_last_run_at", now);
+}
 async function bootstrap(env) {
     if (!bootstrapPromise) {
         bootstrapPromise = (async () => {
@@ -210,6 +324,8 @@ async function bootstrap(env) {
             await ensureAchievementSchema(env);
             await ensureChildPinsSchema(env);
             await ensureIterationSchema(env);
+            await ensureRetentionSchema(env);
+            await maybeRunMaintenance(env);
         })().catch((error) => {
             bootstrapPromise = null;
             throw error;
@@ -404,7 +520,7 @@ async function replaceRewardAchievementRequirement(env, parentId, rewardId, achi
     return true;
 }
 async function deleteAchievementWithExclusiveReward(env, parentId, achievementId) {
-    const achievement = await env.DB.prepare("SELECT id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+    const achievement = await env.DB.prepare("SELECT id, unlock_reward_id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
         .bind(achievementId, parentId)
         .first();
     if (!achievement)
@@ -413,7 +529,15 @@ async function deleteAchievementWithExclusiveReward(env, parentId, achievementId
     await env.DB.prepare("UPDATE achievements SET deleted_at=?, is_active=0, updated_at=? WHERE id=?")
         .bind(now, now, achievement.id)
         .run();
-    return { deletedUnlockReward: false };
+    await env.DB.prepare("DELETE FROM child_achievements WHERE achievement_id=?").bind(achievement.id).run();
+    const disabledUnlockRewardIds = [];
+    if (achievement.unlock_reward_id) {
+        await env.DB.prepare("UPDATE rewards SET is_active=0, updated_at=? WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(now, achievement.unlock_reward_id, parentId)
+            .run();
+        disabledUnlockRewardIds.push(achievement.unlock_reward_id);
+    }
+    return { deletedUnlockReward: false, disabledUnlockRewardIds };
 }
 const ACHIEVEMENT_RULE_TYPES = new Set([
     "tasks_completed",
@@ -473,7 +597,7 @@ FROM task_submissions s
 JOIN tasks t ON t.id=s.task_id
 WHERE s.child_id=? AND s.status='approved'`).bind(childId).all()).results;
     const positiveLedger = (await env.DB.prepare("SELECT amount, created_at FROM point_ledger WHERE child_id=? AND amount > 0").bind(childId).all()).results;
-    const feedbackLedger = (await env.DB.prepare("SELECT source_type, created_at FROM point_ledger WHERE child_id=? AND source_type IN ('praise', 'criticism')").bind(childId).all()).results;
+    const feedbackLedger = (await env.DB.prepare("SELECT source_type, created_at FROM point_ledger WHERE child_id=? AND source_type IN ('praise', 'criticism') AND revoked_at IS NULL").bind(childId).all()).results;
     const redemptions = (await env.DB.prepare("SELECT requested_at FROM reward_redemptions WHERE child_id=? AND status IN ('pending','redeemed')").bind(childId).all()).results;
     for (const achievement of achievements.results) {
         const normalized = {
@@ -1071,6 +1195,58 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 打印清单</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务</h2>${table(["标题","分类","周期","次数","积分","周","状态","说明"], tasks.results.map((item) => [item.title, item.category_name || "", item.period, item.limit_count || 1, item.points, normalizeWeekdays(item.enabled_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>奖励</h2>${table(["名称","所需积分","限制周期","次数","核销周几","状态","说明"], rewards.results.map((item) => [item.title, item.cost_points, item.limit_period, item.limit_count || "", normalizeWeekdays(item.redeem_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>表扬与批评条款</h2>${table(["类型","标题","积分","状态","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, item.points, item.is_active ? "启用" : "停用", item.description || ""]))}</body></html>`;
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
+    const childReport = path.match(/^\/children\/([^/]+)\/report$/);
+    if (childReport && method === "GET") {
+        const a = requireRole(actor, ["parent"]);
+        const child = await env.DB.prepare("SELECT id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(childReport[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const offset = await timezoneOffsetMinutes(env);
+        const period = url.searchParams.get("period") === "monthly" ? "monthly" : "weekly";
+        const anchor = url.searchParams.get("anchor") || nowIso();
+        const range = reportWindowRange(period, anchor, offset);
+        const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows] = await Promise.all([
+            env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC").bind(child.id, a.id, range.start, range.end).all(),
+            env.DB.prepare(`SELECT s.*, t.title, tc.name category_name
+FROM task_submissions s
+JOIN tasks t ON t.id=s.task_id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE s.child_id=? AND s.parent_id=? AND s.submitted_at>=? AND s.submitted_at<?
+ORDER BY s.submitted_at DESC`).bind(child.id, a.id, range.start, range.end).all(),
+            env.DB.prepare(`SELECT rr.*, r.title, r.cost_points
+FROM reward_redemptions rr
+JOIN rewards r ON r.id=rr.reward_id
+WHERE rr.child_id=? AND rr.parent_id=? AND rr.requested_at>=? AND rr.requested_at<?
+ORDER BY rr.requested_at DESC`).bind(child.id, a.id, range.start, range.end).all(),
+            env.DB.prepare(`SELECT pl.*, ft.title template_title
+FROM point_ledger pl
+LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
+WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND pl.created_at>=? AND pl.created_at<?
+ORDER BY pl.created_at DESC`).bind(child.id, a.id, range.start, range.end).all(),
+            env.DB.prepare(`SELECT a.title, ca.unlocked_at
+FROM child_achievements ca
+JOIN achievements a ON a.id=ca.achievement_id
+WHERE ca.child_id=? AND a.parent_id=? AND ca.unlocked_at>=? AND ca.unlocked_at<?
+ORDER BY ca.unlocked_at DESC`).bind(child.id, a.id, range.start, range.end).all()
+        ]);
+        const ledger = ledgerRows.results;
+        const tasks = taskRows.results;
+        const rewards = rewardRows.results;
+        const feedback = feedbackRows.results;
+        const achievements = achievementRows.results;
+        const netPoints = ledger.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        const currentBalance = await balance(env, child.id);
+        const approved = tasks.filter((row) => row.status === "approved").length;
+        const rejected = tasks.filter((row) => row.status === "rejected").length;
+        const pending = tasks.filter((row) => row.status === "pending").length;
+        const categoryCounts = [...tasks.filter((row) => row.status === "approved").reduce((map, row) => map.set(row.category_name || "未分类", (map.get(row.category_name || "未分类") || 0) + 1), new Map()).entries()];
+        const tableHtml = (headers, rows) => `<table><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${headers.length}">暂无记录</td></tr>`}</tbody></table>`;
+        const reportTitle = period === "monthly" ? "月度报告" : "周度报告";
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} ${reportTitle}</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}.summary{grid-template-columns:repeat(2,1fr)}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} ${reportTitle}</h1><p>周期：${escapeHtml(localTimeText(range.start, offset))} 至 ${escapeHtml(localTimeText(range.end, offset))}；生成时间：${escapeHtml(localTimeText(nowIso(), offset))}</p><div class="summary"><div><span>当前积分</span><strong>${currentBalance}</strong></div><div><span>本期积分</span><strong>${netPoints >= 0 ? "+" : ""}${netPoints}</strong></div><div><span>任务通过</span><strong>${approved}</strong></div><div><span>成就解锁</span><strong>${achievements.length}</strong></div></div><h2>任务概览</h2>${tableHtml(["通过","待审","驳回"], [[approved, pending, rejected]])}<h2>分类完成</h2>${tableHtml(["分类","通过次数"], categoryCounts)}<h2>奖励记录</h2>${tableHtml(["奖励","状态","积分","申请时间"], rewards.map((item) => [item.title, item.status, item.cost_points, localTimeText(item.requested_at, offset)]))}<h2>表扬与批评</h2>${tableHtml(["类型","条款","积分","时间"], feedback.map((item) => [item.source_type === "praise" ? "表扬" : "批评", item.template_title || item.note || "", item.amount, localTimeText(item.created_at, offset)]))}<h2>成就解锁</h2>${tableHtml(["成就","解锁时间"], achievements.map((item) => [item.title, localTimeText(item.unlocked_at, offset)]))}</body></html>`;
+        return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
     const childWarehouse = path.match(/^\/children\/([^/]+)\/warehouse$/);
     if (childWarehouse && method === "GET") {
         const a = requireRole(actor, ["parent"]);
@@ -1083,6 +1259,25 @@ WHERE rr.child_id=? AND rr.parent_id=? AND rr.status='redeemed'
 ORDER BY rr.requested_at DESC`).bind(child.id, a.id).all()).results);
     }
     const feedbackEvent = path.match(/^\/children\/([^/]+)\/feedback-events$/);
+    if (feedbackEvent && method === "GET") {
+        const a = requireRole(actor, ["parent"]);
+        const child = await env.DB.prepare("SELECT id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(feedbackEvent[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const shortDays = await settingNumber(env, "short_record_retention_days", 7);
+        const cutoff = new Date(Date.now() - shortDays * DAY_MS).toISOString();
+        const rows = (await env.DB.prepare(`SELECT pl.*, ft.title template_title, ft.kind template_kind
+FROM point_ledger pl
+LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
+WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.created_at>=?
+ORDER BY pl.created_at DESC`)
+            .bind(child.id, a.id, cutoff)
+            .all()).results;
+        const offset = await timezoneOffsetMinutes(env);
+        return ok(rows.map((row) => ({ ...row, localCreatedAt: localTimeText(row.created_at, offset) })));
+    }
     if (feedbackEvent && method === "POST") {
         const a = requireRole(actor, ["parent"]);
         const input = await body(request);
@@ -1582,6 +1777,73 @@ WHERE id=?`)
             title: redemptionAction[2] === "redeem" ? "奖励已核销" : "奖励兑换已取消",
             body: redemptionAction[2] === "redeem" ? "家长已核销你的奖励兑换。" : "家长取消了奖励兑换，积分已退回。",
             eventType: redemptionAction[2] === "redeem" ? "reward_redeemed" : "reward_cancelled",
+            relatedType: "reward_redemption",
+            relatedId: redemption.id
+        });
+        return ok(true);
+    }
+    const feedbackRecall = path.match(/^\/feedback-events\/([^/]+)\/recall$/);
+    if (feedbackRecall && method === "PATCH") {
+        const a = requireRole(actor, ["parent"]);
+        const row = await env.DB.prepare(`SELECT pl.*, c.id child_id
+FROM point_ledger pl
+JOIN children c ON c.id=pl.child_id
+WHERE pl.id=? AND pl.parent_id=? AND c.parent_id=? AND pl.source_type IN ('praise','criticism')`)
+            .bind(feedbackRecall[1], a.id, a.id)
+            .first();
+        if (!row)
+            return fail("NOT_FOUND", "表扬或批评记录不存在", 404);
+        if (row.revoked_at)
+            return fail("ALREADY_RECALLED", "该记录已经撤回", 409);
+        const shortDays = await settingNumber(env, "short_record_retention_days", 7);
+        const cutoff = new Date(Date.now() - shortDays * DAY_MS).toISOString();
+        if (row.created_at < cutoff)
+            return fail("RECALL_EXPIRED", "只能撤回7天内的表扬或批评", 409);
+        const now = nowIso();
+        const retentionUntil = new Date(Date.now() + shortDays * DAY_MS).toISOString();
+        const recallId = id();
+        const label = row.source_type === "praise" ? "表扬" : "批评";
+        await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, retention_until) VALUES (?, ?, ?, ?, 'feedback_recall', ?, NULL, ?, ?)")
+            .bind(recallId, row.child_id, a.id, -Number(row.amount || 0), row.id, `${label}撤回冲正`, retentionUntil)
+            .run();
+        await env.DB.prepare("UPDATE point_ledger SET revoked_at=?, revoke_ledger_id=?, retention_until=? WHERE id=?")
+            .bind(now, recallId, retentionUntil, row.id)
+            .run();
+        await env.DB.prepare("UPDATE notifications SET title=?, body=?, read_at=COALESCE(read_at, ?) WHERE related_type='point_ledger' AND related_id=?")
+            .bind(`${label}已撤回`, "家长已撤回这条反馈，积分已恢复。", now, row.id)
+            .run();
+        await recalcAchievements(env, a.id, row.child_id);
+        return ok(true);
+    }
+    const redemptionRefundWithRetention = path.match(/^\/reward-redemptions\/([^/]+)\/refund$/);
+    if (redemptionRefundWithRetention && method === "PATCH") {
+        const a = requireRole(actor, ["parent"]);
+        const redemption = await env.DB.prepare("SELECT rr.*, r.cost_points FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id WHERE rr.id=? AND rr.parent_id=? AND rr.status='redeemed'")
+            .bind(redemptionRefundWithRetention[1], a.id)
+            .first();
+        if (!redemption)
+            return fail("NOT_FOUND", "可退还的奖励兑换不存在", 404);
+        const refunded = await env.DB.prepare("SELECT id FROM point_ledger WHERE source_type='reward_refund' AND source_id=?").bind(redemption.id).first();
+        if (refunded)
+            return fail("ALREADY_REFUNDED", "该奖励已经退还过积分", 409);
+        const now = nowIso();
+        const shortDays = await settingNumber(env, "short_record_retention_days", 7);
+        const retentionUntil = new Date(Date.now() + shortDays * DAY_MS).toISOString();
+        await env.DB.prepare("UPDATE reward_redemptions SET status='cancelled', cancelled_at=?, refunded_at=?, retention_until=? WHERE id=?")
+            .bind(now, now, retentionUntil, redemption.id)
+            .run();
+        await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, retention_until) VALUES (?, ?, ?, ?, 'reward_refund', ?, ?, ?, ?)")
+            .bind(id(), redemption.child_id, a.id, Number(redemption.cost_points), redemption.id, redemption.period_key, "奖励退还积分", retentionUntil)
+            .run();
+        await recalcAchievements(env, a.id, redemption.child_id);
+        await notify(env, {
+            recipientType: "child",
+            recipientId: redemption.child_id,
+            actorType: "user",
+            actorId: a.id,
+            title: "奖励已退还积分",
+            body: "家长已退还该奖励兑换的积分。",
+            eventType: "reward_refund",
             relatedType: "reward_redemption",
             relatedId: redemption.id
         });

@@ -451,6 +451,8 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
     setGallery(galleryRows);
     setSettings(settingRows);
     setAiConfig(aiRows);
+    if (aiRows.model)
+      setAiModels((prev) => (prev.includes(aiRows.model) ? prev : [aiRows.model, ...prev]));
   }
   useEffect(() => void load(), []);
   useEffect(() => {

@@ -28,7 +28,8 @@ let allOptions: EmojiOption[] | null = null;
 
 async function buildEmojiOptions(): Promise<EmojiOption[]> {
   if (allOptions) return allOptions;
-  const emojiData = (await import("emoji-datasource/emoji.json")) as EmojiSource[];
+  const { default: rawEmojiData } = await import("emoji-datasource/emoji.json");
+  const emojiData = rawEmojiData as EmojiSource[];
   const seen = new Set<string>();
   const options: EmojiOption[] = [];
   function add(source: EmojiSource, unified: string) {

@@ -2,6 +2,25 @@ import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, p
 import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, generateAiGreeting, ensureRewardOnceSchema } from "../utils.js";
 
 export async function handleParentRoutes(path, method, request, env, actor, url) {
+    if (path === "/parent/profile" && method === "PATCH") {
+        const a = requireRole(actor, ["parent"]);
+        const input = await body(request);
+        const currentPassword = String(input.currentPassword || "");
+        if (!currentPassword)
+            return fail("BAD_REQUEST", "请输入当前密码");
+        const parent = await env.DB.prepare("SELECT * FROM users WHERE id=? AND role='parent' AND status='active' AND deleted_at IS NULL").bind(a.id).first();
+        if (!parent)
+            return fail("NOT_FOUND", "家长账号不存在", 404);
+        if (!(await verifyPassword(currentPassword, parent.password_hash)))
+            return fail("BAD_CREDENTIALS", "当前密码不正确", 401);
+        const newPassword = String(input.newPassword || "");
+        if (!newPassword)
+            return fail("BAD_REQUEST", "请输入新密码");
+        const passwordHash = await hashPassword(newPassword);
+        await env.DB.prepare("UPDATE users SET password_hash=?, updated_at=? WHERE id=? AND role='parent'")
+            .bind(passwordHash, nowIso(), a.id).run();
+        return ok(true);
+    }
     if (path === "/children") {
         const a = requireRole(actor, ["parent"]);
         if (method === "GET")

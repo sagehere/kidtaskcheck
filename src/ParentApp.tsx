@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import {
-  Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift,
+  Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Star, Trash2, Upload, Users
 } from "lucide-react";
 import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS } from "./types/api";
@@ -25,6 +25,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [feedbackChild, setFeedbackChild] = useState<Child | null>(null);
   const [feedbackRows, setFeedbackRows] = useState<FeedbackEvent[]>([]);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const resetTapCount = useRef(0);
@@ -178,6 +179,25 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     }, 2000);
   }
 
+  async function updateProfile(event: React.FormEvent) {
+    event.preventDefault();
+    if (profileForm.newPassword !== profileForm.confirmPassword) {
+      setMessage("");
+      setError("两次输入的新密码不一致");
+      return;
+    }
+    await run(async () => {
+      await api("/parent/profile", {
+        method: "PATCH",
+        body: JSON.stringify({
+          currentPassword: profileForm.currentPassword,
+          newPassword: profileForm.newPassword
+        })
+      });
+      setProfileForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    }, "密码已更新");
+  }
+
   async function applyFeedback(data: { childId: string; templateId: string }) {
     await run(
       () => api(`/children/${data.childId}/feedback-events`, { method: "POST", body: JSON.stringify({ templateId: data.templateId }) }),
@@ -321,6 +341,21 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             <FeedbackOverview items={feedbackTemplates} onUpdate={(item, data) => update(`/feedback-templates/${item.id}`, data, "条款已更新")} onDelete={(item) => remove(`/feedback-templates/${item.id}`, "条款已删除", `确认删除${item.kind === "praise" ? "表扬" : "批评"}条款「${item.title}」？历史积分记录会保留。`)} />
           </section>
           <ConfigPortPanel onImported={load} />
+          <section className="panel setting-group">
+            <div className="panel-title"><KeyRound /><h2>修改密码</h2></div>
+            <form className="stack compact" onSubmit={updateProfile}>
+              <Field label="当前密码">
+                <input value={profileForm.currentPassword} onChange={(e) => setProfileForm({ ...profileForm, currentPassword: e.target.value })} type="password" autoComplete="current-password" required />
+              </Field>
+              <Field label="新密码">
+                <input value={profileForm.newPassword} onChange={(e) => setProfileForm({ ...profileForm, newPassword: e.target.value })} type="password" autoComplete="new-password" required />
+              </Field>
+              <Field label="确认新密码">
+                <input value={profileForm.confirmPassword} onChange={(e) => setProfileForm({ ...profileForm, confirmPassword: e.target.value })} type="password" autoComplete="new-password" required />
+              </Field>
+              <button className="primary"><KeyRound size={18} />保存密码</button>
+            </form>
+          </section>
         </>
       )}
       {ledgerChild && <LedgerModal title={`${ledgerChild.display_name} 的积分清单`} rows={ledger} onClose={() => setLedgerChild(null)} />}

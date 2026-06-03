@@ -1280,7 +1280,7 @@ async function route(request, env) {
         if (!baseUrl)
             return fail("BAD_REQUEST", "请先设置 baseUrl");
         const apiKey = await env.DB.prepare("SELECT value FROM system_settings WHERE key='ai_api_key'").first();
-        const key = String(input.apiKey || apiKey?.value || "");
+        const key = String(input.apiKey && String(input.apiKey).trim() ? input.apiKey : apiKey?.value || "");
         const headers = { "content-type": "application/json" };
         if (key)
             headers["authorization"] = `Bearer ${key}`;

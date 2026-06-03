@@ -603,7 +603,7 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
                 {!aiConfig.model && <option value="">请选择或拉取模型列表</option>}
                 {aiModels.map((model) => <option key={model} value={model}>{model}</option>)}
               </select>
-              <button type="button" className="secondary" disabled={aiFetching || !aiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const data = await api<{ models: string[] }>("/admin/ai-service/models", { method: "POST", body: JSON.stringify({ baseUrl: aiConfig.baseUrl, apiKey: aiApiKey || undefined }) }); setAiModels(data.models); if (data.models.length && !aiConfig.model) setAiConfig({ ...aiConfig, model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
+              <button type="button" className="secondary" disabled={aiFetching || !aiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const modelsBody: Record<string, unknown> = { baseUrl: aiConfig.baseUrl }; if (aiApiKey) modelsBody.apiKey = aiApiKey; const data = await api<{ models: string[] }>("/admin/ai-service/models", { method: "POST", body: JSON.stringify(modelsBody) }); setAiModels(data.models); if (data.models.length && !aiConfig.model) setAiConfig({ ...aiConfig, model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
             </div>
           </Field>
           <Field label="提示词">

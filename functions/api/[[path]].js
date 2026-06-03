@@ -1072,7 +1072,7 @@ async function callAiService(env, prompt) {
             return "";
         const data = await resp.json();
         const text = data?.choices?.[0]?.message?.content || "";
-        const cleaned = text.replace(/[\s\n\r]+/g, "").replace(/，+/g, "，").replace(/。+/g, "。").slice(0, 120);
+        const cleaned = text.replace(/\s+/g, " ").trim().replace(/，+/g, "，").replace(/。+/g, "。");
         return cleaned;
     }
     catch {

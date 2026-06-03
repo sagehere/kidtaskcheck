@@ -595,7 +595,7 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
             <input value={aiConfig.baseUrl} onChange={(e) => setAiConfig({ ...aiConfig, baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
           </Field>
           <Field label="API Key">
-            <input value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} type="password" placeholder={aiConfig.hasKey ? "已设置，留空则保留" : "请输入 API Key"} autoComplete="off" />
+            <input value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} type="password" placeholder={aiConfig.hasKey ? "已设置，留空则保留" : "请输入 API Key"} autoComplete="new-password" />
           </Field>
           <Field label="模型">
             <div className="inline-fields">

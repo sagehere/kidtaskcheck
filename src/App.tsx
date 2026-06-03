@@ -2004,7 +2004,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
           <p>孩子面板</p>
           <h1>{me.displayName}</h1>
         </div>
-        {dash.aiGreeting && <p className="ai-greeting">{dash.aiGreeting}</p>}
+        {dash.aiGreeting && <p className="ai-greeting">{dash.aiGreeting}{dash.aiRefreshPending ? " · 刷新中" : ""}</p>}
         <button className="metric large clickable" onClick={() => void openLedger()}>
           <Star />
           <strong>{dash.balance}</strong>

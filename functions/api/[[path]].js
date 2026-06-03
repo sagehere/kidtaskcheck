@@ -1123,7 +1123,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id).all(),
     }
     return greeting;
 }
-async function route(request, env) {
+async function route(request, env, ctx) {
     await bootstrap(env);
     const url = new URL(request.url);
     const path = `/${(url.pathname.replace(/^\/api\/?/, "") || "").replace(/^\/|\/$/g, "")}`;
@@ -2288,7 +2288,16 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
         const visiblePinnedTaskId = taskRows.some((task) => task.id === pinnedTaskId) ? pinnedTaskId : null;
         const visiblePinnedRewardId = rewards.some((reward) => reward.id === pinnedRewardId) ? pinnedRewardId : null;
         const childRow = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=?").bind(a.id).first();
-        const aiGreeting = childRow ? await generateAiGreeting(env, childRow, offset) : "";
+        let aiGreeting = childRow ? await generateAiGreeting(env, childRow, offset) : "";
+        let aiRefreshPending = false;
+        if (!aiGreeting && childRow?.ai_enabled) {
+            const stale = await env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=? ORDER BY generated_at DESC LIMIT 1").bind(childRow.id).first();
+            if (stale?.greeting) {
+                aiGreeting = stale.greeting;
+                aiRefreshPending = true;
+                ctx?.waitUntil?.(generateAiGreeting(env, childRow, offset, true));
+            }
+        }
         return ok({
             child: a,
             balance: await balance(env, a.id),
@@ -2297,6 +2306,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
             tasks: taskRows,
             rewards,
             aiGreeting,
+            aiRefreshPending,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
         });
     }
@@ -2337,9 +2347,9 @@ async function batchRefreshGreetings(env, offset) {
     return { success: successCount, failed: failed.length };
 }
 
-export const onRequest = async ({ request, env }) => {
+export const onRequest = async ({ request, env, ctx }) => {
     try {
-        return await route(request, env);
+        return await route(request, env, ctx);
     }
     catch (error) {
         if (error instanceof Response)

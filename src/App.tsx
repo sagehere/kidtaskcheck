@@ -1992,7 +1992,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
       <section className="hero-band child">
         <div>
           <p>孩子面板</p>
-          <h1>{me.displayName}，今天也很棒</h1>
+          <h1>{me.displayName}</h1>
         </div>
         {dash.aiGreeting && <p className="ai-greeting">{dash.aiGreeting}</p>}
         <button className="metric large clickable" onClick={() => void openLedger()}>

@@ -1039,12 +1039,21 @@ function buildAiPrompt(child, report, config, assignments) {
     parts.push(`上周净增积分：${netPoints >= 0 ? "+" : ""}${netPoints}`);
     if (achievementTitles.length)
         parts.push(`上周解锁成就：${achievementTitles.join("、")}`);
-    const configTasks = (assignments?.tasks || []).map((t) => `${t.title}(${t.category_name || "未分类"},${t.period || "每日"},${t.points || 0}分)`);
-    const configRewards = (assignments?.rewards || []).map((r) => `${r.title}(${r.cost_points || 0}积分)`);
-    if (configTasks.length)
-        parts.push(`孩子当前配置任务：${configTasks.join("、")}`);
-    if (configRewards.length)
-        parts.push(`孩子当前配置奖励：${configRewards.join("、")}`);
+    if ((assignments?.tasks || []).length) {
+        parts.push("任务配置：");
+        for (const t of assignments.tasks)
+            parts.push(`- ${t.title}（分类：${t.category_name || "未分类"}，周期：${t.period || "每日"}，次数：${t.limit_count || 1}，积分：${t.points || 0}，周：${normalizeWeekdays(t.enabled_weekdays).join(",")}，状态：${t.is_active ? "启用" : "停用"}${t.description ? "，说明：" + t.description : ""}）`);
+    }
+    if ((assignments?.rewards || []).length) {
+        parts.push("奖励配置：");
+        for (const r of assignments.rewards)
+            parts.push(`- ${r.title}（${r.cost_points || 0}积分，周期：${r.limit_period || "每日"}，次数：${r.limit_count || ""}，核销周几：${normalizeWeekdays(r.redeem_weekdays).join(",")}，状态：${r.is_active ? "启用" : "停用"}${r.description ? "，说明：" + r.description : ""}）`);
+    }
+    if ((assignments?.feedbackTemplates || []).length) {
+        parts.push("表扬与批评条款：");
+        for (const f of assignments.feedbackTemplates)
+            parts.push(`- [${f.kind === "praise" ? "表扬" : "批评"}] ${f.title}（${f.points >= 0 ? "+" : ""}${f.points || 0}分，状态：${f.is_active ? "启用" : "停用"}${f.description ? "，说明：" + f.description : ""}）`);
+    }
     return `${config.prompt || ""}\n\n周报数据：\n${parts.join("\n")}`;
 }
 async function callAiService(env, prompt) {
@@ -1090,16 +1099,19 @@ async function generateAiGreeting(env, child, offset) {
     if (cached?.greeting)
         return cached.greeting;
     const report = await previousWeekReportSummary(env, child.id, offset);
-    const [assignedTasks, assignedRewards] = await Promise.all([
-        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.points
+    const [assignedTasks, assignedRewards, feedbackTemplates] = await Promise.all([
+        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description
 FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
 LEFT JOIN task_categories tc ON tc.id=t.category_id
-WHERE ta.child_id=? AND t.is_active=1 AND t.deleted_at IS NULL`).bind(child.id).all(),
-        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period
+WHERE ta.child_id=? AND t.deleted_at IS NULL
+ORDER BY tc.name, t.created_at DESC`).bind(child.id).all(),
+        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period, r.limit_count, r.redeem_weekdays, r.is_active, r.description
 FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id
-WHERE ra.child_id=? AND r.is_active=1 AND r.deleted_at IS NULL`).bind(child.id).all()
+WHERE ra.child_id=? AND r.deleted_at IS NULL
+ORDER BY r.cost_points, r.created_at DESC`).bind(child.id).all(),
+        env.DB.prepare("SELECT kind, title, points, is_active, description FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(child.parent_id).all()
     ]);
-    const assignments = { tasks: assignedTasks.results, rewards: assignedRewards.results };
+    const assignments = { tasks: assignedTasks.results, rewards: assignedRewards.results, feedbackTemplates: feedbackTemplates.results };
     const aiPrompt = buildAiPrompt(child, report, config, assignments);
     if (!aiPrompt)
         return "";
@@ -2258,7 +2270,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
         });
         const visiblePinnedTaskId = taskRows.some((task) => task.id === pinnedTaskId) ? pinnedTaskId : null;
         const visiblePinnedRewardId = rewards.some((reward) => reward.id === pinnedRewardId) ? pinnedRewardId : null;
-        const childRow = await env.DB.prepare("SELECT id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=?").bind(a.id).first();
+        const childRow = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=?").bind(a.id).first();
         const aiGreeting = childRow ? await generateAiGreeting(env, childRow, offset) : "";
         return ok({
             child: a,
@@ -2279,7 +2291,7 @@ const AI_REFRESH_MAX_RETRIES = 3;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function batchRefreshGreetings(env, offset) {
-    const children = await env.DB.prepare("SELECT id, display_name, ai_enabled, gender, birth_date FROM children WHERE ai_enabled=1 AND deleted_at IS NULL").all();
+    const children = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE ai_enabled=1 AND deleted_at IS NULL").all();
     if (!children.results.length)
         return { success: 0, failed: 0 };
     let failed = [...children.results];

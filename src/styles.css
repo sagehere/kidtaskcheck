@@ -214,6 +214,14 @@ button,
   overflow-wrap: anywhere;
 }
 
+.ai-greeting {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  opacity: 0.9;
+  max-width: 600px;
+}
+
 .hero-actions {
   display: flex;
   gap: 12px;
@@ -354,6 +362,11 @@ button.child-tile {
   align-items: center;
   padding: 14px;
   border-bottom: 1px solid #e8dfd0;
+}
+
+.emoji-close {
+  touch-action: manipulation;
+  z-index: 1;
 }
 
 .emoji-current {

@@ -333,6 +333,7 @@ button.child-tile {
 .emoji-select {
   display: inline-grid;
   justify-items: start;
+  position: relative;
 }
 
 .emoji-trigger {
@@ -351,6 +352,33 @@ button.child-tile {
 .emoji-trigger:focus-visible {
   border-color: #157f6f;
   box-shadow: 0 0 0 3px rgba(21, 127, 111, 0.14);
+}
+
+.emoji-picker {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 360px;
+  max-height: 420px;
+  border: 1px solid #ddd5c8;
+  border-radius: 10px;
+  background: #fffdf8;
+  box-shadow: 0 12px 40px rgba(31, 36, 33, 0.24);
+  overflow: hidden;
+}
+
+.emoji-picker-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e8dfd0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #4a5a55;
 }
 
 .emoji-modal-backdrop {
@@ -430,8 +458,11 @@ button.child-tile {
 .emoji-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
-  gap: 10px;
-  align-items: start;
+  gap: 6px;
+  align-content: start;
+  padding: 10px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .emoji-grid button {

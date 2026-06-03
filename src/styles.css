@@ -195,6 +195,7 @@ button,
 
 .hero-band.child {
   background: linear-gradient(135deg, #7a3f9d, #ef7b45);
+  flex-wrap: wrap;
 }
 
 .hero-band.admin {
@@ -215,7 +216,8 @@ button,
 }
 
 .ai-greeting {
-  margin: 8px 0 0;
+  margin: 0;
+  flex: 1 1 100%;
   font-size: 14px;
   line-height: 1.5;
   opacity: 0.9;

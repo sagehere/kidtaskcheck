@@ -1015,7 +1015,7 @@ WHERE ca.child_id=? AND ca.unlocked_at>=? AND ca.unlocked_at<?`)
         achievements: achievementRows.results
     };
 }
-function buildAiPrompt(child, report, config) {
+function buildAiPrompt(child, report, config, assignments) {
     if (!report)
         return "";
     const approved = report.tasks.filter((t) => t.status === "approved").length;
@@ -1039,6 +1039,12 @@ function buildAiPrompt(child, report, config) {
     parts.push(`上周净增积分：${netPoints >= 0 ? "+" : ""}${netPoints}`);
     if (achievementTitles.length)
         parts.push(`上周解锁成就：${achievementTitles.join("、")}`);
+    const configTasks = (assignments?.tasks || []).map((t) => `${t.title}(${t.category_name || "未分类"},${t.period || "每日"},${t.points || 0}分)`);
+    const configRewards = (assignments?.rewards || []).map((r) => `${r.title}(${r.cost_points || 0}积分)`);
+    if (configTasks.length)
+        parts.push(`孩子当前配置任务：${configTasks.join("、")}`);
+    if (configRewards.length)
+        parts.push(`孩子当前配置奖励：${configRewards.join("、")}`);
     return `${config.prompt || ""}\n\n周报数据：\n${parts.join("\n")}`;
 }
 async function callAiService(env, prompt) {
@@ -1084,7 +1090,17 @@ async function generateAiGreeting(env, child, offset) {
     if (cached?.greeting)
         return cached.greeting;
     const report = await previousWeekReportSummary(env, child.id, offset);
-    const aiPrompt = buildAiPrompt(child, report, config);
+    const [assignedTasks, assignedRewards] = await Promise.all([
+        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.points
+FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE ta.child_id=? AND t.is_active=1 AND t.deleted_at IS NULL`).bind(child.id).all(),
+        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period
+FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id
+WHERE ra.child_id=? AND r.is_active=1 AND r.deleted_at IS NULL`).bind(child.id).all()
+    ]);
+    const assignments = { tasks: assignedTasks.results, rewards: assignedRewards.results };
+    const aiPrompt = buildAiPrompt(child, report, config, assignments);
     if (!aiPrompt)
         return "";
     const greeting = await callAiService(env, aiPrompt);

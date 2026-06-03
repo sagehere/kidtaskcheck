@@ -746,6 +746,7 @@ function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }
       await action();
       setMessage(note);
       await load();
+      window.dispatchEvent(new CustomEvent("app:refresh-notifications"));
     } catch (err) {
       setError(err instanceof Error ? err.message : "操作失败");
     }
@@ -1960,6 +1961,7 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
       await action();
       setMessage(note);
       await load();
+      window.dispatchEvent(new CustomEvent("app:refresh-notifications"));
     } catch (err) {
       setError(err instanceof Error ? err.message : "操作失败");
     } finally {
@@ -1989,8 +1991,8 @@ function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
         <div>
           <p>孩子面板</p>
           <h1>{me.displayName}，今天也很棒</h1>
-          {dash.aiGreeting && <p className="ai-greeting">{dash.aiGreeting}</p>}
         </div>
+        {dash.aiGreeting && <p className="ai-greeting">{dash.aiGreeting}</p>}
         <button className="metric large clickable" onClick={() => void openLedger()}>
           <Star />
           <strong>{dash.balance}</strong>
@@ -2143,8 +2145,10 @@ function Shell({ me, refresh, children, onQuickAction }: { me: NonNullable<Me>; 
 
   useEffect(() => {
     void loadNotifications();
+    function onRefresh() { void loadNotifications(); }
+    window.addEventListener("app:refresh-notifications", onRefresh);
     const timer = window.setInterval(() => void loadNotifications(), REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+    return () => { window.clearInterval(timer); window.removeEventListener("app:refresh-notifications", onRefresh); };
   }, [me.id]);
   useEffect(() => {
     function closeOnOutsideClick(event: MouseEvent) {

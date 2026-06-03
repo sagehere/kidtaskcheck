@@ -195,7 +195,12 @@ button,
 
 .hero-band.child {
   background: linear-gradient(135deg, #7a3f9d, #ef7b45);
-  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.hero-band.child .metric.large {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .hero-band.admin {
@@ -217,11 +222,14 @@ button,
 
 .ai-greeting {
   margin: 0;
-  flex: 1 1 100%;
+  flex: 0 1 auto;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 14px;
   line-height: 1.5;
   opacity: 0.9;
-  max-width: 600px;
 }
 
 .hero-actions {

@@ -2273,6 +2273,47 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
     }
     return fail("NOT_FOUND", "接口不存在", 404);
 }
+const AI_REFRESH_DELAY_MS = 2000;
+const AI_REFRESH_COOLDOWN_MS = 30000;
+const AI_REFRESH_MAX_RETRIES = 3;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function batchRefreshGreetings(env, offset) {
+    const children = await env.DB.prepare("SELECT id, display_name, ai_enabled, gender, birth_date FROM children WHERE ai_enabled=1 AND deleted_at IS NULL").all();
+    if (!children.results.length)
+        return { success: 0, failed: 0 };
+    let failed = [...children.results];
+    let successCount = 0;
+    let attempt = 0;
+    while (failed.length > 0 && attempt < AI_REFRESH_MAX_RETRIES) {
+        attempt++;
+        const stillFailed = [];
+        for (const child of failed) {
+            try {
+                const greeting = await generateAiGreeting(env, child, offset);
+                if (greeting)
+                    successCount++;
+                else
+                    stillFailed.push(child);
+            }
+            catch {
+                stillFailed.push(child);
+            }
+            await sleep(AI_REFRESH_DELAY_MS);
+        }
+        failed = stillFailed;
+        if (failed.length > 0 && attempt < AI_REFRESH_MAX_RETRIES)
+            await sleep(AI_REFRESH_COOLDOWN_MS);
+    }
+    return { success: successCount, failed: failed.length };
+}
+
+export const scheduled = async (event, env, ctx) => {
+    const offset = DEFAULT_TIMEZONE_OFFSET_MINUTES;
+    const result = await batchRefreshGreetings(env, offset);
+    console.log(`[ai-greeting-cron] generated=${result.success} failed=${result.failed}`);
+};
+
 export const onRequest = async ({ request, env }) => {
     try {
         return await route(request, env);

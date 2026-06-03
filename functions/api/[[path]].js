@@ -1079,7 +1079,7 @@ async function callAiService(env, prompt) {
         return "";
     }
 }
-async function generateAiGreeting(env, child, offset) {
+async function generateAiGreeting(env, child, offset, forceRefresh = false) {
     if (!child.ai_enabled)
         return "";
     const baseUrl = (await env.DB.prepare("SELECT value FROM system_settings WHERE key='ai_base_url'").first())?.value || "";
@@ -1096,7 +1096,7 @@ async function generateAiGreeting(env, child, offset) {
     const cached = await env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=? AND previous_week_key=? AND config_hash=?")
         .bind(child.id, weekKey, hash)
         .first();
-    if (cached?.greeting)
+    if (cached?.greeting && !forceRefresh)
         return cached.greeting;
     const report = await previousWeekReportSummary(env, child.id, offset);
     const [assignedTasks, assignedRewards, feedbackTemplates] = await Promise.all([
@@ -1448,6 +1448,17 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const table = (headers, rows) => `<table><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
         const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 打印清单</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务</h2>${table(["标题","分类","周期","次数","积分","周","状态","说明"], tasks.results.map((item) => [item.title, item.category_name || "", item.period, item.limit_count || 1, item.points, normalizeWeekdays(item.enabled_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>奖励</h2>${table(["名称","所需积分","限制周期","次数","核销周几","状态","说明"], rewards.results.map((item) => [item.title, item.cost_points, item.limit_period, item.limit_count || "", normalizeWeekdays(item.redeem_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>表扬与批评条款</h2>${table(["类型","标题","积分","状态","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, item.points, item.is_active ? "启用" : "停用", item.description || ""]))}</body></html>`;
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
+    const childAiGreeting = path.match(/^\/children\/([^/]+)\/ai-greeting$/);
+    if (childAiGreeting && method === "POST") {
+        const a = requireRole(actor, ["parent"]);
+        const child = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(childAiGreeting[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const greeting = await generateAiGreeting(env, child, DEFAULT_TIMEZONE_OFFSET_MINUTES, true);
+        return ok({ greeting });
     }
     const childReport = path.match(/^\/children\/([^/]+)\/report$/);
     if (childReport && method === "GET") {

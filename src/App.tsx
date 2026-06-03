@@ -1804,6 +1804,8 @@ function EditItemForm({ kind, item, children, categories, tasks, achievements, o
 
 function ChildEditForm({ child, onSave, onCancel }: { child: Child; onSave: (data: any) => void; onCancel: () => void }) {
   const [data, setData] = useState({ displayName: child.display_name, password: "", aiEnabled: child.ai_enabled === 1, gender: child.gender || "", birthDate: child.birth_date || "" });
+  const [previewGreeting, setPreviewGreeting] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
   return (
     <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, password: data.password || undefined }); }}>
       <Field label="姓名"><input required value={data.displayName} onChange={(e) => setData({ ...data, displayName: e.target.value })} /></Field>
@@ -1817,6 +1819,12 @@ function ChildEditForm({ child, onSave, onCancel }: { child: Child; onSave: (dat
       </Field>
       <Field label="出生日期"><input type="date" value={data.birthDate} onChange={(e) => setData({ ...data, birthDate: e.target.value })} /></Field>
       <Toggle label="启用 AI 寄语" checked={data.aiEnabled} onChange={(aiEnabled) => setData({ ...data, aiEnabled })} />
+      <Field label="AI 寄语预览">
+        <div className="inline-fields">
+          <button type="button" className="secondary" disabled={previewLoading || !data.aiEnabled} onClick={async () => { setPreviewLoading(true); try { const r = await api<{ greeting: string }>(`/children/${encodeURIComponent(child.id)}/ai-greeting`, { method: "POST" }); setPreviewGreeting(r.greeting || "(未生成寄语)"); } catch (err) { setPreviewGreeting(`获取失败：${err instanceof Error ? err.message : "未知错误"}`); } finally { setPreviewLoading(false); } }}>{previewLoading ? "获取中..." : "刷新 AI 寄语"}</button>
+        </div>
+        {previewGreeting && <p className="ai-preview-text">{previewGreeting}</p>}
+      </Field>
       <div className="actions"><button className="primary">保存</button><button type="button" className="secondary" onClick={onCancel}>取消</button></div>
     </form>
   );

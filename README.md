@@ -4,9 +4,9 @@
 
 ## 功能范围
 
-- 管理员：管理家长用户、系统图库。
+- 管理员：管理家长用户、系统图库、AI 服务配置。
 - 家长：管理孩子、任务分类、任务、奖励、成就，处理任务审核和奖励核销。
-- 子用户：提交任务、查看积分、兑换奖励、查看成就墙。
+- 子用户：提交任务、查看积分、兑换奖励、查看成就墙、AI 寄语。
 - 任务支持每日、每周、每月、一次性周期，支持加分和扣分。
 - 任务审核跨周期时按提交时间归属。
 - 奖励兑换周期限制按申请时间归属。
@@ -17,31 +17,58 @@
 
 ```bash
 npm install
-npm run build
-npm test
-npm run db:migrate:local
-npm run pages:dev
+npm run build        # TypeScript 检查 + 前端构建
+npm test             # 运行测试（8 个文件，40+ 测试）
+npm run db:migrate:local  # 本地 D1 数据库迁移
+npm run pages:dev    # 启动本地开发服务器（默认端口 8788）
 ```
 
-默认管理员账号来自 `wrangler.toml`：
+默认管理员账号：`admin`，密码在首次启动时由 `wrangler.toml` 中的 `ADMIN_PASSWORD` 设置。
 
-- 账号：`admin`
-- 密码：`change-me-admin-password`
+## 部署
 
-线上部署前请修改 `ADMIN_PASSWORD`，并把 `wrangler.toml` 中的 `database_id` 替换为真实 Cloudflare D1 数据库 ID。
+本地验证、远程迁移和 Pages 发布是三件独立的事情：
 
-## 部署与数据库迁移
+1. **构建验证**：`npm run build && npm test`
+2. **远程数据库迁移**：`npm run db:migrate:remote`
+3. **发布到 Pages**：`npm run pages:publish`（自动执行构建 + 迁移 + 发布）
 
-远程 D1 初始化和后续 schema 变更需要 Wrangler migration。项目提供了部署脚本：
+### 生产环境要求
+
+部署生产前必须设置以下 Cloudflare Secrets（**不要放在 `wrangler.toml` 中**）：
+
+| Secret | 说明 |
+|--------|------|
+| `ADMIN_PASSWORD` | 管理员登录密码，禁止使用默认值 |
+| `ENVIRONMENT=production` | 启用生产安全策略（Cookie Secure、默认密码拒绝等） |
+| `APP_URL` | 应用的公网地址，用于 CSRF 校验（如 `https://your-app.pages.dev`） |
+| `AI_API_KEY` | （可选）AI 服务的 API Key |
+
+设置方式：
 
 ```bash
-npm run pages:build
+npx wrangler secret put ADMIN_PASSWORD
+npx wrangler secret put ENVIRONMENT
+npx wrangler secret put APP_URL
 ```
 
-该脚本会先执行 `npm run build`，再执行 `npm run db:migrate:remote`。Cloudflare Pages 项目的 Build command 应配置为 `npm run pages:build`（或等价的 `npm run deploy`），不要只配置 `npm run build`，否则自动部署只会更新代码，不会更新远程 D1 schema。
+### 默认密码保护
 
-如果在 Cloudflare Pages 或 CI 中运行该脚本，需要配置具备 D1 编辑权限的 Cloudflare API Token。Pages 的静态构建本身不会自动运行 D1 migration。
+生产环境下，如果 `ADMIN_PASSWORD` 仍为 `change-me-admin-password`，登录将被拒绝，并提示修改密码。如需临时绕过（如首次初始化），可添加 `ALLOW_DEFAULT_ADMIN_PASSWORD=1` 作为 Secret。
 
-## 当前环境提示
+## 测试
 
-在 `C:\Users\link\Desktop\任务打卡` 这个中文路径下，`wrangler pages dev` 可能因为 esbuild 解析入口文件时报 `Cannot read directory "../..": Access is denied`。源码构建、测试和 D1 migration 已可正常运行；如需本机跑完整 Pages Functions 预览，建议把项目放到纯 ASCII 路径后再执行 `npm run pages:dev`。
+```bash
+npm test                                   # 运行全部测试
+npx vitest run tests/cross-family.test.ts  # 跨家庭安全测试
+npx vitest run tests/concurrency.test.ts   # 并发与幂等测试
+npx vitest run tests/api.test.ts           # API 集成与输入校验测试
+```
+
+## 数据安全
+
+- 所有跨家庭查询都通过 `parent_id` 过滤。
+- 积分流水通过部分唯一索引防止重复记账。
+- AI 服务地址必须为 HTTPS，禁止内网和回环地址。
+- 非 GET 请求在生产环境校验 Origin/Referer。
+- AI 请求设置 15 秒超时，禁止跟随重定向。

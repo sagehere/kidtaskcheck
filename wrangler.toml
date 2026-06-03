@@ -10,4 +10,6 @@ database_id = "dbfc66d6-e579-4b66-95aa-26e2d41e5c79"
 [vars]
 APP_NAME = "儿童任务打卡"
 ADMIN_USERNAME = "admin"
+# 生产环境请在 Cloudflare Secrets 中设置 ADMIN_PASSWORD、ENVIRONMENT、APP_URL
 ADMIN_PASSWORD = "change-me-admin-password"
+ENVIRONMENT = "development"

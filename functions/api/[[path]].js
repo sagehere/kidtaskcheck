@@ -1285,6 +1285,12 @@ async function route(request, env) {
         }
         return ok(true);
     }
+    if (path === "/admin/ai-service/refresh-greetings" && method === "POST") {
+        requireRole(actor, ["admin"]);
+        const offset = DEFAULT_TIMEZONE_OFFSET_MINUTES;
+        const result = await batchRefreshGreetings(env, offset);
+        return ok(result);
+    }
     if (path === "/admin/ai-service/models" && method === "POST") {
         requireRole(actor, ["admin"]);
         const input = await body(request);
@@ -2319,12 +2325,6 @@ async function batchRefreshGreetings(env, offset) {
     }
     return { success: successCount, failed: failed.length };
 }
-
-export const scheduled = async (event, env, ctx) => {
-    const offset = DEFAULT_TIMEZONE_OFFSET_MINUTES;
-    const result = await batchRefreshGreetings(env, offset);
-    console.log(`[ai-greeting-cron] generated=${result.success} failed=${result.failed}`);
-};
 
 export const onRequest = async ({ request, env }) => {
     try {

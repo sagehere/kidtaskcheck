@@ -14,6 +14,7 @@
 - API entrypoint is `functions/api/[[path]].js`; it is a single Cloudflare Pages Function router backed by D1 binding `DB`.
 - Schema source is `migrations/0001_initial.sql`; local and remote migrations target D1 database name `kids_task_checkin`.
 - `wrangler.toml` contains placeholder `database_id` and default admin credentials; change `ADMIN_PASSWORD` and real D1 ID before deploy.
+- Cloudflare Pages Functions do not support `scheduled` (cron) handlers. To auto-refresh AI greetings weekly, set up an external cron service (e.g. cron-job.org, GitHub Actions) to `POST /api/admin/ai-service/refresh-greetings` weekly. The admin panel also has a manual "刷新 AI 寄语" button.
 
 ## Gotchas
 - `functions/api/[[path]].js` imports domain helpers from `src/lib/domain.js`, while tests import `src/lib/domain.ts`; update both files together when changing period, points, or streak logic.

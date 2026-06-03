@@ -439,6 +439,7 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
   const [aiApiKey, setAiApiKey] = useState("");
   const [aiModels, setAiModels] = useState<string[]>([]);
   const [aiFetching, setAiFetching] = useState(false);
+  const [aiRefreshing, setAiRefreshing] = useState(false);
 
   async function load() {
     const [userRows, galleryRows, settingRows, aiRows] = await Promise.all([
@@ -610,6 +611,7 @@ function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void })
             <textarea value={aiConfig.prompt} onChange={(e) => setAiConfig({ ...aiConfig, prompt: e.target.value })} rows={4} />
           </Field>
           <button className="primary"><Sparkles size={18} />保存 AI 配置</button>
+          <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ success: number; failed: number }>("/admin/ai-service/refresh-greetings", { method: "POST" }); setMessage(`AI 寄语刷新完成：成功 ${r.success}，失败 ${r.failed}`); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "刷新中..." : "刷新 AI 寄语"}</button>
         </form>
       </section>
       <div className="grid two">

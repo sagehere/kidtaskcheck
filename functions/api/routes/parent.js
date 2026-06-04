@@ -1,5 +1,5 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, periodKey, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, generateParentAiGreeting, getParentAiServiceConfig, refreshParentAiGreetings, validateHttpsUrl, ensureRewardOnceSchema } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, generateParentAiGreeting, getParentAiServiceConfig, refreshParentAiGreetings, validateHttpsUrl, ensureRewardOnceSchema, AI_FETCH_TIMEOUT_MS } from "../utils.js";
 
 export async function handleParentRoutes(path, method, request, env, actor, url) {
     if (path === "/parent/profile" && method === "PATCH") {
@@ -24,13 +24,19 @@ export async function handleParentRoutes(path, method, request, env, actor, url)
     if (path === "/parent/ai-service" && method === "GET") {
         const a = requireRole(actor, ["parent"]);
         const config = await getParentAiServiceConfig(env, a.id);
-        return ok(config);
+        return ok({
+            baseUrl: config.baseUrl,
+            model: config.model,
+            prompt: config.prompt,
+            hasKey: config.hasKey,
+            updatedAt: config.updatedAt
+        });
     }
     if (path === "/parent/ai-service" && method === "PATCH") {
         const a = requireRole(actor, ["parent"]);
         const input = await body(request);
         const current = await getParentAiServiceConfig(env, a.id);
-        const nextBaseUrl = input.baseUrl !== undefined ? String(input.baseUrl).trim() : current.baseUrl;
+        const nextBaseUrl = input.baseUrl !== undefined ? String(input.baseUrl).trim().replace(/\/+$/, "") : current.baseUrl;
         const nextModel = input.model !== undefined ? String(input.model).trim() : current.model;
         const nextPrompt = input.prompt !== undefined ? String(input.prompt).trim() : current.prompt;
         if (!nextBaseUrl || !nextModel || !nextPrompt)
@@ -39,12 +45,13 @@ export async function handleParentRoutes(path, method, request, env, actor, url)
         if (urlErr)
             return fail("BAD_REQUEST", urlErr);
         const nextApiKey = input.apiKey !== undefined && String(input.apiKey).trim() ? String(input.apiKey).trim() : current.apiKey;
+        const updatedAt = nowIso();
         await env.DB.prepare(`INSERT INTO parent_ai_service_settings (parent_id, base_url, api_key, model, prompt, updated_at)
 VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, prompt=excluded.prompt, updated_at=excluded.updated_at`)
-            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, nowIso())
+            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, updatedAt)
             .run();
-        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, hasKey: !!nextApiKey });
+        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, hasKey: !!nextApiKey, updatedAt });
     }
     if (path === "/parent/ai-service/models" && method === "POST") {
         const a = requireRole(actor, ["parent"]);
@@ -60,15 +67,24 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
         const headers = { "content-type": "application/json" };
         if (apiKey)
             headers["authorization"] = `Bearer ${apiKey}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), AI_FETCH_TIMEOUT_MS);
         try {
-            const resp = await fetch(`${baseUrl}/models`, { headers });
+            const resp = await fetch(`${baseUrl}/models`, { headers, signal: controller.signal, redirect: "manual" });
+            clearTimeout(timeoutId);
+            if (resp.status === 0 || resp.type === "opaqueredirect")
+                return fail("AI_SERVICE_ERROR", "AI service redirects are not allowed", 502);
             if (!resp.ok)
                 return fail("AI_SERVICE_ERROR", `获取模型列表失败：${resp.status}`, 502);
-            const body = await resp.json();
-            const models = (body.data || []).map((item) => item.id);
+            const body = await resp.json().catch(() => ({}));
+            const models = (Array.isArray(body.data) ? body.data : [])
+                .map((item) => item?.id)
+                .filter((value) => typeof value === "string" && value.trim())
+                .map((value) => value.trim());
             return ok({ models });
         }
         catch {
+            clearTimeout(timeoutId);
             return fail("AI_SERVICE_ERROR", "无法连接 AI 服务", 502);
         }
     }

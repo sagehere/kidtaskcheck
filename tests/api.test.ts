@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { resetTestEnv } from "./helpers/setup";
 import { handleAuthRoutes } from "../functions/api/routes/auth.js";
 import { handleAdminRoutes } from "../functions/api/routes/admin.js";
@@ -142,6 +142,9 @@ describe("Parent AI Service Validation", () => {
     const pw = await hashPassword("parent-ai-pw");
     env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, ?, ?, 'parent', 'AI Parent')").bind(parentId, "parent-ai", pw).run();
   });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
   async function asAdmin() {
     const c = await login(env, "admin", "test-admin-pw");
     const a = await actorFromRequest(makeRequest("GET", "/auth/me", undefined, `session=${c}`), env);
@@ -167,6 +170,45 @@ describe("Parent AI Service Validation", () => {
     expect(config.data.baseUrl).toBe("https://api.openai.com/v1");
     expect(config.data.model).toBe("gpt-4o-mini");
     expect(config.data.hasKey).toBe(true);
+    expect(config.data.apiKey).toBeUndefined();
+  });
+  it("creates missing parent AI settings table before saving", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    env.DB.prepare("DROP TABLE parent_ai_service_settings").run();
+    const r = await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-test", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    expect(r!.status).toBe(200);
+    const row = env.DB.prepare("SELECT base_url, model, api_key FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
+    expect(row.base_url).toBe("https://api.example.com/v1");
+    expect(row.model).toBe("gpt-test");
+    expect(row.api_key).toBe("sk-test");
+  });
+  it("keeps saved AI key when later updates omit apiKey", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1/", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    const r = await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1/", model: "gpt-b", prompt: "updated" }), env, actor);
+    expect(r!.status).toBe(200);
+    const row = env.DB.prepare("SELECT base_url, model, prompt, api_key FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
+    expect(row.base_url).toBe("https://api.example.com/v1");
+    expect(row.model).toBe("gpt-b");
+    expect(row.prompt).toBe("updated");
+    expect(row.api_key).toBe("sk-test");
+  });
+  it("fetches AI models with saved key, timeout, and manual redirects", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://api.example.com/v1/models");
+      expect(init?.redirect).toBe("manual");
+      expect(init?.signal).toBeDefined();
+      expect((init?.headers as Record<string, string>)?.authorization).toBe("Bearer sk-test");
+      return new Response(JSON.stringify({ data: [{ id: "gpt-a" }, { id: 123 }, {}, { id: " gpt-b " }] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const r = await safe(handleParentRoutes, "/parent/ai-service/models", "POST", makeRequest("POST", "/parent/ai-service/models", { baseUrl: "https://api.example.com/v1" }), env, actor);
+    expect(r!.status).toBe(200);
+    const data = await r!.json();
+    expect(data.data.models).toEqual(["gpt-a", "gpt-b"]);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
   it("rejects gallery URL with javascript scheme", async () => {
     const { actor } = await asAdmin();

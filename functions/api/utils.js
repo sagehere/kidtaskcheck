@@ -161,6 +161,17 @@ export async function ensureSystemSettings(env) {
   generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (child_id, previous_week_key, config_hash)
 )`).run();
+    await ensureParentAiServiceSettings(env);
+}
+export async function ensureParentAiServiceSettings(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS parent_ai_service_settings (
+  parent_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  base_url TEXT NOT NULL DEFAULT '',
+  api_key TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  prompt TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
+)`).run();
 }
 export async function timezoneOffsetMinutes(env) {
     const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key='timezone_offset_minutes'").first();
@@ -404,6 +415,7 @@ export async function maybeRunMaintenance(env) {
 export async function bootstrap(env) {
     if (!bootstrapPromise) {
         bootstrapPromise = (async () => {
+            await ensureSystemSettings(env);
             await ensureAdmin(env);
             await maybeRunMaintenance(env);
         })().catch((error) => {
@@ -1104,6 +1116,7 @@ export function aiConfigHash(config) {
 
 export async function getParentAiServiceConfig(env, parentId) {
     try {
+        await ensureParentAiServiceSettings(env);
         const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
         return {
             baseUrl: row?.base_url || "",

@@ -10,7 +10,7 @@ import { EmojiSelect } from "./components/EmojiSelect";
 import { Shell } from "./components/Shell";
 import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, formatAchievementRule } from "./lib/appHelpers";
 
-type ParentAiServiceStoredConfig = ParentAiServiceConfig & { apiKey?: string; updatedAt?: string };
+type ParentAiServiceStoredConfig = Omit<ParentAiServiceConfig, "apiKey"> & { updatedAt?: string };
 const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", hasKey: false };
 
 export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
@@ -92,7 +92,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
         api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; }),
         api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; }),
-        api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ baseUrl: "", hasKey: false, model: "", prompt: "", apiKey: "", updatedAt: "" }))
+        api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ baseUrl: "", hasKey: false, model: "", prompt: "", updatedAt: "" }))
       ]);
       setChildren(childRows);
       setCategories(categoryRows);
@@ -300,7 +300,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   }
 
   const aiDraftApiKeyValue = draftAiApiKey.trim();
-  const aiFetchApiKey = aiDraftApiKeyValue || savedAiConfig.apiKey || "";
+  const aiFetchApiKey = aiDraftApiKeyValue;
 
   return (
     <Shell me={me} refresh={refresh} onQuickAction={() => void load()}>
@@ -436,7 +436,6 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                   model: response.model ?? draftAiConfig.model,
                   prompt: response.prompt ?? draftAiConfig.prompt,
                   hasKey: (response.hasKey ?? savedAiConfig.hasKey) || !!nextApiKey,
-                  apiKey: nextApiKey || savedAiConfig.apiKey || response.apiKey || "",
                   updatedAt: response.updatedAt ?? savedAiConfig.updatedAt
                 };
                 storeSavedAiConfig(nextSaved);

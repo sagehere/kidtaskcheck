@@ -1,6 +1,6 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
-import { nowIso, DAY_MS, balance } from "../utils.js";
-import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, loadAiGreetingSnapshot, ensureAiReportCommentaries } from "./cache.js";
+import { nowIso, balance } from "../utils.js";
+import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries } from "./cache.js";
 import { buildAiPrompt, buildReportAiPrompt, previousWeekReportSummary } from "./prompt.js";
 import { callParentAiService, callParentAiServiceForReport } from "./providers.js";
 
@@ -11,7 +11,13 @@ export class NonRetryableError extends Error {
     }
 }
 
-export async function generateParentAiGreeting(env, child, offset, forceRefresh = false) {
+export function previousCompletedReportRange(periodType, input, offset) {
+    const current = reportWindowRange(periodType, input, offset);
+    const previousAnchor = new Date(new Date(current.start).getTime() - 1).toISOString();
+    return reportWindowRange(periodType, previousAnchor, offset);
+}
+
+export async function generateParentAiGreeting(env, child, offset, forceRefresh = false, options = {}) {
     if (!child.ai_enabled)
         throw new NonRetryableError("ai_disabled");
     const config = await getParentAiServiceConfig(env, child.parent_id);
@@ -44,7 +50,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(
     if (!aiPrompt)
         return "";
     const greeting = await callParentAiService(env, aiPrompt, config);
-    if (greeting) {
+    if (greeting && options.cache !== false) {
         await env.DB.prepare("INSERT OR REPLACE INTO ai_child_greetings (child_id, previous_week_key, config_hash, greeting, generated_at) VALUES (?, ?, ?, ?, ?)")
             .bind(child.id, weekKey, hash, greeting, now)
             .run();
@@ -52,18 +58,20 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(
     return greeting;
 }
 
-export async function generateReportCommentary(env, child, periodType, periodKey, offset, forceRefresh = false) {
+export async function generateReportCommentary(env, child, periodType, periodKey, offset, forceRefresh = false, options = {}) {
     if (!child?.ai_enabled) throw new NonRetryableError("ai_disabled");
     const config = await getParentAiServiceConfig(env, child.parent_id);
     if (!config.baseUrl || !config.apiKey || !config.model) throw new NonRetryableError("ai_config_incomplete");
     const hash = aiReportConfigHash(config, periodType);
     const now = nowIso();
-    await ensureAiReportCommentaries(env);
-    const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")
-        .bind(child.id, periodKey, periodType, hash)
-        .first();
-    if (cached?.commentary && !forceRefresh) return cached.commentary;
-    const range = reportWindowRange(periodType, now, offset);
+    if (options.cache !== false) {
+        await ensureAiReportCommentaries(env);
+        const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")
+            .bind(child.id, periodKey, periodType, hash)
+            .first();
+        if (cached?.commentary && !forceRefresh) return cached.commentary;
+    }
+    const range = options.range || reportWindowRange(periodType, now, offset);
     const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows, assignedTasks, assignedRewards, feedbackTemplates] = await Promise.all([
         env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC")
             .bind(child.id, child.parent_id, range.start, range.end).all(),
@@ -118,7 +126,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(
     const aiPrompt = buildReportAiPrompt(child, reportData, config, periodType, offset);
     if (!aiPrompt) return "";
     const commentary = await callParentAiServiceForReport(env, aiPrompt, config);
-    if (commentary) {
+    if (commentary && options.cache !== false) {
         await env.DB.prepare("INSERT OR REPLACE INTO ai_report_commentaries (child_id, parent_id, period_key, period_type, config_hash, commentary, generated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(child.id, child.parent_id, periodKey, periodType, hash, commentary, now)
             .run();

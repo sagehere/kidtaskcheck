@@ -9,11 +9,8 @@ declare module "*/ai/index.js" {
   export const loadAiGreetingSnapshot: Function;
   export const generateParentAiGreeting: Function;
   export const generateReportCommentary: Function;
-  export const enqueueAiGeneration: Function;
-  export const processAiQueue: Function;
-  export const getAiQueueStatus: Function;
-  export const refreshParentAiGreetings: Function;
-  export const refreshParentReportCommentaries: Function;
+  export const previousCompletedReportRange: Function;
+  export const runScheduledAiRefresh: Function;
 }
 
 // Type stubs for Node.js modules used in tests

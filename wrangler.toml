@@ -2,6 +2,9 @@ name = "kids-task-checkin"
 compatibility_date = "2026-05-25"
 pages_build_output_dir = "dist"
 
+[triggers]
+crons = ["*/30 * * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "kids_task_checkin"

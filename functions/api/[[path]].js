@@ -4,6 +4,7 @@ import { handleAdminRoutes } from "./routes/admin.js";
 import { handleParentRoutes } from "./routes/parent.js";
 import { handleChildRoutes } from "./routes/child.js";
 import { handleSharedRoutes } from "./routes/shared.js";
+import { runScheduledAiRefresh } from "./ai/index.js";
 
 async function route(request, env, ctx) {
     await bootstrap(env);
@@ -42,4 +43,9 @@ export const onRequest = async ({ request, env, ctx }) => {
         console.error("Unhandled error:", error?.stack || error);
         return fail("SERVER_ERROR", "服务器错误，请稍后重试", 500);
     }
+};
+
+export const onScheduled = async ({ scheduledTime, env }) => {
+    await bootstrap(env);
+    return runScheduledAiRefresh(env, scheduledTime ? new Date(scheduledTime) : new Date());
 };

@@ -42,9 +42,6 @@ export type EmojiOption = { emoji: string; name: string; shortNames: string[]; c
 
 export type AiServiceConfig = { baseUrl: string; model: string; prompt: string; reportPrompt?: string; monthlyPrompt?: string; hasKey: boolean; apiKey?: string; updatedAt?: string };
 export type ParentAiServiceConfig = AiServiceConfig;
-export type AiQueueStatus = { pending: number; processing: number; completed: number; failed: number };
-export type AiQueueProcessResult = { scheduled?: boolean; processed: number; failed: number };
-
 export const REFRESH_INTERVAL_MS = 12000;
 export const DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
 export const WEEKDAY_OPTIONS = [

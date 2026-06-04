@@ -1,6 +1,6 @@
-import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, reportWindowRange } from "../../../src/lib/domain.js";
+import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
 import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, recalcAchievements, notify } from "../utils.js";
-import { loadAiGreetingSnapshot, enqueueAiGeneration, processAiQueue } from "../ai/index.js";
+import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
     if (path === "/task-submissions" && method === "POST") {
@@ -132,16 +132,6 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
         if (!childRow)
             return fail("NOT_FOUND", "孩子账号不存在", 404);
         const snapshot = await loadAiGreetingSnapshot(env, childRow, offset);
-        if (snapshot.aiRefreshPending && childRow.ai_enabled) {
-            const now = nowIso();
-            const range = reportWindowRange("weekly", now, offset);
-            const weekKey = periodKey("weekly", range.start, offset);
-            ctx?.waitUntil?.(
-                enqueueAiGeneration(env, childRow.parent_id, childRow.id, "greeting", weekKey).then(() =>
-                    processAiQueue(env)
-                )
-            );
-        }
         return ok({
             balance: await balance(env, a.id),
             aiGreeting: snapshot.greeting,

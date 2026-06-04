@@ -1,16 +1,6 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, periodKey, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
 import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema } from "../utils.js";
-import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, enqueueAiGeneration, processAiQueue, getAiQueueStatus, listModels } from "../ai/index.js";
-
-async function scheduleAiQueueProcessing(env, ctx) {
-    const work = processAiQueue(env);
-    if (ctx?.waitUntil) {
-        ctx.waitUntil(work);
-        return { scheduled: true, processed: 0, failed: 0 };
-    }
-    const result = await work;
-    return { scheduled: false, ...result };
-}
+import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels } from "../ai/index.js";
 
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
@@ -137,49 +127,32 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             return ok({ ok: false, error: "无法连接，请检查 Base URL 和 API Key" });
         }
     }
-    if (path === "/parent/ai-service/refresh-greetings" && method === "POST") {
+    if (path === "/parent/ai-service/preview" && method === "POST") {
         const a = requireRole(actor, ["parent"]);
-        const offset = await timezoneOffsetMinutes(env);
-        const children = await env.DB.prepare("SELECT id, ai_enabled FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(a.id).all();
-        const now = nowIso();
-        const range = reportWindowRange("weekly", now, offset);
-        const weekKey = periodKey("weekly", range.start, offset);
-        let queued = 0;
-        for (const child of children.results) {
-            if (!child.ai_enabled) continue;
-            await enqueueAiGeneration(env, a.id, child.id, "greeting", weekKey);
-            queued++;
-        }
-        const queue = await scheduleAiQueueProcessing(env, ctx);
-        return ok({ queued, queue });
-    }
-    if (path === "/parent/ai-service/refresh-commentaries" && method === "POST") {
-        const a = requireRole(actor, ["parent"]);
-        const offset = await timezoneOffsetMinutes(env);
         const input = await body(request);
-        const periodType = input?.periodType === "monthly" ? "monthly" : "weekly";
-        const children = await env.DB.prepare("SELECT id, ai_enabled FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(a.id).all();
-        const now = nowIso();
-        const range = reportWindowRange(periodType, now, offset);
-        const pkey = range.label;
-        let queued = 0;
-        for (const child of children.results) {
-            if (!child.ai_enabled) continue;
-            await enqueueAiGeneration(env, a.id, child.id, `report_${periodType}`, pkey);
-            queued++;
+        const type = String(input.type || "");
+        if (!["greeting", "weeklyReport", "monthlyReport"].includes(type))
+            return fail("BAD_REQUEST", "无效的 AI 测试类型", 400);
+        const child = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(String(input.childId || ""), a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        if (!child.ai_enabled)
+            return fail("BAD_REQUEST", "请先为该孩子启用 AI", 400);
+        const config = await getParentAiServiceConfig(env, a.id);
+        if (!config.baseUrl || !config.apiKey || !config.model || !config.prompt)
+            return fail("BAD_REQUEST", "请先完整保存 AI 服务配置", 400);
+        const offset = await timezoneOffsetMinutes(env);
+        let text = "";
+        if (type === "greeting") {
+            text = await generateParentAiGreeting(env, child, offset, true, { cache: false });
+        } else {
+            const period = type === "monthlyReport" ? "monthly" : "weekly";
+            const range = previousCompletedReportRange(period, nowIso(), offset);
+            text = await generateReportCommentary(env, child, period, range.label, offset, true, { cache: false, range });
         }
-        const queue = await scheduleAiQueueProcessing(env, ctx);
-        return ok({ queued, queue });
-    }
-    if (path === "/parent/ai-service/queue-status" && method === "GET") {
-        const a = requireRole(actor, ["parent"]);
-        const status = await getAiQueueStatus(env, a.id);
-        return ok(status);
-    }
-    if (path === "/parent/ai-service/process-queue" && method === "POST") {
-        const a = requireRole(actor, ["parent"]);
-        const result = await processAiQueue(env);
-        return ok({ triggered: true, ...result });
+        return ok({ text });
     }
     if (path === "/children") {
         const a = requireRole(actor, ["parent"]);
@@ -278,45 +251,6 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 打印清单</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务</h2>${table(["标题","分类","周期","次数","积分","周","状态","说明"], tasks.results.map((item) => [item.title, item.category_name || "", item.period, item.limit_count || 1, item.points, normalizeWeekdays(item.enabled_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>奖励</h2>${table(["名称","所需积分","限制周期","次数","核销周几","状态","说明"], rewards.results.map((item) => [item.title, item.cost_points, item.limit_period, item.limit_count || "", normalizeWeekdays(item.redeem_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>表扬与批评条款</h2>${table(["类型","标题","积分","状态","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, item.points, item.is_active ? "启用" : "停用", item.description || ""]))}</body></html>`;
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
-    const childAiGreeting = path.match(/^\/children\/([^/]+)\/ai-greeting$/);
-    if (childAiGreeting && method === "POST") {
-        const a = requireRole(actor, ["parent"]);
-        const child = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
-            .bind(childAiGreeting[1], a.id)
-            .first();
-        if (!child)
-            return fail("NOT_FOUND", "孩子账号不存在", 404);
-        const offset = await timezoneOffsetMinutes(env);
-        let greeting = "";
-        try {
-            greeting = await generateParentAiGreeting(env, child, offset, true);
-        } catch (error) {
-            if (error?.name !== "NonRetryableError")
-                throw error;
-        }
-        return ok({ greeting });
-    }
-    const childReportCommentary = path.match(/^\/children\/([^/]+)\/report-commentary$/);
-    if (childReportCommentary && method === "POST") {
-        const a = requireRole(actor, ["parent"]);
-        const child = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
-            .bind(childReportCommentary[1], a.id)
-            .first();
-        if (!child)
-            return fail("NOT_FOUND", "孩子账号不存在", 404);
-        const offset = await timezoneOffsetMinutes(env);
-        const period = url.searchParams.get("period") === "monthly" ? "monthly" : "weekly";
-        const periodKey = reportWindowRange(period, nowIso(), offset).label;
-        await ensureAiReportCommentaries(env);
-        let commentary = "";
-        try {
-            commentary = await generateReportCommentary(env, child, period, periodKey, offset, true);
-        } catch (error) {
-            if (error?.name !== "NonRetryableError")
-                throw error;
-        }
-        return ok({ commentary });
-    }
     const childReport = path.match(/^\/children\/([^/]+)\/report$/);
     if (childReport && method === "GET") {
         const a = requireRole(actor, ["parent"]);
@@ -327,8 +261,8 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
             return fail("NOT_FOUND", "孩子账号不存在", 404);
         const offset = await timezoneOffsetMinutes(env);
         const period = url.searchParams.get("period") === "monthly" ? "monthly" : "weekly";
-        const anchor = url.searchParams.get("anchor") || nowIso();
-        const range = reportWindowRange(period, anchor, offset);
+        const anchor = url.searchParams.get("anchor");
+        const range = anchor ? reportWindowRange(period, anchor, offset) : previousCompletedReportRange(period, nowIso(), offset);
         const periodKey = range.label;
         const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows] = await Promise.all([
             env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC").bind(child.id, a.id, range.start, range.end).all(),
@@ -377,12 +311,8 @@ ORDER BY ca.unlocked_at DESC`).bind(child.id, a.id, range.start, range.end).all(
                     const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")
                         .bind(child.id, periodKey, period, hash)
                         .first();
-                    if (cached?.commentary) {
+                    if (cached?.commentary)
                         commentary = cached.commentary;
-                    }
-                    else {
-                        commentary = await generateReportCommentary(env, child, period, periodKey, offset);
-                    }
                 }
             } catch (error) {
                 console.warn("AI report commentary skipped:", error?.message || error);

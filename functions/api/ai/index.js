@@ -17,11 +17,9 @@ export {
 
 export {
     generateParentAiGreeting, generateReportCommentary,
+    previousCompletedReportRange,
 } from "./orchestrator.js";
 
 export {
-    AI_REFRESH_DELAY_MS, AI_REFRESH_COOLDOWN_MS, AI_REFRESH_MAX_RETRIES,
-    AI_QUEUE_BATCH_SIZE,
-    sleep, ensureAiGenerationQueue, enqueueAiGeneration, processAiQueue, getAiQueueStatus,
-    refreshParentAiGreetings, refreshParentReportCommentaries,
-} from "./queue.js";
+    ensureAiScheduledRefreshRuns, runScheduledAiRefresh,
+} from "./scheduled.js";

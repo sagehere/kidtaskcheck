@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, AiQueueStatus, AiQueueProcessResult } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, formatSource, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -36,8 +36,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [aiFetching, setAiFetching] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
   const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; error?: string; models?: string[] } | null>(null);
-  const [aiRefreshing, setAiRefreshing] = useState(false);
-  const [aiQueueStatus, setAiQueueStatus] = useState<AiQueueStatus | null>(null);
+  const [selectedAiTestChildId, setSelectedAiTestChildId] = useState("");
+  const [aiPreviewing, setAiPreviewing] = useState<"" | "greeting" | "weeklyReport" | "monthlyReport">("");
+  const [aiPreviewResult, setAiPreviewResult] = useState<{ title: string; text: string } | null>(null);
   const [aiConfigLoaded, setAiConfigLoaded] = useState(false);
   const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
@@ -84,36 +85,23 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     setDraftAiApiKey(value);
   }
 
-  async function refreshQueueStatus() {
-    try {
-      const status = await api<AiQueueStatus>("/parent/ai-service/queue-status");
-      setAiQueueStatus(status);
-      return status;
-    } catch {}
-  }
-
-  async function pollQueueStatus(limit = 12) {
-    for (let i = 0; i < limit; i++) {
-      const status = await refreshQueueStatus();
-      if (!status || status.pending + status.processing === 0) return;
-      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+  async function previewAiContent(type: "greeting" | "weeklyReport" | "monthlyReport", title: string, childId: string) {
+    if (!childId) {
+      setError("请先选择一个已启用 AI 的孩子");
+      return;
     }
-  }
-
-  async function refreshAiQueue(path: string, noteLabel: string, body?: Record<string, unknown>) {
-    setAiRefreshing(true);
+    setAiPreviewing(type);
+    setError("");
     try {
-      const result = await api<{ queued: number; queue?: AiQueueProcessResult }>(path, {
+      const result = await api<{ text: string }>("/parent/ai-service/preview", {
         method: "POST",
-        ...(body ? { body: JSON.stringify(body) } : {})
+        body: JSON.stringify({ childId, type })
       });
-      const processed = result.queue && !result.queue.scheduled ? `，已处理 ${result.queue.processed} 条` : "";
-      setMessage(`已加入生成队列：${result.queued} 条 ${noteLabel}${processed}`);
-      await pollQueueStatus();
+      setAiPreviewResult({ title, text: result.text || "本次没有返回内容" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "刷新失败");
+      setError(err instanceof Error ? err.message : "AI 预览失败");
     } finally {
-      setAiRefreshing(false);
+      setAiPreviewing("");
     }
   }
 
@@ -169,9 +157,6 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     if (activeTab !== "settings" || !aiConfigLoaded || aiDraftInitializedRef.current || aiDraftDirtyRef.current) return;
     syncAiDraft(savedAiConfig);
   }, [activeTab, aiConfigLoaded, savedAiConfig.baseUrl, savedAiConfig.model, savedAiConfig.prompt, savedAiConfig.hasKey]);
-  useEffect(() => {
-    if (activeTab === "settings" && aiConfigLoaded) void refreshQueueStatus();
-  }, [activeTab, aiConfigLoaded]);
   useEffect(() => {
     if (ledgerChild) void loadLedger(ledgerChild);
   }, [dashboard, ledgerChild?.id]);
@@ -342,6 +327,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
 
   const aiDraftApiKeyValue = draftAiApiKey.trim();
   const aiFetchApiKey = aiDraftApiKeyValue;
+  const aiTestChildren = children.filter((child) => child.ai_enabled === 1 && child.status === "active");
+  const aiTestChildId = selectedAiTestChildId || aiTestChildren[0]?.id || "";
 
   return (
     <Shell me={me} refresh={refresh} onQuickAction={() => void load()}>
@@ -547,27 +534,26 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               </div>
             </form>
             <div className="panel" style={{ marginTop: "0.75rem" }}>
-              <h3>生成队列</h3>
-              <div className="inline-fields" style={{ marginBottom: "0.5rem" }}>
-                <button type="button" className="secondary" disabled={aiRefreshing} onClick={() => void refreshAiQueue("/parent/ai-service/refresh-greetings", "AI 寄语")}>{aiRefreshing ? "提交中..." : "刷新 AI 寄语"}</button>
-                <button type="button" className="secondary" disabled={aiRefreshing} onClick={() => void refreshAiQueue("/parent/ai-service/refresh-commentaries", "周报 AI 评语", { periodType: "weekly" })}>{aiRefreshing ? "提交中..." : "刷新周报评语"}</button>
-                <button type="button" className="secondary" disabled={aiRefreshing} onClick={() => void refreshAiQueue("/parent/ai-service/refresh-commentaries", "月报 AI 评语", { periodType: "monthly" })}>{aiRefreshing ? "提交中..." : "刷新月报评语"}</button>
-              </div>
-              {aiQueueStatus && (
-                <div className="stack compact" style={{ gap: "0.25rem" }}>
-                  <div className="inline-fields" style={{ justifyContent: "space-between", fontSize: "0.85em", color: "var(--text-secondary)" }}>
-                    <span>待处理：{aiQueueStatus.pending}</span>
-                    <span>处理中：{aiQueueStatus.processing}</span>
-                    <span>已完成：{aiQueueStatus.completed}</span>
-                    <span>失败：{aiQueueStatus.failed}</span>
-                  </div>
-                  {(aiQueueStatus.pending + aiQueueStatus.processing) > 0 && (
-                    <div style={{ height: "4px", background: "var(--border-color)", borderRadius: "2px", overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${Math.min(100, Math.round((aiQueueStatus.completed + aiQueueStatus.failed) / Math.max(1, aiQueueStatus.completed + aiQueueStatus.failed + aiQueueStatus.pending + aiQueueStatus.processing) * 100))}%`, background: "var(--primary-color)", borderRadius: "2px", transition: "width 0.3s" }} />
-                    </div>
-                  )}
+              <h3>测试区域</h3>
+              <div className="stack compact">
+                <Field label="测试孩子">
+                  <select value={aiTestChildId} onChange={(event) => setSelectedAiTestChildId(event.target.value)} disabled={!aiTestChildren.length}>
+                    {!aiTestChildren.length && <option value="">请先为孩子启用 AI</option>}
+                    {aiTestChildren.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
+                  </select>
+                </Field>
+                <div className="inline-fields">
+                  <button type="button" className="secondary" disabled={!aiTestChildId || !!aiPreviewing} onClick={() => void previewAiContent("greeting", "AI 寄语预览", aiTestChildId)}>
+                    {aiPreviewing === "greeting" ? "获取中..." : "测试 AI 寄语"}
+                  </button>
+                  <button type="button" className="secondary" disabled={!aiTestChildId || !!aiPreviewing} onClick={() => void previewAiContent("weeklyReport", "周报评语预览", aiTestChildId)}>
+                    {aiPreviewing === "weeklyReport" ? "获取中..." : "测试周报评语"}
+                  </button>
+                  <button type="button" className="secondary" disabled={!aiTestChildId || !!aiPreviewing} onClick={() => void previewAiContent("monthlyReport", "月报评语预览", aiTestChildId)}>
+                    {aiPreviewing === "monthlyReport" ? "获取中..." : "测试月报评语"}
+                  </button>
                 </div>
-              )}
+              </div>
             </div>
           </section>
         </>
@@ -595,6 +581,13 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           onClose={() => setReportChild(null)}
           onPrint={exportChildPrint}
           onReport={exportChildReport}
+        />
+      )}
+      {aiPreviewResult && (
+        <AiPreviewDialog
+          title={aiPreviewResult.title}
+          text={aiPreviewResult.text}
+          onClose={() => setAiPreviewResult(null)}
         />
       )}
       {editChild && (
@@ -839,26 +832,6 @@ export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child
 }
 
 export function ReportDialog({ child, onPrint, onReport, onClose }: { child: Child; onPrint: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onClose: () => void }) {
-  const [commentaryPeriod, setCommentaryPeriod] = useState<"weekly" | "monthly">("weekly");
-  const [commentary, setCommentary] = useState("");
-  const [commentaryError, setCommentaryError] = useState("");
-  const [commentaryLoading, setCommentaryLoading] = useState(false);
-  async function refreshCommentary(period: "weekly" | "monthly") {
-    setCommentaryPeriod(period);
-    setCommentaryLoading(true);
-    setCommentaryError("");
-    try {
-      const result = await api<{ commentary: string }>(`/children/${encodeURIComponent(child.id)}/report-commentary?period=${period}`, { method: "POST" });
-      setCommentary(result.commentary || "");
-      if (!result.commentary) setCommentaryError("暂未生成评语，请确认已启用 AI 并完成 AI 服务配置");
-    } catch (err) {
-      setCommentary("");
-      setCommentaryError(err instanceof Error ? err.message : "生成评语失败");
-    } finally {
-      setCommentaryLoading(false);
-    }
-  }
-  const commentaryTitle = commentaryPeriod === "monthly" ? "月报 AI 评语" : "周报 AI 评语";
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <section className="panel refund-modal">
@@ -873,26 +846,27 @@ export function ReportDialog({ child, onPrint, onReport, onClose }: { child: Chi
             <Printer size={18} />打印清单
           </button>
           <button className="secondary" onClick={() => { onReport(child, "weekly"); onClose(); }}>
-            <Printer size={18} />查看周报
+            <Printer size={18} />上周周报
           </button>
           <button className="secondary" onClick={() => { onReport(child, "monthly"); onClose(); }}>
-            <Printer size={18} />查看月报
+            <Printer size={18} />上月月报
           </button>
         </div>
-        <div className="setting-section" style={{ marginTop: "0.75rem" }}>
-          <h3>{commentaryTitle}</h3>
-          <div className="inline-fields">
-            <button type="button" className="secondary" disabled={commentaryLoading || child.ai_enabled !== 1} onClick={() => void refreshCommentary("weekly")}>
-              {commentaryLoading && commentaryPeriod === "weekly" ? "生成中..." : "刷新周报评语"}
-            </button>
-            <button type="button" className="secondary" disabled={commentaryLoading || child.ai_enabled !== 1} onClick={() => void refreshCommentary("monthly")}>
-              {commentaryLoading && commentaryPeriod === "monthly" ? "生成中..." : "刷新月报评语"}
-            </button>
-          </div>
-          {child.ai_enabled !== 1 && <p className="muted-text">该孩子尚未启用 AI，启用后可生成评语。</p>}
-          {commentary && <p className="ai-preview-text">{commentary}</p>}
-          {commentaryError && <p className="error-text">{commentaryError}</p>}
+      </section>
+    </div>
+  );
+}
+
+export function AiPreviewDialog({ title, text, onClose }: { title: string; text: string; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <section className="panel refund-modal">
+        <div className="panel-title compact-title">
+          <Sparkles />
+          <h2>{title}</h2>
+          <button type="button" className="secondary" onClick={onClose}>关闭</button>
         </div>
+        <p className="ai-preview-text">{text}</p>
       </section>
     </div>
   );
@@ -1348,8 +1322,6 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
 
 export function ChildEditForm({ child, onSave, onCancel }: { child: Child; onSave: (data: any) => any; onCancel: () => void }) {
   const [data, setData] = useState({ displayName: child.display_name, password: "", aiEnabled: child.ai_enabled === 1, gender: child.gender || "", birthDate: child.birth_date || "" });
-  const [previewGreeting, setPreviewGreeting] = useState("");
-  const [previewLoading, setPreviewLoading] = useState(false);
   return (
     <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, password: data.password || undefined }); }}>
       <Field label="姓名"><input required value={data.displayName} onChange={(e) => setData({ ...data, displayName: e.target.value })} /></Field>
@@ -1363,12 +1335,6 @@ export function ChildEditForm({ child, onSave, onCancel }: { child: Child; onSav
       </Field>
       <Field label="出生日期"><input type="date" value={data.birthDate} onChange={(e) => setData({ ...data, birthDate: e.target.value })} /></Field>
       <Toggle label="启用 AI 寄语" checked={data.aiEnabled} onChange={(aiEnabled) => setData({ ...data, aiEnabled })} />
-      <Field label="AI 寄语预览">
-        <div className="inline-fields">
-          <button type="button" className="secondary" disabled={previewLoading || !data.aiEnabled} onClick={async () => { setPreviewLoading(true); try { const r = await api<{ greeting: string }>(`/children/${encodeURIComponent(child.id)}/ai-greeting`, { method: "POST" }); setPreviewGreeting(r.greeting || "(未生成寄语)"); } catch (err) { setPreviewGreeting(`获取失败：${err instanceof Error ? err.message : "未知错误"}`); } finally { setPreviewLoading(false); } }}>{previewLoading ? "获取中..." : "刷新 AI 寄语"}</button>
-        </div>
-        {previewGreeting && <p className="ai-preview-text">{previewGreeting}</p>}
-      </Field>
       <div className="actions"><button className="primary">保存</button><button type="button" className="secondary" onClick={onCancel}>取消</button></div>
     </form>
   );

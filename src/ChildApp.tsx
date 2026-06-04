@@ -269,8 +269,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           <h1>{me.displayName}</h1>
         </div>
         {(summary.aiGreeting || dash.aiGreeting)
-          ? <p className="ai-greeting">{summary.aiGreeting || dash.aiGreeting}{summary.aiRefreshPending || dash.aiRefreshPending ? " · 刷新中" : ""}</p>
-          : (summary.aiRefreshPending || dash.aiRefreshPending) ? <p className="ai-greeting muted">AI 寄语生成中...</p> : null
+          ? <p className="ai-greeting">{summary.aiGreeting || dash.aiGreeting}{summary.aiRefreshPending || dash.aiRefreshPending ? " · 等待定时更新" : ""}</p>
+          : (summary.aiRefreshPending || dash.aiRefreshPending) ? <p className="ai-greeting muted">AI 寄语等待定时生成</p> : null
         }
         <button className="metric large clickable" onClick={() => void openLedger()}>
           <Star />

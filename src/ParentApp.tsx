@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, AiQueueStatus } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, formatSource, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -34,7 +34,10 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [draftAiApiKey, setDraftAiApiKey] = useState("");
   const [aiModels, setAiModels] = useState<string[]>([]);
   const [aiFetching, setAiFetching] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; error?: string; models?: string[] } | null>(null);
   const [aiRefreshing, setAiRefreshing] = useState(false);
+  const [aiQueueStatus, setAiQueueStatus] = useState<AiQueueStatus | null>(null);
   const [aiConfigLoaded, setAiConfigLoaded] = useState(false);
   const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
@@ -79,6 +82,13 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   function updateAiApiKey(value: string) {
     markAiDraftDirty();
     setDraftAiApiKey(value);
+  }
+
+  async function refreshQueueStatus() {
+    try {
+      const status = await api<AiQueueStatus>("/parent/ai-service/queue-status");
+      setAiQueueStatus(status);
+    } catch {}
   }
 
   async function load() {
@@ -133,6 +143,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     if (activeTab !== "settings" || !aiConfigLoaded || aiDraftInitializedRef.current || aiDraftDirtyRef.current) return;
     syncAiDraft(savedAiConfig);
   }, [activeTab, aiConfigLoaded, savedAiConfig.baseUrl, savedAiConfig.model, savedAiConfig.prompt, savedAiConfig.hasKey]);
+  useEffect(() => {
+    if (activeTab === "settings" && aiConfigLoaded) void refreshQueueStatus();
+  }, [activeTab, aiConfigLoaded]);
   useEffect(() => {
     if (ledgerChild) void loadLedger(ledgerChild);
   }, [dashboard, ledgerChild?.id]);
@@ -446,39 +459,89 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                 syncAiDraft(nextSaved);
               }, "AI 服务配置已保存");
             }}>
-              <Field label="Base URL">
-                <input value={draftAiConfig.baseUrl} onChange={(e) => updateAiDraft({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
-              </Field>
-              <Field label="API Key">
-                <input value={draftAiApiKey} onChange={(e) => updateAiApiKey(e.target.value)} type="password" placeholder={savedAiConfig.hasKey ? "已设置，留空则保留" : "请输入 API Key"} autoComplete="new-password" />
-              </Field>
-              <Field label="模型">
+              <div className="setting-section">
+                <h3>连接配置</h3>
+                <Field label="Base URL">
+                  <input value={draftAiConfig.baseUrl} onChange={(e) => updateAiDraft({ baseUrl: e.target.value })} placeholder="https://api.deepseek.com/v1" />
+                </Field>
+                <Field label="API Key">
+                  <input value={draftAiApiKey} onChange={(e) => updateAiApiKey(e.target.value)} type="password" placeholder={savedAiConfig.hasKey ? "已设置，留空则保留" : "请输入 API Key"} autoComplete="new-password" />
+                </Field>
                 <div className="inline-fields">
-                  <select value={draftAiConfig.model} onChange={(e) => updateAiDraft({ model: e.target.value })} style={{ flex: 1 }}>
-                    {!draftAiConfig.model && <option value="">请选择或拉取模型列表</option>}
-                    {aiModels.map((model) => <option key={model} value={model}>{model}</option>)}
-                  </select>
-                  <button type="button" className="secondary" disabled={aiFetching || !draftAiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const modelsBody: { baseUrl: string; apiKey?: string } = { baseUrl: draftAiConfig.baseUrl }; if (aiFetchApiKey) modelsBody.apiKey = aiFetchApiKey; const data = await api<{ models: string[] }>("/parent/ai-service/models", { method: "POST", body: JSON.stringify(modelsBody) }); setAiModels(data.models); if (data.models.length && !draftAiConfig.model) updateAiDraft({ model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
+                  <button type="button" className="secondary" disabled={aiTesting || !draftAiConfig.baseUrl} onClick={async () => {
+                    setAiTesting(true);
+                    setAiTestResult(null);
+                    try {
+                      const testBody: { baseUrl: string; apiKey?: string; model?: string } = { baseUrl: draftAiConfig.baseUrl };
+                      if (aiFetchApiKey) testBody.apiKey = aiFetchApiKey;
+                      if (draftAiConfig.model) testBody.model = draftAiConfig.model;
+                      const result = await api<{ ok: boolean; error?: string; models?: string[] }>("/parent/ai-service/test", { method: "POST", body: JSON.stringify(testBody) });
+                      setAiTestResult(result);
+                      if (result.models?.length) setAiModels(result.models);
+                    } catch (err) {
+                      setAiTestResult({ ok: false, error: err instanceof Error ? err.message : "测试失败" });
+                    } finally { setAiTesting(false); }
+                  }}>{aiTesting ? "测试中..." : "测试连接"}</button>
+                  {aiTestResult && (
+                    <span className={aiTestResult.ok ? "success-text" : "error-text"} style={{ fontSize: "0.9em" }}>
+                      {aiTestResult.ok ? "✓ 连接成功" + (aiTestResult.models?.length ? `（${aiTestResult.models.length} 个模型）` : "") : "✗ " + (aiTestResult.error || "失败")}
+                    </span>
+                  )}
                 </div>
-              </Field>
-              <Field label="提示词">
-                <textarea value={draftAiConfig.prompt} onChange={(e) => updateAiDraft({ prompt: e.target.value })} rows={4} />
-              </Field>
-              <Field label="周报评语提示词">
-                <textarea value={draftAiConfig.reportPrompt || ""} onChange={(e) => updateAiDraft({ reportPrompt: e.target.value })} rows={3} placeholder="留空使用默认提示词" />
-              </Field>
-              <Field label="月报评语提示词">
-                <textarea value={draftAiConfig.monthlyPrompt || ""} onChange={(e) => updateAiDraft({ monthlyPrompt: e.target.value })} rows={3} placeholder="留空使用默认提示词" />
-              </Field>
+              </div>
+              <div className="setting-section">
+                <h3>模型选择</h3>
+                <Field label="模型">
+                  <div className="inline-fields">
+                    <select value={draftAiConfig.model} onChange={(e) => updateAiDraft({ model: e.target.value })} style={{ flex: 1 }}>
+                      {!draftAiConfig.model && <option value="">请选择或拉取模型列表</option>}
+                      {aiModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                    </select>
+                    <button type="button" className="secondary" disabled={aiFetching || !draftAiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const modelsBody: { baseUrl: string; apiKey?: string } = { baseUrl: draftAiConfig.baseUrl }; if (aiFetchApiKey) modelsBody.apiKey = aiFetchApiKey; const data = await api<{ models: string[] }>("/parent/ai-service/models", { method: "POST", body: JSON.stringify(modelsBody) }); setAiModels(data.models); if (data.models.length && !draftAiConfig.model) updateAiDraft({ model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
+                  </div>
+                </Field>
+              </div>
+              <div className="setting-section">
+                <h3>提示词设置</h3>
+                <Field label="寄语提示词">
+                  <textarea value={draftAiConfig.prompt} onChange={(e) => updateAiDraft({ prompt: e.target.value })} rows={4} />
+                </Field>
+                <Field label="周报评语提示词">
+                  <textarea value={draftAiConfig.reportPrompt || ""} onChange={(e) => updateAiDraft({ reportPrompt: e.target.value })} rows={3} placeholder="留空使用默认提示词" />
+                </Field>
+                <Field label="月报评语提示词">
+                  <textarea value={draftAiConfig.monthlyPrompt || ""} onChange={(e) => updateAiDraft({ monthlyPrompt: e.target.value })} rows={3} placeholder="留空使用默认提示词" />
+                </Field>
+              </div>
               <button className="primary"><Sparkles size={18} />保存 AI 配置</button>
               <div className="inline-fields">
                 <button type="button" className="secondary" onClick={() => { syncAiDraft(savedAiConfig); setMessage("AI 配置已恢复为已保存内容"); }}>
                   重载 AI 配置
                 </button>
-                <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ success: number; failed: number }>("/parent/ai-service/refresh-greetings", { method: "POST" }); setMessage("AI 寄语刷新完成：成功 " + r.success + "，失败 " + r.failed); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "刷新中..." : "刷新 AI 寄语"}</button>
-                <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ success: number; failed: number }>("/parent/ai-service/refresh-commentaries", { method: "POST", body: JSON.stringify({ periodType: "weekly" }) }); setMessage("AI 评语刷新完成：成功 " + r.success + "，失败 " + r.failed); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "刷新中..." : "刷新 AI 评语"}</button>
               </div>
             </form>
+            <div className="panel" style={{ marginTop: "0.75rem" }}>
+              <h3>生成队列</h3>
+              <div className="inline-fields" style={{ marginBottom: "0.5rem" }}>
+                <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ queued: number }>("/parent/ai-service/refresh-greetings", { method: "POST" }); setMessage("已加入生成队列：" + r.queued + " 条 AI 寄语"); await refreshQueueStatus(); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "提交中..." : "刷新 AI 寄语"}</button>
+                <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ queued: number }>("/parent/ai-service/refresh-commentaries", { method: "POST", body: JSON.stringify({ periodType: "weekly" }) }); setMessage("已加入生成队列：" + r.queued + " 条 AI 评语"); await refreshQueueStatus(); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "提交中..." : "刷新 AI 评语"}</button>
+              </div>
+              {aiQueueStatus && (
+                <div className="stack compact" style={{ gap: "0.25rem" }}>
+                  <div className="inline-fields" style={{ justifyContent: "space-between", fontSize: "0.85em", color: "var(--text-secondary)" }}>
+                    <span>待处理：{aiQueueStatus.pending}</span>
+                    <span>处理中：{aiQueueStatus.processing}</span>
+                    <span>已完成：{aiQueueStatus.completed}</span>
+                    <span>失败：{aiQueueStatus.failed}</span>
+                  </div>
+                  {(aiQueueStatus.pending + aiQueueStatus.processing) > 0 && (
+                    <div style={{ height: "4px", background: "var(--border-color)", borderRadius: "2px", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, Math.round((aiQueueStatus.completed + aiQueueStatus.failed) / Math.max(1, aiQueueStatus.completed + aiQueueStatus.failed + aiQueueStatus.pending + aiQueueStatus.processing) * 100))}%`, background: "var(--primary-color)", borderRadius: "2px", transition: "width 0.3s" }} />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </section>
         </>
       )}

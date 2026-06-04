@@ -22,5 +22,13 @@ describe("Task 36: AI Mock Tests", () => {
     it("rejects non-HTTPS URLs in production-like mode", () => {
       expect(isPrivateUrl("http://api.example.com")).toBe(false); // HTTP is allowed by isPrivateUrl but later rejected
     });
+
+    it("correctly validates 172.x.x.x range (RFC 1918 172.16.0.0/12)", () => {
+      expect(isPrivateUrl("http://172.16.0.1")).toBe(true);
+      expect(isPrivateUrl("http://172.31.255.255")).toBe(true);
+      expect(isPrivateUrl("http://172.32.0.1")).toBe(false);
+      expect(isPrivateUrl("http://172.217.0.1")).toBe(false);
+      expect(isPrivateUrl("http://172.64.64.1")).toBe(false);
+    });
   });
 });

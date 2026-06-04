@@ -1,7 +1,8 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, periodKey, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, generateParentAiGreeting, getParentAiServiceConfig, refreshParentAiGreetings, refreshParentReportCommentaries, generateReportCommentary, aiReportConfigHash, validateHttpsUrl, ensureRewardOnceSchema, AI_FETCH_TIMEOUT_MS } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema } from "../utils.js";
+import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, aiReportConfigHash, AI_FETCH_TIMEOUT_MS, enqueueAiGeneration, processAiQueue, getAiQueueStatus, listModels } from "../ai/index.js";
 
-export async function handleParentRoutes(path, method, request, env, actor, url) {
+export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
         const a = requireRole(actor, ["parent"]);
         const input = await body(request);
@@ -81,30 +82,94 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             if (!resp.ok)
                 return fail("AI_SERVICE_ERROR", `获取模型列表失败：${resp.status}`, 502);
             const body = await resp.json().catch(() => ({}));
-            const models = (Array.isArray(body.data) ? body.data : [])
-                .map((item) => item?.id)
+            let raw = [];
+            if (Array.isArray(body.data)) {
+                raw = body.data;
+            } else if (Array.isArray(body.models)) {
+                raw = body.models;
+            } else if (Array.isArray(body)) {
+                raw = body;
+            }
+            const models = raw
+                .map((item) => (typeof item === "string" ? item : item?.id || item?.name || item?.model))
                 .filter((value) => typeof value === "string" && value.trim())
                 .map((value) => value.trim());
             return ok({ models });
         }
-        catch {
+        catch (error) {
             clearTimeout(timeoutId);
+            const name = error?.name || "";
+            if (name === "AbortError")
+                return fail("AI_SERVICE_ERROR", "AI 服务请求超时", 502);
             return fail("AI_SERVICE_ERROR", "无法连接 AI 服务", 502);
+        }
+    }
+    if (path === "/parent/ai-service/test" && method === "POST") {
+        const a = requireRole(actor, ["parent"]);
+        const input = await body(request);
+        const current = await getParentAiServiceConfig(env, a.id);
+        const baseUrl = String(input.baseUrl || current.baseUrl || "").replace(/\/+$/, "");
+        const apiKey = input.apiKey !== undefined && String(input.apiKey).trim() ? String(input.apiKey).trim() : current.apiKey;
+        const model = String(input.model || current.model || "");
+        if (!baseUrl) return ok({ ok: false, error: "请先设置 Base URL" });
+        const urlErr = validateHttpsUrl(baseUrl, "AI Base URL");
+        if (urlErr) return ok({ ok: false, error: urlErr });
+        try {
+            const models = await listModels(baseUrl, apiKey);
+            if (models.length > 0) return ok({ ok: true, models });
+            if (!model) return ok({ ok: false, error: "Base URL 连接成功但未返回模型列表，请确认 URL 是否正确" });
+            return ok({ ok: true, models: [], note: "连接成功，但未获取到模型列表" });
+        }
+        catch (error) {
+            const msg = error?.message || String(error || "");
+            if (msg.includes("timed out") || msg.includes("abort") || msg.includes("AbortError"))
+                return ok({ ok: false, error: "连接超时，请检查 Base URL 是否正确" });
+            return ok({ ok: false, error: "无法连接，请检查 Base URL 和 API Key" });
         }
     }
     if (path === "/parent/ai-service/refresh-greetings" && method === "POST") {
         const a = requireRole(actor, ["parent"]);
         const offset = await timezoneOffsetMinutes(env);
-        const result = await refreshParentAiGreetings(env, offset, a.id);
-        return ok(result);
+        const children = await env.DB.prepare("SELECT id, ai_enabled FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(a.id).all();
+        const now = nowIso();
+        const range = reportWindowRange("weekly", now, offset);
+        const weekKey = periodKey("weekly", range.start, offset);
+        let queued = 0;
+        for (const child of children.results) {
+            if (!child.ai_enabled) continue;
+            await enqueueAiGeneration(env, a.id, child.id, "greeting", weekKey);
+            queued++;
+        }
+        ctx?.waitUntil?.(processAiQueue(env));
+        return ok({ queued });
     }
     if (path === "/parent/ai-service/refresh-commentaries" && method === "POST") {
         const a = requireRole(actor, ["parent"]);
         const offset = await timezoneOffsetMinutes(env);
         const input = await body(request);
         const periodType = input?.periodType === "monthly" ? "monthly" : "weekly";
-        const result = await refreshParentReportCommentaries(env, offset, a.id, periodType);
-        return ok(result);
+        const children = await env.DB.prepare("SELECT id, ai_enabled FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(a.id).all();
+        const now = nowIso();
+        const range = reportWindowRange(periodType, now, offset);
+        const pkey = range.label;
+        let queued = 0;
+        for (const child of children.results) {
+            if (!child.ai_enabled) continue;
+            await enqueueAiGeneration(env, a.id, child.id, `report_${periodType}`, pkey);
+            queued++;
+        }
+        ctx?.waitUntil?.(processAiQueue(env));
+        return ok({ queued });
+    }
+    if (path === "/parent/ai-service/queue-status" && method === "GET") {
+        const a = requireRole(actor, ["parent"]);
+        const status = await getAiQueueStatus(env, a.id);
+        return ok(status);
+    }
+    if (path === "/parent/ai-service/process-queue" && method === "POST") {
+        const a = requireRole(actor, ["parent"]);
+        ctx?.waitUntil?.(processAiQueue(env));
+        return ok({ triggered: true });
     }
     if (path === "/children") {
         const a = requireRole(actor, ["parent"]);

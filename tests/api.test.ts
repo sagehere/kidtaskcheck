@@ -4,7 +4,8 @@ import { handleAuthRoutes } from "../functions/api/routes/auth.js";
 import { handleAdminRoutes } from "../functions/api/routes/admin.js";
 import { handleChildRoutes } from "../functions/api/routes/child.js";
 import { handleParentRoutes } from "../functions/api/routes/parent.js";
-import { ensureAdmin, actorFromRequest, loginAttempts, sessionCookie, validateHttpsUrl, isPrivateUrl, truncateAiOutput, id, hashPassword } from "../functions/api/utils.js";
+import { ensureAdmin, actorFromRequest, loginAttempts, sessionCookie, validateHttpsUrl, isPrivateUrl, id, hashPassword } from "../functions/api/utils.js";
+import { truncateAiOutput } from "../functions/api/ai/index.js";
 
 function makeRequest(m: string, p: string, b?: any, c?: string): Request {
   const h: Record<string, string> = {};

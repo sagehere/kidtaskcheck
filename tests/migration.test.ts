@@ -6,9 +6,9 @@ import { D1Mock } from "./helpers/d1-mock";
 const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
 describe("Task 35: Migration Smoke Test", () => {
-  it("all 15 migration files apply sequentially on empty DB without errors", () => {
+  it("all 16 migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(15);
+    expect(files.length).toBe(16);
     const d1 = new D1Mock();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");

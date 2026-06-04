@@ -1,3 +1,21 @@
+// Type stubs for ai module
+declare module "*/ai/index.js" {
+  export const AI_FETCH_TIMEOUT_MS: number;
+  export const truncateAiOutput: (text: string) => string;
+  export const listModels: Function;
+  export const callParentAiService: Function;
+  export const callParentAiServiceForReport: Function;
+  export const getParentAiServiceConfig: Function;
+  export const loadAiGreetingSnapshot: Function;
+  export const generateParentAiGreeting: Function;
+  export const generateReportCommentary: Function;
+  export const enqueueAiGeneration: Function;
+  export const processAiQueue: Function;
+  export const getAiQueueStatus: Function;
+  export const refreshParentAiGreetings: Function;
+  export const refreshParentReportCommentaries: Function;
+}
+
 // Type stubs for Node.js modules used in tests
 declare module "fs" {
   export function readFileSync(path: string, encoding?: string): string;
@@ -62,8 +80,6 @@ declare module "*/utils.js" {
   export const recalcAchievements: Function;
   export const notify: Function;
   export const isPrivateUrl: (url: string) => boolean;
-  export const batchRefreshGreetings: Function;
-  export const generateAiGreeting: Function;
   export const updateSetting: Function;
   export const usernameExists: Function;
   export const clampTimezoneOffset: Function;

@@ -18,7 +18,7 @@ async function route(request, env, ctx) {
     const result =
         (await handleAuthRoutes(path, method, request, env, actor)) ||
         (await handleAdminRoutes(path, method, request, env, actor)) ||
-        (await handleParentRoutes(path, method, request, env, actor, url)) ||
+        (await handleParentRoutes(path, method, request, env, actor, url, ctx)) ||
         (await handleChildRoutes(path, method, request, env, actor, ctx)) ||
         (await handleSharedRoutes(path, method, request, env, actor, url));
 
@@ -39,7 +39,7 @@ export const onRequest = async ({ request, env, ctx }) => {
             console.error("Constraint violation:", msg);
             return fail("DUPLICATE_OPERATION", "操作冲突，请重试", 409);
         }
-        console.error("Unhandled error:", error);
+        console.error("Unhandled error:", error?.stack || error);
         return fail("SERVER_ERROR", "服务器错误，请稍后重试", 500);
     }
 };

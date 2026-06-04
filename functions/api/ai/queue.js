@@ -1,6 +1,6 @@
 import { reportWindowRange } from "../../../src/lib/domain.js";
-import { nowIso, id } from "../utils.js";
-import { generateParentAiGreeting, generateReportCommentary } from "./orchestrator.js";
+import { nowIso, id, timezoneOffsetMinutes } from "../utils.js";
+import { generateParentAiGreeting, generateReportCommentary, NonRetryableError } from "./orchestrator.js";
 
 export const AI_REFRESH_DELAY_MS = 2000;
 export const AI_REFRESH_COOLDOWN_MS = 30000;
@@ -36,6 +36,7 @@ export async function enqueueAiGeneration(env, parentId, childId, type, periodKe
 
 export async function processAiQueue(env) {
     await ensureAiGenerationQueue(env);
+    const offset = await timezoneOffsetMinutes(env);
     const pending = await env.DB.prepare("SELECT * FROM ai_generation_queue WHERE status='pending' ORDER BY created_at ASC LIMIT ?")
         .bind(AI_QUEUE_BATCH_SIZE)
         .all();
@@ -57,7 +58,6 @@ export async function processAiQueue(env) {
                 failed++;
                 continue;
             }
-            const offset = 0;
             let result = "";
             if (item.type === "greeting") {
                 result = await generateParentAiGreeting(env, child, offset, true);
@@ -85,9 +85,11 @@ export async function processAiQueue(env) {
             }
         }
         catch (error) {
-            if (item.retry_count >= item.max_retries) {
+            const isNonRetryable = error instanceof NonRetryableError;
+            const lastError = String(error?.message || error).slice(0, 200);
+            if (isNonRetryable || item.retry_count >= item.max_retries) {
                 await env.DB.prepare("UPDATE ai_generation_queue SET status='failed', last_error=?, completed_at=? WHERE id=?")
-                    .bind(String(error?.message || error).slice(0, 200), nowIso(), item.id)
+                    .bind(lastError, nowIso(), item.id)
                     .run();
             } else {
                 await env.DB.prepare("UPDATE ai_generation_queue SET status='pending', retry_count=retry_count+1 WHERE id=?")
@@ -96,7 +98,8 @@ export async function processAiQueue(env) {
             }
             failed++;
         }
-        await sleep(AI_REFRESH_DELAY_MS);
+        if (pending.results[pending.results.length - 1]?.id !== item.id)
+            await sleep(AI_REFRESH_DELAY_MS);
     }
     return { processed, failed };
 }
@@ -168,5 +171,4 @@ export async function refreshParentReportCommentaries(env, offset, parentId, per
     }
     return { success: successCount, failed: failCount };
 }
-
 

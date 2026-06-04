@@ -2,6 +2,16 @@ import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, p
 import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema } from "../utils.js";
 import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, aiReportConfigHash, AI_FETCH_TIMEOUT_MS, enqueueAiGeneration, processAiQueue, getAiQueueStatus, listModels } from "../ai/index.js";
 
+async function scheduleAiQueueProcessing(env, ctx) {
+    const work = processAiQueue(env);
+    if (ctx?.waitUntil) {
+        ctx.waitUntil(work);
+        return { scheduled: true, processed: 0, failed: 0 };
+    }
+    const result = await work;
+    return { scheduled: false, ...result };
+}
+
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
         const a = requireRole(actor, ["parent"]);
@@ -140,8 +150,8 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             await enqueueAiGeneration(env, a.id, child.id, "greeting", weekKey);
             queued++;
         }
-        ctx?.waitUntil?.(processAiQueue(env));
-        return ok({ queued });
+        const queue = await scheduleAiQueueProcessing(env, ctx);
+        return ok({ queued, queue });
     }
     if (path === "/parent/ai-service/refresh-commentaries" && method === "POST") {
         const a = requireRole(actor, ["parent"]);
@@ -158,8 +168,8 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             await enqueueAiGeneration(env, a.id, child.id, `report_${periodType}`, pkey);
             queued++;
         }
-        ctx?.waitUntil?.(processAiQueue(env));
-        return ok({ queued });
+        const queue = await scheduleAiQueueProcessing(env, ctx);
+        return ok({ queued, queue });
     }
     if (path === "/parent/ai-service/queue-status" && method === "GET") {
         const a = requireRole(actor, ["parent"]);
@@ -168,8 +178,8 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
     }
     if (path === "/parent/ai-service/process-queue" && method === "POST") {
         const a = requireRole(actor, ["parent"]);
-        ctx?.waitUntil?.(processAiQueue(env));
-        return ok({ triggered: true });
+        const result = await processAiQueue(env);
+        return ok({ triggered: true, ...result });
     }
     if (path === "/children") {
         const a = requireRole(actor, ["parent"]);
@@ -277,7 +287,13 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         if (!child)
             return fail("NOT_FOUND", "孩子账号不存在", 404);
         const offset = await timezoneOffsetMinutes(env);
-        const greeting = await generateParentAiGreeting(env, child, offset, true);
+        let greeting = "";
+        try {
+            greeting = await generateParentAiGreeting(env, child, offset, true);
+        } catch (error) {
+            if (error?.name !== "NonRetryableError")
+                throw error;
+        }
         return ok({ greeting });
     }
     const childReportCommentary = path.match(/^\/children\/([^/]+)\/report-commentary$/);
@@ -291,7 +307,13 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const offset = await timezoneOffsetMinutes(env);
         const period = url.searchParams.get("period") === "monthly" ? "monthly" : "weekly";
         const periodKey = reportWindowRange(period, nowIso(), offset).label;
-        const commentary = await generateReportCommentary(env, child, period, periodKey, offset, true);
+        let commentary = "";
+        try {
+            commentary = await generateReportCommentary(env, child, period, periodKey, offset, true);
+        } catch (error) {
+            if (error?.name !== "NonRetryableError")
+                throw error;
+        }
         return ok({ commentary });
     }
     const childReport = path.match(/^\/children\/([^/]+)\/report$/);
@@ -347,7 +369,7 @@ ORDER BY ca.unlocked_at DESC`).bind(child.id, a.id, range.start, range.end).all(
         let commentary = "";
         if (child.ai_enabled) {
             const config = await getParentAiServiceConfig(env, child.parent_id);
-            if (config.baseUrl && config.apiKey && config.model && (config.reportPrompt || config.monthlyPrompt)) {
+            if (config.baseUrl && config.apiKey && config.model) {
                 const hash = aiReportConfigHash(config, period);
                 const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")
                     .bind(child.id, periodKey, period, hash)

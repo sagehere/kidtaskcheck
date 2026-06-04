@@ -4,12 +4,19 @@ import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, loadAiGreet
 import { buildAiPrompt, buildReportAiPrompt, previousWeekReportSummary } from "./prompt.js";
 import { callParentAiService, callParentAiServiceForReport } from "./providers.js";
 
+export class NonRetryableError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = "NonRetryableError";
+    }
+}
+
 export async function generateParentAiGreeting(env, child, offset, forceRefresh = false) {
     if (!child.ai_enabled)
-        return "";
+        throw new NonRetryableError("ai_disabled");
     const config = await getParentAiServiceConfig(env, child.parent_id);
     if (!config.baseUrl || !config.apiKey || !config.model || !config.prompt)
-        return "";
+        throw new NonRetryableError("ai_config_incomplete");
     const hash = aiConfigHash(config);
     const now = nowIso();
     const range = reportWindowRange("weekly", now, offset);
@@ -46,10 +53,9 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(
 }
 
 export async function generateReportCommentary(env, child, periodType, periodKey, offset, forceRefresh = false) {
-    if (!child?.ai_enabled) return "";
+    if (!child?.ai_enabled) throw new NonRetryableError("ai_disabled");
     const config = await getParentAiServiceConfig(env, child.parent_id);
-    if (!config.baseUrl || !config.apiKey || !config.model) return "";
-    if (!config.reportPrompt && !config.monthlyPrompt) return "";
+    if (!config.baseUrl || !config.apiKey || !config.model) throw new NonRetryableError("ai_config_incomplete");
     const hash = aiReportConfigHash(config, periodType);
     const now = nowIso();
     const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")

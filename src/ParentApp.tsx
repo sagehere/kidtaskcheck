@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, AiQueueStatus } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, AiQueueStatus, AiQueueProcessResult } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, formatSource, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -88,7 +88,33 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     try {
       const status = await api<AiQueueStatus>("/parent/ai-service/queue-status");
       setAiQueueStatus(status);
+      return status;
     } catch {}
+  }
+
+  async function pollQueueStatus(limit = 12) {
+    for (let i = 0; i < limit; i++) {
+      const status = await refreshQueueStatus();
+      if (!status || status.pending + status.processing === 0) return;
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+  }
+
+  async function refreshAiQueue(path: string, noteLabel: string, body?: Record<string, unknown>) {
+    setAiRefreshing(true);
+    try {
+      const result = await api<{ queued: number; queue?: AiQueueProcessResult }>(path, {
+        method: "POST",
+        ...(body ? { body: JSON.stringify(body) } : {})
+      });
+      const processed = result.queue && !result.queue.scheduled ? `，已处理 ${result.queue.processed} 条` : "";
+      setMessage(`已加入生成队列：${result.queued} 条 ${noteLabel}${processed}`);
+      await pollQueueStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "刷新失败");
+    } finally {
+      setAiRefreshing(false);
+    }
   }
 
   async function load() {
@@ -523,8 +549,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             <div className="panel" style={{ marginTop: "0.75rem" }}>
               <h3>生成队列</h3>
               <div className="inline-fields" style={{ marginBottom: "0.5rem" }}>
-                <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ queued: number }>("/parent/ai-service/refresh-greetings", { method: "POST" }); setMessage("已加入生成队列：" + r.queued + " 条 AI 寄语"); await refreshQueueStatus(); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "提交中..." : "刷新 AI 寄语"}</button>
-                <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ queued: number }>("/parent/ai-service/refresh-commentaries", { method: "POST", body: JSON.stringify({ periodType: "weekly" }) }); setMessage("已加入生成队列：" + r.queued + " 条 AI 评语"); await refreshQueueStatus(); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "提交中..." : "刷新 AI 评语"}</button>
+                <button type="button" className="secondary" disabled={aiRefreshing} onClick={() => void refreshAiQueue("/parent/ai-service/refresh-greetings", "AI 寄语")}>{aiRefreshing ? "提交中..." : "刷新 AI 寄语"}</button>
+                <button type="button" className="secondary" disabled={aiRefreshing} onClick={() => void refreshAiQueue("/parent/ai-service/refresh-commentaries", "周报 AI 评语", { periodType: "weekly" })}>{aiRefreshing ? "提交中..." : "刷新周报评语"}</button>
+                <button type="button" className="secondary" disabled={aiRefreshing} onClick={() => void refreshAiQueue("/parent/ai-service/refresh-commentaries", "月报 AI 评语", { periodType: "monthly" })}>{aiRefreshing ? "提交中..." : "刷新月报评语"}</button>
               </div>
               {aiQueueStatus && (
                 <div className="stack compact" style={{ gap: "0.25rem" }}>
@@ -812,6 +839,26 @@ export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child
 }
 
 export function ReportDialog({ child, onPrint, onReport, onClose }: { child: Child; onPrint: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onClose: () => void }) {
+  const [commentaryPeriod, setCommentaryPeriod] = useState<"weekly" | "monthly">("weekly");
+  const [commentary, setCommentary] = useState("");
+  const [commentaryError, setCommentaryError] = useState("");
+  const [commentaryLoading, setCommentaryLoading] = useState(false);
+  async function refreshCommentary(period: "weekly" | "monthly") {
+    setCommentaryPeriod(period);
+    setCommentaryLoading(true);
+    setCommentaryError("");
+    try {
+      const result = await api<{ commentary: string }>(`/children/${encodeURIComponent(child.id)}/report-commentary?period=${period}`, { method: "POST" });
+      setCommentary(result.commentary || "");
+      if (!result.commentary) setCommentaryError("暂未生成评语，请确认已启用 AI 并完成 AI 服务配置");
+    } catch (err) {
+      setCommentary("");
+      setCommentaryError(err instanceof Error ? err.message : "生成评语失败");
+    } finally {
+      setCommentaryLoading(false);
+    }
+  }
+  const commentaryTitle = commentaryPeriod === "monthly" ? "月报 AI 评语" : "周报 AI 评语";
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <section className="panel refund-modal">
@@ -831,6 +878,20 @@ export function ReportDialog({ child, onPrint, onReport, onClose }: { child: Chi
           <button className="secondary" onClick={() => { onReport(child, "monthly"); onClose(); }}>
             <Printer size={18} />查看月报
           </button>
+        </div>
+        <div className="setting-section" style={{ marginTop: "0.75rem" }}>
+          <h3>{commentaryTitle}</h3>
+          <div className="inline-fields">
+            <button type="button" className="secondary" disabled={commentaryLoading || child.ai_enabled !== 1} onClick={() => void refreshCommentary("weekly")}>
+              {commentaryLoading && commentaryPeriod === "weekly" ? "生成中..." : "刷新周报评语"}
+            </button>
+            <button type="button" className="secondary" disabled={commentaryLoading || child.ai_enabled !== 1} onClick={() => void refreshCommentary("monthly")}>
+              {commentaryLoading && commentaryPeriod === "monthly" ? "生成中..." : "刷新月报评语"}
+            </button>
+          </div>
+          {child.ai_enabled !== 1 && <p className="muted-text">该孩子尚未启用 AI，启用后可生成评语。</p>}
+          {commentary && <p className="ai-preview-text">{commentary}</p>}
+          {commentaryError && <p className="error-text">{commentaryError}</p>}
         </div>
       </section>
     </div>

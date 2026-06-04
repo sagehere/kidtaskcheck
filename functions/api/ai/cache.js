@@ -1,5 +1,5 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
-import { nowIso } from "../utils.js";
+import { nowIso, ensureColumn } from "../utils.js";
 
 export function aiConfigHash(config) {
     const hash = ["sha256", config.baseUrl || "", config.model || "", config.prompt || ""].join("|");
@@ -78,4 +78,6 @@ export async function ensureParentAiServiceSettings(env) {
   monthly_prompt TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT ''
 )`).run();
+    await ensureColumn(env, "parent_ai_service_settings", "report_prompt", "report_prompt TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "monthly_prompt", "monthly_prompt TEXT NOT NULL DEFAULT ''");
 }

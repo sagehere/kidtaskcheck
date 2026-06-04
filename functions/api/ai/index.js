@@ -12,7 +12,7 @@ export {
 export {
     aiConfigHash, aiReportConfigHash,
     getParentAiServiceConfig, loadAiGreetingSnapshot,
-    ensureParentAiServiceSettings,
+    ensureParentAiServiceSettings, ensureAiReportCommentaries,
 } from "./cache.js";
 
 export {

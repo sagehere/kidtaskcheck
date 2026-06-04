@@ -1,6 +1,6 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, periodKey, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
 import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema } from "../utils.js";
-import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, aiReportConfigHash, AI_FETCH_TIMEOUT_MS, enqueueAiGeneration, processAiQueue, getAiQueueStatus, listModels } from "../ai/index.js";
+import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, enqueueAiGeneration, processAiQueue, getAiQueueStatus, listModels } from "../ai/index.js";
 
 async function scheduleAiQueueProcessing(env, ctx) {
     const work = processAiQueue(env);
@@ -307,6 +307,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const offset = await timezoneOffsetMinutes(env);
         const period = url.searchParams.get("period") === "monthly" ? "monthly" : "weekly";
         const periodKey = reportWindowRange(period, nowIso(), offset).label;
+        await ensureAiReportCommentaries(env);
         let commentary = "";
         try {
             commentary = await generateReportCommentary(env, child, period, periodKey, offset, true);
@@ -368,18 +369,23 @@ ORDER BY ca.unlocked_at DESC`).bind(child.id, a.id, range.start, range.end).all(
         const reportTitle = period === "monthly" ? "月度报告" : "周度报告";
         let commentary = "";
         if (child.ai_enabled) {
-            const config = await getParentAiServiceConfig(env, child.parent_id);
-            if (config.baseUrl && config.apiKey && config.model) {
-                const hash = aiReportConfigHash(config, period);
-                const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")
-                    .bind(child.id, periodKey, period, hash)
-                    .first();
-                if (cached?.commentary) {
-                    commentary = cached.commentary;
+            try {
+                const config = await getParentAiServiceConfig(env, child.parent_id);
+                if (config.baseUrl && config.apiKey && config.model) {
+                    await ensureAiReportCommentaries(env);
+                    const hash = aiReportConfigHash(config, period);
+                    const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")
+                        .bind(child.id, periodKey, period, hash)
+                        .first();
+                    if (cached?.commentary) {
+                        commentary = cached.commentary;
+                    }
+                    else {
+                        commentary = await generateReportCommentary(env, child, period, periodKey, offset);
+                    }
                 }
-                else {
-                    commentary = await generateReportCommentary(env, child, period, periodKey, offset);
-                }
+            } catch (error) {
+                console.warn("AI report commentary skipped:", error?.message || error);
             }
         }
         const commentarySection = commentary ? `<div class="ai-commentary"><h2>AI 评语</h2><p>${escapeHtml(commentary)}</p><p class="note">* 评语由 AI 生成，仅供参考</p></div>` : "";

@@ -281,6 +281,47 @@ describe("Parent AI Service Validation", () => {
     expect(monthlyHtml).toContain("Generated monthly commentary");
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+  it("renders weekly report when AI commentary table is missing", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    env.DB.prepare("DROP TABLE ai_report_commentaries").run();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+    const req = makeRequest("GET", `/children/${childId}/report?period=weekly&anchor=2026-06-03T00:00:00.000Z`);
+    const report = await safe(handleParentRoutes, `/children/${childId}/report`, "GET", req, env, actor, new URL(req.url));
+    expect(report!.status).toBe(200);
+    expect(report!.headers.get("content-type")).toContain("text/html");
+    const html = await report!.text();
+    expect(html).toContain("AI Child");
+  });
+  it("creates missing AI commentary table and stores monthly commentary", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    env.DB.prepare("DROP TABLE ai_report_commentaries").run();
+    const fetchMock = stubChat("Auto-created monthly commentary");
+    const req = makeRequest("GET", `/children/${childId}/report?period=monthly&anchor=2026-06-03T00:00:00.000Z`);
+    const report = await safe(handleParentRoutes, `/children/${childId}/report`, "GET", req, env, actor, new URL(req.url));
+    expect(report!.status).toBe(200);
+    const html = await report!.text();
+    expect(html).toContain("Auto-created monthly commentary");
+    const row = env.DB.prepare("SELECT period_type, commentary FROM ai_report_commentaries WHERE child_id=?").bind(childId).first() as any;
+    expect(row.period_type).toBe("monthly");
+    expect(row.commentary).toBe("Auto-created monthly commentary");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it("renders report without commentary when AI service fails", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 502 })));
+    const req = makeRequest("GET", `/children/${childId}/report?period=weekly&anchor=2026-06-03T00:00:00.000Z`);
+    const report = await safe(handleParentRoutes, `/children/${childId}/report`, "GET", req, env, actor, new URL(req.url));
+    expect(report!.status).toBe(200);
+    const html = await report!.text();
+    expect(html).toContain("AI Child");
+    expect(html).not.toContain("AI generated commentary");
+  });
   it("marks queue items failed when AI config is incomplete", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
     await seedAiChild(1);

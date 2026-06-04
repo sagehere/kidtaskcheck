@@ -1,6 +1,6 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
 import { nowIso, DAY_MS, balance } from "../utils.js";
-import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, loadAiGreetingSnapshot } from "./cache.js";
+import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, loadAiGreetingSnapshot, ensureAiReportCommentaries } from "./cache.js";
 import { buildAiPrompt, buildReportAiPrompt, previousWeekReportSummary } from "./prompt.js";
 import { callParentAiService, callParentAiServiceForReport } from "./providers.js";
 
@@ -58,6 +58,7 @@ export async function generateReportCommentary(env, child, periodType, periodKey
     if (!config.baseUrl || !config.apiKey || !config.model) throw new NonRetryableError("ai_config_incomplete");
     const hash = aiReportConfigHash(config, periodType);
     const now = nowIso();
+    await ensureAiReportCommentaries(env);
     const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")
         .bind(child.id, periodKey, periodType, hash)
         .first();

@@ -1103,15 +1103,23 @@ export function aiConfigHash(config) {
 }
 
 export async function getParentAiServiceConfig(env, parentId) {
-    const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
-    return {
-        baseUrl: row?.base_url || "",
-        apiKey: row?.api_key || "",
-        model: row?.model || "",
-        prompt: row?.prompt || "",
-        hasKey: !!row?.api_key,
-        updatedAt: row?.updated_at || ""
-    };
+    try {
+        const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
+        return {
+            baseUrl: row?.base_url || "",
+            apiKey: row?.api_key || "",
+            model: row?.model || "",
+            prompt: row?.prompt || "",
+            hasKey: !!row?.api_key,
+            updatedAt: row?.updated_at || ""
+        };
+    }
+    catch (error) {
+        if (String(error?.message || error).includes("parent_ai_service_settings")) {
+            return { baseUrl: "", apiKey: "", model: "", prompt: "", hasKey: false, updatedAt: "" };
+        }
+        throw error;
+    }
 }
 
 export async function loadAiGreetingSnapshot(env, child, offset) {

@@ -10,6 +10,9 @@ import { EmojiSelect } from "./components/EmojiSelect";
 import { Shell } from "./components/Shell";
 import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, formatAchievementRule } from "./lib/appHelpers";
 
+type ParentAiServiceStoredConfig = ParentAiServiceConfig & { apiKey?: string; updatedAt?: string };
+const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", hasKey: false };
+
 export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [children, setChildren] = useState<Child[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -26,11 +29,13 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [feedbackRows, setFeedbackRows] = useState<FeedbackEvent[]>([]);
   const [reportChild, setReportChild] = useState<Child | null>(null);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
-  const [aiConfig, setAiConfig] = useState<ParentAiServiceConfig>({ baseUrl: "", model: "", prompt: "", hasKey: false });
-  const [aiApiKey, setAiApiKey] = useState("");
+  const [savedAiConfig, setSavedAiConfig] = useState<ParentAiServiceStoredConfig>({ ...EMPTY_AI_DRAFT });
+  const [draftAiConfig, setDraftAiConfig] = useState<ParentAiServiceConfig>({ ...EMPTY_AI_DRAFT });
+  const [draftAiApiKey, setDraftAiApiKey] = useState("");
   const [aiModels, setAiModels] = useState<string[]>([]);
   const [aiFetching, setAiFetching] = useState(false);
   const [aiRefreshing, setAiRefreshing] = useState(false);
+  const [aiConfigLoaded, setAiConfigLoaded] = useState(false);
   const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -38,6 +43,41 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const resetTapTimer = useRef<number | null>(null);
   const loadLockRef = useRef(false);
   const pollingRef = useRef<number | null>(null);
+  const aiDraftInitializedRef = useRef(false);
+  const aiDraftDirtyRef = useRef(false);
+
+  function syncAiDraft(nextConfig: ParentAiServiceStoredConfig) {
+    setDraftAiConfig({
+      baseUrl: nextConfig.baseUrl,
+      model: nextConfig.model,
+      prompt: nextConfig.prompt,
+      hasKey: nextConfig.hasKey
+    });
+    setDraftAiApiKey("");
+    aiDraftInitializedRef.current = true;
+    aiDraftDirtyRef.current = false;
+  }
+
+  function storeSavedAiConfig(nextConfig: ParentAiServiceStoredConfig) {
+    setSavedAiConfig(nextConfig);
+    if (nextConfig.model) {
+      setAiModels((current) => (current.includes(nextConfig.model) ? current : [nextConfig.model, ...current]));
+    }
+  }
+
+  function markAiDraftDirty() {
+    aiDraftDirtyRef.current = true;
+  }
+
+  function updateAiDraft(next: Partial<ParentAiServiceConfig>) {
+    markAiDraftDirty();
+    setDraftAiConfig((current) => ({ ...current, ...next }));
+  }
+
+  function updateAiApiKey(value: string) {
+    markAiDraftDirty();
+    setDraftAiApiKey(value);
+  }
 
   async function load() {
     if (loadLockRef.current) return;
@@ -52,7 +92,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
         api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; }),
         api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; }),
-        api<ParentAiServiceConfig>("/parent/ai-service").catch(() => { hasError = true; return { baseUrl: "", hasKey: false, model: "", prompt: "" }; })
+        api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ baseUrl: "", hasKey: false, model: "", prompt: "", apiKey: "", updatedAt: "" }))
       ]);
       setChildren(childRows);
       setCategories(categoryRows);
@@ -61,13 +101,12 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       setAchievements(achievementRows);
       setFeedbackTemplates(feedbackRows);
       setDashboard(dash);
-      setAiConfig(aiRows as ParentAiServiceConfig);
-      if ((aiRows as ParentAiServiceConfig).model)
-        setAiModels((prev) => (prev.includes((aiRows as ParentAiServiceConfig).model) ? prev : [(aiRows as ParentAiServiceConfig).model, ...prev]));
+      storeSavedAiConfig(aiRows as ParentAiServiceStoredConfig);
       if (hasError) setError("部分数据加载失败，可点击重试");
     } catch (err) {
       setError("加载数据失败，可点击重试");
     } finally {
+      setAiConfigLoaded(true);
       loadLockRef.current = false;
     }
   }
@@ -88,6 +127,10 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
+  useEffect(() => {
+    if (activeTab !== "settings" || !aiConfigLoaded || aiDraftInitializedRef.current || aiDraftDirtyRef.current) return;
+    syncAiDraft(savedAiConfig);
+  }, [activeTab, aiConfigLoaded, savedAiConfig.baseUrl, savedAiConfig.model, savedAiConfig.prompt, savedAiConfig.hasKey]);
   useEffect(() => {
     if (ledgerChild) void loadLedger(ledgerChild);
   }, [dashboard, ledgerChild?.id]);
@@ -256,6 +299,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     setFeedbackRows([]);
   }
 
+  const aiDraftApiKeyValue = draftAiApiKey.trim();
+  const aiFetchApiKey = aiDraftApiKeyValue || savedAiConfig.apiKey || "";
+
   return (
     <Shell me={me} refresh={refresh} onQuickAction={() => void load()}>
       <section className="hero-band parent">
@@ -364,34 +410,65 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               </Field>
               <button className="primary"><KeyRound size={18} />保存密码</button>
             </form>
+          </section>
           <section className="panel setting-group">
             <div className="panel-title">
               <Sparkles />
               <h2>AI 服务</h2>
             </div>
-            <form className="stack compact" onSubmit={async (event) => { event.preventDefault(); await run(async () => { await api("/parent/ai-service", { method: "PATCH", body: JSON.stringify({ baseUrl: aiConfig.baseUrl, apiKey: aiApiKey, model: aiConfig.model, prompt: aiConfig.prompt }) }); setAiApiKey(""); setAiConfig({ ...aiConfig, hasKey: !!aiApiKey || aiConfig.hasKey }); }, "AI 服务配置已保存"); }}>
+            <form className="stack compact" onSubmit={async (event) => {
+              event.preventDefault();
+              const nextApiKey = aiDraftApiKeyValue;
+              await run(async () => {
+                const response = await api<Partial<ParentAiServiceStoredConfig>>("/parent/ai-service", {
+                  method: "PATCH",
+                  body: JSON.stringify({
+                    baseUrl: draftAiConfig.baseUrl,
+                    apiKey: nextApiKey || undefined,
+                    model: draftAiConfig.model,
+                    prompt: draftAiConfig.prompt
+                  })
+                });
+                const nextSaved: ParentAiServiceStoredConfig = {
+                  ...savedAiConfig,
+                  ...response,
+                  baseUrl: response.baseUrl ?? draftAiConfig.baseUrl,
+                  model: response.model ?? draftAiConfig.model,
+                  prompt: response.prompt ?? draftAiConfig.prompt,
+                  hasKey: (response.hasKey ?? savedAiConfig.hasKey) || !!nextApiKey,
+                  apiKey: nextApiKey || savedAiConfig.apiKey || response.apiKey || "",
+                  updatedAt: response.updatedAt ?? savedAiConfig.updatedAt
+                };
+                storeSavedAiConfig(nextSaved);
+                syncAiDraft(nextSaved);
+              }, "AI 服务配置已保存");
+            }}>
               <Field label="Base URL">
-                <input value={aiConfig.baseUrl} onChange={(e) => setAiConfig({ ...aiConfig, baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
+                <input value={draftAiConfig.baseUrl} onChange={(e) => updateAiDraft({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
               </Field>
               <Field label="API Key">
-                <input value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} type="password" placeholder={aiConfig.hasKey ? "已设置，留空则保留" : "请输入 API Key"} autoComplete="new-password" />
+                <input value={draftAiApiKey} onChange={(e) => updateAiApiKey(e.target.value)} type="password" placeholder={savedAiConfig.hasKey ? "已设置，留空则保留" : "请输入 API Key"} autoComplete="new-password" />
               </Field>
               <Field label="模型">
                 <div className="inline-fields">
-                  <select value={aiConfig.model} onChange={(e) => setAiConfig({ ...aiConfig, model: e.target.value })} style={{ flex: 1 }}>
-                    {!aiConfig.model && <option value="">请选择或拉取模型列表</option>}
+                  <select value={draftAiConfig.model} onChange={(e) => updateAiDraft({ model: e.target.value })} style={{ flex: 1 }}>
+                    {!draftAiConfig.model && <option value="">请选择或拉取模型列表</option>}
                     {aiModels.map((model) => <option key={model} value={model}>{model}</option>)}
                   </select>
-                  <button type="button" className="secondary" disabled={aiFetching || !aiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const modelsBody: { baseUrl: string; apiKey?: string } = { baseUrl: aiConfig.baseUrl }; if (aiApiKey) modelsBody.apiKey = aiApiKey; const data = await api<{ models: string[] }>("/parent/ai-service/models", { method: "POST", body: JSON.stringify(modelsBody) }); setAiModels(data.models); if (data.models.length && !aiConfig.model) setAiConfig({ ...aiConfig, model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
+                  <button type="button" className="secondary" disabled={aiFetching || !draftAiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const modelsBody: { baseUrl: string; apiKey?: string } = { baseUrl: draftAiConfig.baseUrl }; if (aiFetchApiKey) modelsBody.apiKey = aiFetchApiKey; const data = await api<{ models: string[] }>("/parent/ai-service/models", { method: "POST", body: JSON.stringify(modelsBody) }); setAiModels(data.models); if (data.models.length && !draftAiConfig.model) updateAiDraft({ model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
                 </div>
               </Field>
               <Field label="提示词">
-                <textarea value={aiConfig.prompt} onChange={(e) => setAiConfig({ ...aiConfig, prompt: e.target.value })} rows={4} />
+                <textarea value={draftAiConfig.prompt} onChange={(e) => updateAiDraft({ prompt: e.target.value })} rows={4} />
               </Field>
               <button className="primary"><Sparkles size={18} />保存 AI 配置</button>
-              <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ success: number; failed: number }>("/parent/ai-service/refresh-greetings", { method: "POST" }); setMessage("AI 寄语刷新完成：成功 " + r.success + "，失败 " + r.failed); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "刷新中..." : "刷新 AI 寄语"}</button>
+              <div className="inline-fields">
+                <button type="button" className="secondary" onClick={() => { syncAiDraft(savedAiConfig); setMessage("AI 配置已恢复为已保存内容"); }}>
+                  重载 AI 配置
+                </button>
+                <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ success: number; failed: number }>("/parent/ai-service/refresh-greetings", { method: "POST" }); setMessage("AI 寄语刷新完成：成功 " + r.success + "，失败 " + r.failed); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "刷新中..." : "刷新 AI 寄语"}</button>
+              </div>
             </form>
-          </section>
           </section>
         </>
       )}

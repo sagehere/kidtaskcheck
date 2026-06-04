@@ -6,9 +6,9 @@ import { D1Mock } from "./helpers/d1-mock";
 const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
 describe("Task 35: Migration Smoke Test", () => {
-  it("all 14 migration files apply sequentially on empty DB without errors", () => {
+  it("all 15 migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(14);
+    expect(files.length).toBe(15);
     const d1 = new D1Mock();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
@@ -37,6 +37,7 @@ describe("Task 35: Migration Smoke Test", () => {
     expect(tableNames).toContain("system_settings");
     expect(tableNames).toContain("activity_archives");
     expect(tableNames).toContain("ai_child_greetings");
+    expect(tableNames).toContain("ai_report_commentaries");
     expect(tableNames).toContain("parent_ai_service_settings");
     d1.close();
   });

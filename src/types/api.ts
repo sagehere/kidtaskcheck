@@ -40,7 +40,7 @@ export type EmojiSource = {
 
 export type EmojiOption = { emoji: string; name: string; shortNames: string[]; category: string; sortOrder: number; search: string; rank: number };
 
-export type AiServiceConfig = { baseUrl: string; model: string; prompt: string; hasKey: boolean; apiKey?: string; updatedAt?: string };
+export type AiServiceConfig = { baseUrl: string; model: string; prompt: string; reportPrompt?: string; monthlyPrompt?: string; hasKey: boolean; apiKey?: string; updatedAt?: string };
 export type ParentAiServiceConfig = AiServiceConfig;
 
 export const REFRESH_INTERVAL_MS = 12000;

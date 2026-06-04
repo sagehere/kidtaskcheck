@@ -11,7 +11,7 @@ import { Shell } from "./components/Shell";
 import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, formatAchievementRule } from "./lib/appHelpers";
 
 type ParentAiServiceStoredConfig = Omit<ParentAiServiceConfig, "apiKey"> & { updatedAt?: string };
-const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", hasKey: false };
+const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false };
 
 export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [children, setChildren] = useState<Child[]>([]);
@@ -51,6 +51,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       baseUrl: nextConfig.baseUrl,
       model: nextConfig.model,
       prompt: nextConfig.prompt,
+      reportPrompt: nextConfig.reportPrompt || "",
+      monthlyPrompt: nextConfig.monthlyPrompt || "",
       hasKey: nextConfig.hasKey
     });
     setDraftAiApiKey("");
@@ -92,7 +94,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
         api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; }),
         api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; }),
-        api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ baseUrl: "", hasKey: false, model: "", prompt: "", updatedAt: "" }))
+        api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ baseUrl: "", hasKey: false, model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", updatedAt: "" }))
       ]);
       setChildren(childRows);
       setCategories(categoryRows);
@@ -426,7 +428,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                     baseUrl: draftAiConfig.baseUrl,
                     apiKey: nextApiKey || undefined,
                     model: draftAiConfig.model,
-                    prompt: draftAiConfig.prompt
+                    prompt: draftAiConfig.prompt,
+                    reportPrompt: draftAiConfig.reportPrompt,
+                    monthlyPrompt: draftAiConfig.monthlyPrompt
                   })
                 });
                 const nextSaved: ParentAiServiceStoredConfig = {
@@ -460,12 +464,19 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               <Field label="提示词">
                 <textarea value={draftAiConfig.prompt} onChange={(e) => updateAiDraft({ prompt: e.target.value })} rows={4} />
               </Field>
+              <Field label="周报评语提示词">
+                <textarea value={draftAiConfig.reportPrompt || ""} onChange={(e) => updateAiDraft({ reportPrompt: e.target.value })} rows={3} placeholder="留空使用默认提示词" />
+              </Field>
+              <Field label="月报评语提示词">
+                <textarea value={draftAiConfig.monthlyPrompt || ""} onChange={(e) => updateAiDraft({ monthlyPrompt: e.target.value })} rows={3} placeholder="留空使用默认提示词" />
+              </Field>
               <button className="primary"><Sparkles size={18} />保存 AI 配置</button>
               <div className="inline-fields">
                 <button type="button" className="secondary" onClick={() => { syncAiDraft(savedAiConfig); setMessage("AI 配置已恢复为已保存内容"); }}>
                   重载 AI 配置
                 </button>
                 <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ success: number; failed: number }>("/parent/ai-service/refresh-greetings", { method: "POST" }); setMessage("AI 寄语刷新完成：成功 " + r.success + "，失败 " + r.failed); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "刷新中..." : "刷新 AI 寄语"}</button>
+                <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ success: number; failed: number }>("/parent/ai-service/refresh-commentaries", { method: "POST", body: JSON.stringify({ periodType: "weekly" }) }); setMessage("AI 评语刷新完成：成功 " + r.success + "，失败 " + r.failed); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "刷新中..." : "刷新 AI 评语"}</button>
               </div>
             </form>
           </section>

@@ -170,6 +170,8 @@ export async function ensureParentAiServiceSettings(env) {
   api_key TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
   prompt TEXT NOT NULL DEFAULT '',
+  report_prompt TEXT NOT NULL DEFAULT '',
+  monthly_prompt TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT ''
 )`).run();
 }
@@ -1114,22 +1116,37 @@ export function aiConfigHash(config) {
     return chars.slice(0, 8).join("");
 }
 
+export function aiReportConfigHash(config, periodType) {
+    const promptKey = periodType === "monthly" ? "monthlyPrompt" : "reportPrompt";
+    const hash = ["sha256", config.baseUrl || "", config.model || "", config[promptKey] || ""].join("|");
+    const chars = [];
+    let h = 0;
+    for (let i = 0; i < hash.length; i++) {
+        h = ((h << 5) - h) + hash.charCodeAt(i);
+        h |= 0;
+        chars.push((h >>> 0).toString(36).slice(-2));
+    }
+    return chars.slice(0, 8).join("");
+}
+
 export async function getParentAiServiceConfig(env, parentId) {
     try {
         await ensureParentAiServiceSettings(env);
-        const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
+        const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, report_prompt, monthly_prompt, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
         return {
             baseUrl: row?.base_url || "",
             apiKey: row?.api_key || "",
             model: row?.model || "",
             prompt: row?.prompt || "",
+            reportPrompt: row?.report_prompt || "",
+            monthlyPrompt: row?.monthly_prompt || "",
             hasKey: !!row?.api_key,
             updatedAt: row?.updated_at || ""
         };
     }
     catch (error) {
         if (String(error?.message || error).includes("parent_ai_service_settings")) {
-            return { baseUrl: "", apiKey: "", model: "", prompt: "", hasKey: false, updatedAt: "" };
+            return { baseUrl: "", apiKey: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, updatedAt: "" };
         }
         throw error;
     }
@@ -1230,6 +1247,79 @@ export function buildAiPrompt(child, report, config, assignments) {
             parts.push(`- [${f.kind === "praise" ? "表扬" : "批评"}] ${f.title}（${f.points >= 0 ? "+" : ""}${f.points || 0}分，${f.is_active ? "" : "停用"}）`);
     }
     return `${config.prompt || ""}\n\n周报数据：\n${parts.join("\n")}`;
+}
+const DEFAULT_WEEKLY_REPORT_PROMPT = `你是一位育儿教育专家。请根据以下孩子本周的表现数据，生成一份周报评语。
+
+要求：
+1. 先简要总结本周整体表现
+2. 指出本周最值得表扬的亮点
+3. 温和地指出需要改进的地方
+4. 给出针对性的具体建议
+5. 语言温暖鼓励、有洞察力
+6. 长度500-800字
+7. 用中文输出`;
+
+const DEFAULT_MONTHLY_REPORT_PROMPT = `你是一位有经验的儿童成长顾问。请根据以下孩子本月的表现数据，生成一份月报评语。
+
+要求：
+1. 分析本月整体表现趋势（积分变化、任务完成率等）
+2. 指出本月最显著的进步和亮点
+3. 指出持续存在的问题或需要长期关注的方面
+4. 给出下个月的教育建议
+5. 语言温暖、有洞察力、体现成长轨迹
+6. 长度500-800字
+7. 用中文输出`;
+
+export function buildReportAiPrompt(child, reportData, config, periodType, offset) {
+    if (!reportData) return "";
+    const periodLabel = periodType === "monthly" ? "本月" : "本周";
+    const periodLabel2 = periodType === "monthly" ? "月度" : "周度";
+    const prompt = periodType === "monthly" ? (config.monthlyPrompt || DEFAULT_MONTHLY_REPORT_PROMPT) : (config.reportPrompt || DEFAULT_WEEKLY_REPORT_PROMPT);
+    const age = child.birth_date ? Math.floor((Date.now() - new Date(child.birth_date).getTime()) / 31557600000) : null;
+    const genderLabel = child.gender === "male" ? "男" : child.gender === "female" ? "女" : "";
+    const approvedTasks = reportData.tasks.filter((t) => t.status === "approved");
+    const approved = approvedTasks.length;
+    const rejected = reportData.tasks.filter((t) => t.status === "rejected").length;
+    const pending = reportData.tasks.filter((t) => t.status === "pending").length;
+    const taskNames = [...new Set(approvedTasks.map((t) => t.title))];
+    const praiseCount = reportData.feedback.filter((f) => f.source_type === "praise").length;
+    const criticismCount = reportData.feedback.filter((f) => f.source_type === "criticism").length;
+    const netPoints = reportData.ledger.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    const achievementTitles = reportData.achievements.map((a) => a.title);
+    const rewardTitles = [...new Set(reportData.rewards.map((r) => r.title))];
+    const parts = [`孩子姓名：${child.display_name}`];
+    if (genderLabel) parts.push(`性别：${genderLabel}`);
+    if (age !== null && Number.isFinite(age)) parts.push(`年龄：${age}岁`);
+    parts.push(`${periodLabel}完成任务：${approved}项（${taskNames.join("、") || "无"}）`);
+    parts.push(`${periodLabel}未通过任务：${rejected}项`);
+    parts.push(`${periodLabel}待审任务：${pending}项`);
+    parts.push(`${periodLabel}获得表扬：${praiseCount}次`);
+    parts.push(`${periodLabel}被批评：${criticismCount}次`);
+    parts.push(`${periodLabel}净增积分：${netPoints >= 0 ? "+" : ""}${netPoints}`);
+    parts.push(`当前总积分：${reportData.currentBalance || 0}`);
+    if (rewardTitles.length) parts.push(`${periodLabel}兑换奖励：${rewardTitles.join("、")}`);
+    if (achievementTitles.length) parts.push(`${periodLabel}解锁成就：${achievementTitles.join("、")}`);
+    if ((reportData.categoryCounts || []).length) {
+        parts.push("分类完成情况：");
+        for (const [cat, count] of reportData.categoryCounts)
+            parts.push(`- ${cat}：${count}项`);
+    }
+    if ((reportData.assignments?.tasks || []).length) {
+        parts.push("任务配置：");
+        for (const t of reportData.assignments.tasks.slice(0, 10))
+            parts.push(`- ${t.title}（周期：${t.period || "每日"}，次数：${t.limit_count || 1}，积分：${t.points || 0}，${t.is_active ? "" : "停用"}${t.description ? "，" + t.description : ""}）`);
+    }
+    if ((reportData.assignments?.rewards || []).length) {
+        parts.push("奖励配置：");
+        for (const r of reportData.assignments.rewards.slice(0, 10))
+            parts.push(`- ${r.title}（${r.cost_points || 0}积分，${r.is_active ? "" : "停用"}${r.description ? "，" + r.description : ""}）`);
+    }
+    if ((reportData.assignments?.feedbackTemplates || []).length) {
+        parts.push("表扬与批评条款：");
+        for (const f of reportData.assignments.feedbackTemplates.slice(0, 10))
+            parts.push(`- [${f.kind === "praise" ? "表扬" : "批评"}] ${f.title}（${f.points >= 0 ? "+" : ""}${f.points || 0}分，${f.is_active ? "" : "停用"}）`);
+    }
+    return `${prompt}\n\n${periodLabel2}报告数据：\n${parts.join("\n")}`;
 }
 export async function callAiService(env, prompt) {
     const baseUrl = (await env.DB.prepare("SELECT value FROM system_settings WHERE key='ai_base_url'").first())?.value || "";
@@ -1345,6 +1435,34 @@ export async function callParentAiService(env, prompt, config) {
     }
 }
 
+export async function callParentAiServiceForReport(env, prompt, config) {
+    const baseUrl = config?.baseUrl || "";
+    const apiKey = config?.apiKey || "";
+    const model = config?.model || "";
+    if (!baseUrl || !apiKey || !model) return "";
+    if (isPrivateUrl(baseUrl)) return "";
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), AI_FETCH_TIMEOUT_MS);
+        const resp = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], max_tokens: 600 }),
+            signal: controller.signal,
+            redirect: "manual"
+        });
+        clearTimeout(timeoutId);
+        if (resp.status === 0 || resp.type === "opaqueredirect") return "";
+        if (!resp.ok) return "";
+        const data = await resp.json();
+        const text = data?.choices?.[0]?.message?.content || "";
+        return text.replace(/\s+/g, " ").trim().replace(/，+/g, "，").replace(/。+/g, "。");
+    }
+    catch {
+        return "";
+    }
+}
+
 export async function generateParentAiGreeting(env, child, offset, forceRefresh = false) {
     if (!child.ai_enabled)
         return "";
@@ -1384,6 +1502,101 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(
             .run();
     }
     return greeting;
+}
+
+export async function generateReportCommentary(env, child, periodType, periodKey, offset, forceRefresh = false) {
+    if (!child?.ai_enabled) return "";
+    const config = await getParentAiServiceConfig(env, child.parent_id);
+    if (!config.baseUrl || !config.apiKey || !config.model) return "";
+    if (!config.reportPrompt && !config.monthlyPrompt) return "";
+    const hash = aiReportConfigHash(config, periodType);
+    const now = nowIso();
+    const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")
+        .bind(child.id, periodKey, periodType, hash)
+        .first();
+    if (cached?.commentary && !forceRefresh) return cached.commentary;
+    const range = reportWindowRange(periodType, now, offset);
+    const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows, assignedTasks, assignedRewards, feedbackTemplates] = await Promise.all([
+        env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC")
+            .bind(child.id, child.parent_id, range.start, range.end).all(),
+        env.DB.prepare(`SELECT s.*, t.title, tc.name category_name
+FROM task_submissions s JOIN tasks t ON t.id=s.task_id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE s.child_id=? AND s.parent_id=? AND s.submitted_at>=? AND s.submitted_at<? ORDER BY s.submitted_at DESC`)
+            .bind(child.id, child.parent_id, range.start, range.end).all(),
+        env.DB.prepare(`SELECT rr.*, r.title, r.cost_points
+FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id
+WHERE rr.child_id=? AND rr.parent_id=? AND rr.requested_at>=? AND rr.requested_at<? ORDER BY rr.requested_at DESC`)
+            .bind(child.id, child.parent_id, range.start, range.end).all(),
+        env.DB.prepare(`SELECT pl.*, ft.title template_title
+FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
+WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND pl.created_at>=? AND pl.created_at<? ORDER BY pl.created_at DESC`)
+            .bind(child.id, child.parent_id, range.start, range.end).all(),
+        env.DB.prepare(`SELECT a.title, ca.unlocked_at
+FROM child_achievements ca JOIN achievements a ON a.id=ca.achievement_id
+WHERE ca.child_id=? AND a.parent_id=? AND ca.unlocked_at>=? AND ca.unlocked_at<? ORDER BY ca.unlocked_at DESC`)
+            .bind(child.id, child.parent_id, range.start, range.end).all(),
+        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description
+FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL
+ORDER BY tc.name, t.created_at DESC`).bind(child.id, child.parent_id).all(),
+        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period, r.limit_count, r.redeem_weekdays, r.is_active, r.description
+FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id
+WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL
+ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(),
+        env.DB.prepare("SELECT kind, title, points, is_active, description FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(child.parent_id).all()
+    ]);
+    const netPoints = ledgerRows.results.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const currentBalance = await balance(env, child.id);
+    const taskResults = taskRows.results;
+    const categoryCounts = [...taskResults.filter((row) => row.status === "approved").reduce((map, row) => map.set(row.category_name || "未分类", (map.get(row.category_name || "未分类") || 0) + 1), new Map()).entries()];
+    const reportData = {
+        tasks: taskResults,
+        rewards: rewardRows.results,
+        ledger: ledgerRows.results,
+        feedback: feedbackRows.results,
+        achievements: achievementRows.results,
+        netPoints,
+        currentBalance,
+        categoryCounts,
+        assignments: {
+            tasks: assignedTasks.results,
+            rewards: assignedRewards.results,
+            feedbackTemplates: feedbackTemplates.results
+        }
+    };
+    const aiPrompt = buildReportAiPrompt(child, reportData, config, periodType, offset);
+    if (!aiPrompt) return "";
+    const commentary = await callParentAiServiceForReport(env, aiPrompt, config);
+    if (commentary) {
+        await env.DB.prepare("INSERT OR REPLACE INTO ai_report_commentaries (child_id, parent_id, period_key, period_type, config_hash, commentary, generated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(child.id, child.parent_id, periodKey, periodType, hash, commentary, now)
+            .run();
+    }
+    return commentary;
+}
+
+export async function refreshParentReportCommentaries(env, offset, parentId, periodType) {
+    const children = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE ai_enabled=1 AND deleted_at IS NULL AND parent_id=?").bind(parentId).all();
+    if (!children.results.length) return { success: 0, failed: 0 };
+    const now = nowIso();
+    const range = reportWindowRange(periodType, now, offset);
+    const periodKey = range.label;
+    let successCount = 0;
+    let failCount = 0;
+    for (const child of children.results) {
+        try {
+            const commentary = await generateReportCommentary(env, child, periodType, periodKey, offset, true);
+            if (commentary) successCount++;
+            else failCount++;
+        }
+        catch {
+            failCount++;
+        }
+        await sleep(AI_REFRESH_DELAY_MS);
+    }
+    return { success: successCount, failed: failCount };
 }
 
 export async function refreshParentAiGreetings(env, offset, parentId) {

@@ -1,5 +1,5 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, periodKey, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, generateParentAiGreeting, getParentAiServiceConfig, refreshParentAiGreetings, validateHttpsUrl, ensureRewardOnceSchema, AI_FETCH_TIMEOUT_MS } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, generateParentAiGreeting, getParentAiServiceConfig, refreshParentAiGreetings, refreshParentReportCommentaries, generateReportCommentary, aiReportConfigHash, validateHttpsUrl, ensureRewardOnceSchema, AI_FETCH_TIMEOUT_MS } from "../utils.js";
 
 export async function handleParentRoutes(path, method, request, env, actor, url) {
     if (path === "/parent/profile" && method === "PATCH") {
@@ -28,6 +28,8 @@ export async function handleParentRoutes(path, method, request, env, actor, url)
             baseUrl: config.baseUrl,
             model: config.model,
             prompt: config.prompt,
+            reportPrompt: config.reportPrompt,
+            monthlyPrompt: config.monthlyPrompt,
             hasKey: config.hasKey,
             updatedAt: config.updatedAt
         });
@@ -39,6 +41,8 @@ export async function handleParentRoutes(path, method, request, env, actor, url)
         const nextBaseUrl = input.baseUrl !== undefined ? String(input.baseUrl).trim().replace(/\/+$/, "") : current.baseUrl;
         const nextModel = input.model !== undefined ? String(input.model).trim() : current.model;
         const nextPrompt = input.prompt !== undefined ? String(input.prompt).trim() : current.prompt;
+        const nextReportPrompt = input.reportPrompt !== undefined ? String(input.reportPrompt).trim() : (current.reportPrompt || "");
+        const nextMonthlyPrompt = input.monthlyPrompt !== undefined ? String(input.monthlyPrompt).trim() : (current.monthlyPrompt || "");
         if (!nextBaseUrl || !nextModel || !nextPrompt)
             return fail("BAD_REQUEST", "请完整填写 AI 服务配置");
         const urlErr = validateHttpsUrl(nextBaseUrl, "AI Base URL");
@@ -46,12 +50,12 @@ export async function handleParentRoutes(path, method, request, env, actor, url)
             return fail("BAD_REQUEST", urlErr);
         const nextApiKey = input.apiKey !== undefined && String(input.apiKey).trim() ? String(input.apiKey).trim() : current.apiKey;
         const updatedAt = nowIso();
-        await env.DB.prepare(`INSERT INTO parent_ai_service_settings (parent_id, base_url, api_key, model, prompt, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, prompt=excluded.prompt, updated_at=excluded.updated_at`)
-            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, updatedAt)
+        await env.DB.prepare(`INSERT INTO parent_ai_service_settings (parent_id, base_url, api_key, model, prompt, report_prompt, monthly_prompt, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, prompt=excluded.prompt, report_prompt=excluded.report_prompt, monthly_prompt=excluded.monthly_prompt, updated_at=excluded.updated_at`)
+            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, nextReportPrompt, nextMonthlyPrompt, updatedAt)
             .run();
-        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, hasKey: !!nextApiKey, updatedAt });
+        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, reportPrompt: nextReportPrompt, monthlyPrompt: nextMonthlyPrompt, hasKey: !!nextApiKey, updatedAt });
     }
     if (path === "/parent/ai-service/models" && method === "POST") {
         const a = requireRole(actor, ["parent"]);
@@ -92,6 +96,14 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
         const a = requireRole(actor, ["parent"]);
         const offset = await timezoneOffsetMinutes(env);
         const result = await refreshParentAiGreetings(env, offset, a.id);
+        return ok(result);
+    }
+    if (path === "/parent/ai-service/refresh-commentaries" && method === "POST") {
+        const a = requireRole(actor, ["parent"]);
+        const offset = await timezoneOffsetMinutes(env);
+        const input = await body(request);
+        const periodType = input?.periodType === "monthly" ? "monthly" : "weekly";
+        const result = await refreshParentReportCommentaries(env, offset, a.id, periodType);
         return ok(result);
     }
     if (path === "/children") {
@@ -203,10 +215,24 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const greeting = await generateParentAiGreeting(env, child, offset, true);
         return ok({ greeting });
     }
+    const childReportCommentary = path.match(/^\/children\/([^/]+)\/report-commentary$/);
+    if (childReportCommentary && method === "POST") {
+        const a = requireRole(actor, ["parent"]);
+        const child = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(childReportCommentary[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const offset = await timezoneOffsetMinutes(env);
+        const period = url.searchParams.get("period") === "monthly" ? "monthly" : "weekly";
+        const periodKey = reportWindowRange(period, nowIso(), offset).label;
+        const commentary = await generateReportCommentary(env, child, period, periodKey, offset, true);
+        return ok({ commentary });
+    }
     const childReport = path.match(/^\/children\/([^/]+)\/report$/);
     if (childReport && method === "GET") {
         const a = requireRole(actor, ["parent"]);
-        const child = await env.DB.prepare("SELECT id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+        const child = await env.DB.prepare("SELECT id, display_name, ai_enabled, gender, birth_date, parent_id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(childReport[1], a.id)
             .first();
         if (!child)
@@ -215,6 +241,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const period = url.searchParams.get("period") === "monthly" ? "monthly" : "weekly";
         const anchor = url.searchParams.get("anchor") || nowIso();
         const range = reportWindowRange(period, anchor, offset);
+        const periodKey = range.label;
         const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows] = await Promise.all([
             env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC").bind(child.id, a.id, range.start, range.end).all(),
             env.DB.prepare(`SELECT s.*, t.title, tc.name category_name
@@ -252,8 +279,24 @@ ORDER BY ca.unlocked_at DESC`).bind(child.id, a.id, range.start, range.end).all(
         const categoryCounts = [...tasks.filter((row) => row.status === "approved").reduce((map, row) => map.set(row.category_name || "未分类", (map.get(row.category_name || "未分类") || 0) + 1), new Map()).entries()];
         const tableHtml = (headers, rows) => `<table><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${headers.length}">暂无记录</td></tr>`}</tbody></table>`;
         const reportTitle = period === "monthly" ? "月度报告" : "周度报告";
-        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} ${reportTitle}</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}.summary{grid-template-columns:repeat(2,1fr)}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} ${reportTitle}</h1><p>周期：${escapeHtml(localTimeText(range.start, offset))} 至 ${escapeHtml(localTimeText(range.end, offset))}；生成时间：${escapeHtml(localTimeText(nowIso(), offset))}</p><div class="summary"><div><span>当前积分</span><strong>${currentBalance}</strong></div><div><span>本期积分</span><strong>${netPoints >= 0 ? "+" : ""}${netPoints}</strong></div><div><span>任务通过</span><strong>${approved}</strong></div><div><span>成就解锁</span><strong>${achievements.length}</strong></div></div><h2>任务概览</h2>${tableHtml(["通过","待审","驳回"], [[approved, pending, rejected]])}<h2>分类完成</h2>${tableHtml(["分类","通过次数"], categoryCounts)}<h2>奖励记录</h2>${tableHtml(["奖励","状态","积分","申请时间"], rewards.map((item) => [item.title, item.status, item.cost_points, localTimeText(item.requested_at, offset)]))}<h2>表扬与批评</h2>${tableHtml(["类型","条款","积分","时间"], feedback.map((item) => [item.source_type === "praise" ? "表扬" : "批评", item.template_title || item.note || "", item.amount, localTimeText(item.created_at, offset)]))}<h2>成就解锁</h2>${tableHtml(["成就","解锁时间"], achievements.map((item) => [item.title, localTimeText(item.unlocked_at, offset)]))}</body></html>`;
-        return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+        let commentary = "";
+        if (child.ai_enabled) {
+            const config = await getParentAiServiceConfig(env, child.parent_id);
+            if (config.baseUrl && config.apiKey && config.model && (config.reportPrompt || config.monthlyPrompt)) {
+                const hash = aiReportConfigHash(config, period);
+                const cached = await env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_key=? AND period_type=? AND config_hash=?")
+                    .bind(child.id, periodKey, period, hash)
+                    .first();
+                if (cached?.commentary) {
+                    commentary = cached.commentary;
+                }
+                else {
+                    commentary = await generateReportCommentary(env, child, period, periodKey, offset);
+                }
+            }
+        }
+        const commentarySection = commentary ? `<div class="ai-commentary"><h2>AI 评语</h2><p>${escapeHtml(commentary)}</p><p class="note">* 评语由 AI 生成，仅供参考</p></div>` : "";
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} ${reportTitle}</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}.ai-commentary{background:#f0f4ff;border-left:4px solid #6366f1;padding:16px 20px;margin:18px 0;border-radius:4px}.ai-commentary h2{margin:0 0 8px;border:none;padding:0}.ai-commentary p{margin:4px 0;line-height:1.8}.ai-commentary .note{font-size:12px;color:#888;margin-top:8px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}.summary{grid-template-columns:repeat(2,1fr)}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} ${reportTitle}</h1><p>周期：${escapeHtml(localTimeText(range.start, offset))} 至 ${escapeHtml(localTimeText(range.end, offset))}；生成时间：${escapeHtml(localTimeText(nowIso(), offset))}</p>${commentarySection}<div class="summary"><div><span>当前积分</span><strong>${currentBalance}</strong></div><div><span>本期积分</span><strong>${netPoints >= 0 ? "+" : ""}${netPoints}</strong></div><div><span>任务通过</span><strong>${approved}</strong></div><div><span>成就解锁</span><strong>${achievements.length}</strong></div></div><h2>任务概览</h2>${tableHtml(["通过","待审","驳回"], [[approved, pending, rejected]])}<h2>分类完成</h2>${tableHtml(["分类","通过次数"], categoryCounts)}<h2>奖励记录</h2>${tableHtml(["奖励","状态","积分","申请时间"], rewards.map((item) => [item.title, item.status, item.cost_points, localTimeText(item.requested_at, offset)]))}<h2>表扬与批评</h2>${tableHtml(["类型","条款","积分","时间"], feedback.map((item) => [item.source_type === "praise" ? "表扬" : "批评", item.template_title || item.note || "", item.amount, localTimeText(item.created_at, offset)]))}<h2>成就解锁</h2>${tableHtml(["成就","解锁时间"], achievements.map((item) => [item.title, localTimeText(item.unlocked_at, offset)]))}</body></html>`;
     }
     const childWarehouse = path.match(/^\/children\/([^/]+)\/warehouse$/);
     if (childWarehouse && method === "GET") {

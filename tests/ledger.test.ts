@@ -3,6 +3,7 @@ import { resetTestEnv } from "./helpers/setup";
 import { ensureAdmin, hashPassword, id } from "../functions/api/utils.js";
 import { handleParentRoutes } from "../functions/api/routes/parent.js";
 import { handleChildRoutes } from "../functions/api/routes/child.js";
+import { handleSharedRoutes } from "../functions/api/routes/shared.js";
 
 function makeRequest(m: string, p: string, b?: any): Request {
   return new Request(`http://localhost/api${p}`, { method: m, headers: { "content-type": "application/json" }, ...(b ? { body: JSON.stringify(b) } : {}) });
@@ -58,5 +59,40 @@ describe("Task 33: Points Ledger", () => {
     expect(cRes!.status).toBe(200);
     const bal = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
     expect(Number(bal.b)).toBe(100);
+  });
+
+  it("feedback recall restores points and preserves source labels", async () => {
+    const parentActor = { type: "user", role: "parent", id: pid, displayName: "TP" };
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
+    const templateId = id();
+    env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active) VALUES (?, ?, 'praise', 'Great job', '', 8, 'emoji', '馃憦', 1)").bind(templateId, pid).run();
+    const feedbackReq = makeRequest("POST", `/children/${cid}/feedback-events`, { templateId });
+    const feedbackRes = await safe(handleParentRoutes, norm(new URL(feedbackReq.url).pathname), "POST", feedbackReq, env, parentActor);
+    expect(feedbackRes!.status).toBe(200);
+    const original = env.DB.prepare("SELECT id, amount FROM point_ledger WHERE child_id=? AND source_type='praise'").bind(cid).first() as any;
+    expect(original).not.toBeNull();
+    expect(Number(original.amount)).toBe(8);
+
+    const recallReq = makeRequest("PATCH", `/feedback-events/${original.id}/recall`, {});
+    const recallRes = await safe(handleSharedRoutes, norm(new URL(recallReq.url).pathname), "PATCH", recallReq, env, parentActor);
+    expect(recallRes!.status).toBe(200);
+
+    const ledgerReq = makeRequest("GET", `/points/ledger?childId=${cid}`);
+    const ledgerRes = await safe(handleSharedRoutes, norm(new URL(ledgerReq.url).pathname), "GET", ledgerReq, env, parentActor, new URL(ledgerReq.url));
+    expect(ledgerRes!.status).toBe(200);
+    const ledger = await ledgerRes!.json();
+    const recallRow = ledger.data.items.find((row: any) => row.source_type === "feedback_recall");
+    expect(recallRow).toBeTruthy();
+    expect(recallRow.sourceTypeLabel).toBe("表扬撤回");
+    expect(recallRow.sourceLabel).toContain("Great job");
+
+    const notificationsReq = makeRequest("GET", "/notifications");
+    const notificationsRes = await safe(handleSharedRoutes, norm(new URL(notificationsReq.url).pathname), "GET", notificationsReq, env, childActor, new URL(notificationsReq.url));
+    expect(notificationsRes!.status).toBe(200);
+    const notifications = await notificationsRes!.json();
+    const recallNotification = notifications.data.items.find((item: any) => item.event_type === "feedback_recall");
+    expect(recallNotification).toBeTruthy();
+    expect(recallNotification.sourceTypeLabel).toBe("表扬");
+    expect(recallNotification.sourceLabel).toContain("Great job");
   });
 });

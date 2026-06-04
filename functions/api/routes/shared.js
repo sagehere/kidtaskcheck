@@ -125,6 +125,17 @@ WHERE pl.id=? AND pl.parent_id=? AND c.parent_id=? AND pl.source_type IN ('prais
             env.DB.prepare("UPDATE notifications SET title=?, body=?, read_at=COALESCE(read_at, ?) WHERE related_type='point_ledger' AND related_id=?")
                 .bind(`${label}已撤回`, "家长已撤回这条反馈，积分已恢复。", now, row.id)
         ]);
+        await notify(env, {
+            recipientType: "child",
+            recipientId: row.child_id,
+            actorType: "user",
+            actorId: a.id,
+            title: `${label}已撤回`,
+            body: "家长已撤回这条反馈，积分已恢复。",
+            eventType: "feedback_recall",
+            relatedType: "point_ledger",
+            relatedId: row.id
+        });
         await recalcAchievements(env, a.id, row.child_id);
         return ok(true);
     }

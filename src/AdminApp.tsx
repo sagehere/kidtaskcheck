@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Image, KeyRound, Plus, Settings, Shield, Sparkles, Trash2, UserRound, Users } from "lucide-react";
-import { Me, Gallery, SystemSettings, AiServiceConfig } from "./types/api";
+import { Image, KeyRound, Plus, Settings, Shield, Trash2, UserRound, Users } from "lucide-react";
+import { Me, Gallery, SystemSettings } from "./types/api";
 import { api } from "./api/client";
 import { Field, FeedbackToast } from "./components/UI";
 import { Shell } from "./components/Shell";
@@ -15,27 +15,18 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [profileForm, setProfileForm] = useState({ username: me.username, displayName: me.displayName, currentPassword: "", newPassword: "", confirmPassword: "" });
   const [imageForm, setImageForm] = useState({ name: "", url: "", usage: "general" });
   const [settings, setSettings] = useState<SystemSettings>({ timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" });
-  const [aiConfig, setAiConfig] = useState<AiServiceConfig>({ baseUrl: "", model: "", prompt: "", hasKey: false });
-  const [aiApiKey, setAiApiKey] = useState("");
-  const [aiModels, setAiModels] = useState<string[]>([]);
-  const [aiFetching, setAiFetching] = useState(false);
-  const [aiRefreshing, setAiRefreshing] = useState(false);
 
   async function load() {
     let hasError = false;
     try {
-      const [userRows, galleryRows, settingRows, aiRows] = await Promise.all([
+      const [userRows, galleryRows, settingRows] = await Promise.all([
         api<any[]>("/admin/users").catch(() => { hasError = true; return []; }),
         api<Gallery[]>("/admin/gallery-images").catch(() => { hasError = true; return []; }),
-        api<SystemSettings>("/admin/system-settings").catch(() => { hasError = true; return { timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" }; }),
-        api<AiServiceConfig>("/admin/ai-service").catch(() => { hasError = true; return { baseUrl: "", hasKey: false, model: "", prompt: "" }; })
+        api<SystemSettings>("/admin/system-settings").catch(() => { hasError = true; return { timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" }; })
       ]);
       setUsers(userRows as any[]);
       setGallery(galleryRows as Gallery[]);
       setSettings(settingRows as SystemSettings);
-      setAiConfig(aiRows as AiServiceConfig);
-      if ((aiRows as AiServiceConfig).model)
-        setAiModels((prev) => (prev.includes((aiRows as AiServiceConfig).model) ? prev : [(aiRows as AiServiceConfig).model, ...prev]));
       if (hasError) setError("部分数据加载失败，可点击重试");
     } catch (err) {
       setError("加载数据失败，可点击重试");
@@ -173,34 +164,6 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
             <div className="readonly-value">{settings.timezoneLabel}</div>
           </div>
           <button className="primary"><Settings size={18} />保存系统设置</button>
-        </form>
-      </section>
-      <section className="panel setting-group">
-        <div className="panel-title">
-          <Sparkles />
-          <h2>AI 服务</h2>
-        </div>
-        <form className="stack compact" onSubmit={async (event) => { event.preventDefault(); await run(async () => { await api("/admin/ai-service", { method: "PATCH", body: JSON.stringify({ baseUrl: aiConfig.baseUrl, apiKey: aiApiKey, model: aiConfig.model, prompt: aiConfig.prompt }) }); setAiApiKey(""); setAiConfig({ ...aiConfig, hasKey: !!aiApiKey || aiConfig.hasKey }); }, "AI 服务配置已保存"); }}>
-          <Field label="Base URL">
-            <input value={aiConfig.baseUrl} onChange={(e) => setAiConfig({ ...aiConfig, baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
-          </Field>
-          <Field label="API Key">
-            <input value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} type="password" placeholder={aiConfig.hasKey ? "已设置，留空则保留" : "请输入 API Key"} autoComplete="new-password" />
-          </Field>
-          <Field label="模型">
-            <div className="inline-fields">
-              <select value={aiConfig.model} onChange={(e) => setAiConfig({ ...aiConfig, model: e.target.value })} style={{ flex: 1 }}>
-                {!aiConfig.model && <option value="">请选择或拉取模型列表</option>}
-                {aiModels.map((model) => <option key={model} value={model}>{model}</option>)}
-              </select>
-              <button type="button" className="secondary" disabled={aiFetching || !aiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const modelsBody: Record<string, unknown> = { baseUrl: aiConfig.baseUrl }; if (aiApiKey) modelsBody.apiKey = aiApiKey; const data = await api<{ models: string[] }>("/admin/ai-service/models", { method: "POST", body: JSON.stringify(modelsBody) }); setAiModels(data.models); if (data.models.length && !aiConfig.model) setAiConfig({ ...aiConfig, model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
-            </div>
-          </Field>
-          <Field label="提示词">
-            <textarea value={aiConfig.prompt} onChange={(e) => setAiConfig({ ...aiConfig, prompt: e.target.value })} rows={4} />
-          </Field>
-          <button className="primary"><Sparkles size={18} />保存 AI 配置</button>
-          <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ success: number; failed: number }>("/admin/ai-service/refresh-greetings", { method: "POST" }); setMessage(`AI 寄语刷新完成：成功 ${r.success}，失败 ${r.failed}`); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "刷新中..." : "刷新 AI 寄语"}</button>
         </form>
       </section>
       <div className="grid two">

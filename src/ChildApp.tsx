@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Award, ClipboardCheck, Coins, Gift, Package, Pin, Star } from "lucide-react";
-import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS } from "./types/api";
+import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary } from "./types/api";
 import { api } from "./api/client";
 import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle, formatSource } from "./components/UI";
 import { Shell } from "./components/Shell";
@@ -44,9 +44,11 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [activeTab, setActiveTab] = useState<"tasks" | "rewards" | "warehouse">("tasks");
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [warehouse, setWarehouse] = useState<WarehouseItem[]>([]);
+  const [summary, setSummary] = useState<ChildDashboardSummary>({ balance: 0, aiGreeting: "", aiRefreshPending: false, child: null });
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [, setTick] = useState(0);
-  const loadLockRef = useRef(false);
+  const loadSummaryLockRef = useRef(false);
+  const loadDashLockRef = useRef(false);
   const pollingRef = useRef<number | null>(null);
 
   async function loadWarehouse() {
@@ -152,31 +154,60 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const pinnedReward = dash.rewards.find((reward: any) => reward.isPinned);
   const pinnedCount = Number(Boolean(pinnedTask)) + Number(Boolean(pinnedReward));
 
-  async function load() {
-    if (loadLockRef.current) return;
-    loadLockRef.current = true;
-    let hasError = false;
+  async function loadSummary() {
+    if (loadSummaryLockRef.current) return;
+    loadSummaryLockRef.current = true;
     try {
-      const dashData = await api<any>("/dashboard/child").catch(() => { hasError = true; return { tasks: [], rewards: [], achievements: [], notifications: [], timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00", balance: 0, warehouse_count: 0, greeting: "", child: null }; });
-      setDash(dashData);
-      await loadWarehouse();
-      if (hasError) setError("部分数据加载失败，可点击重试");
-    } catch (err) {
-      setError("加载数据失败，可点击重试");
+      const data = await api<ChildDashboardSummary>("/dashboard/child-summary").catch(() => ({ balance: 0, aiGreeting: "", aiRefreshPending: false, child: null }));
+      setSummary(data);
+      setDash((current: any) => ({
+        ...current,
+        balance: data.balance,
+        aiGreeting: data.aiGreeting,
+        aiRefreshPending: data.aiRefreshPending
+      }));
     } finally {
-      loadLockRef.current = false;
+      loadSummaryLockRef.current = false;
     }
   }
 
+  async function loadDashboard() {
+    if (loadDashLockRef.current) return;
+    loadDashLockRef.current = true;
+    let hasError = false;
+    try {
+      const dashData = await api<any>("/dashboard/child").catch(() => {
+        hasError = true;
+        return { tasks: [], rewards: [], achievements: [], notifications: [], timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00", balance: 0, warehouse_count: 0, greeting: "", child: null };
+      });
+      setDash(dashData);
+      await loadWarehouse();
+      if (hasError) setError("閮ㄥ垎鏁版嵁鍔犺浇澶辫触锛屽彲鐐瑰嚮閲嶈瘯");
+    } catch (err) {
+      setError("鍔犺浇鏁版嵁澶辫触锛屽彲鐐瑰嚮閲嶈瘯");
+    } finally {
+      loadDashLockRef.current = false;
+    }
+  }
+
+  async function refreshAll() {
+    await loadSummary();
+    await loadDashboard();
+  }
+
+  async function load() {
+    await refreshAll();
+  }
   useEffect(() => {
-    void load();
-    pollingRef.current = window.setInterval(() => void load(), REFRESH_INTERVAL_MS);
+    void loadSummary();
+    void loadDashboard();
+    pollingRef.current = window.setInterval(() => void refreshAll(), REFRESH_INTERVAL_MS);
     function onVisibility() {
       if (document.hidden) {
         if (pollingRef.current !== null) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
       } else if (pollingRef.current === null) {
-        void load();
-        pollingRef.current = window.setInterval(() => void load(), REFRESH_INTERVAL_MS);
+        void refreshAll();
+        pollingRef.current = window.setInterval(() => void refreshAll(), REFRESH_INTERVAL_MS);
       }
     }
     document.addEventListener("visibilitychange", onVisibility);
@@ -231,16 +262,16 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   }
 
   return (
-    <Shell me={me} refresh={refresh} onQuickAction={() => void load()}>
+    <Shell me={me} refresh={refresh} onQuickAction={() => void loadDashboard()}>
       <section className="hero-band child">
         <div>
           <p>孩子面板</p>
           <h1>{me.displayName}</h1>
         </div>
-        {dash.aiGreeting && <p className="ai-greeting">{dash.aiGreeting}{dash.aiRefreshPending ? " · 刷新中" : ""}</p>}
+        {(summary.aiGreeting || dash.aiGreeting) && <p className="ai-greeting">{summary.aiGreeting || dash.aiGreeting}{summary.aiRefreshPending || dash.aiRefreshPending ? " · 刷新中" : ""}</p>}
         <button className="metric large clickable" onClick={() => void openLedger()}>
           <Star />
-          <strong>{dash.balance}</strong>
+          <strong>{summary.balance || dash.balance}</strong>
           <span>当前积分</span>
         </button>
       </section>

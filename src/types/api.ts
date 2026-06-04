@@ -12,9 +12,21 @@ export type FeedbackTemplate = Record<string, any> & { id: string; kind: "praise
 export type Notification = { id: string; title: string; body: string; event_type?: string; related_type?: string | null; related_id?: string | null; requires_ack?: number; read_at: string | null; created_at: string; sourceLabel?: string; sourceTypeLabel?: string };
 export type LedgerRow = { id: string; amount: number; source_type: string; sourceLabel?: string; sourceTypeLabel?: string; note: string; created_at: string; localCreatedAt?: string; period_key?: string | null };
 export type WarehouseItem = Record<string, any> & { id: string; title: string; status: "pending" | "redeemed" | "cancelled"; redeemed_at?: string | null };
-export type FeedbackEvent = Record<string, any> & { id: string; source_type: "praise" | "criticism"; amount: number; note: string; created_at: string; localCreatedAt?: string; template_title?: string; revoked_at?: string | null };
+export type FeedbackEvent = Record<string, any> & {
+  id: string;
+  source_type: "praise" | "criticism";
+  amount: number;
+  note: string;
+  created_at: string;
+  localCreatedAt?: string;
+  template_title?: string;
+  sourceLabel?: string;
+  sourceTypeLabel?: string;
+  revoked_at?: string | null;
+};
 export type LedgerResponse = { items: LedgerRow[]; timezoneOffsetMinutes: number; timezoneLabel: string };
 export type SystemSettings = { timezoneOffsetMinutes: number; timezoneLabel: string };
+export type ChildDashboardSummary = { balance: number; aiGreeting: string; aiRefreshPending: boolean; child: Child | null };
 
 export type EmojiSource = {
   name: string;
@@ -29,6 +41,7 @@ export type EmojiSource = {
 export type EmojiOption = { emoji: string; name: string; shortNames: string[]; category: string; sortOrder: number; search: string; rank: number };
 
 export type AiServiceConfig = { baseUrl: string; model: string; prompt: string; hasKey: boolean };
+export type ParentAiServiceConfig = AiServiceConfig;
 
 export const REFRESH_INTERVAL_MS = 12000;
 export const DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];

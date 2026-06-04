@@ -1,9 +1,9 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import {
   Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
-  MessageSquare, Plus, Printer, RotateCcw, Star, Trash2, Upload, Users
+  MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, formatSource, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -24,7 +24,13 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [refundRows, setRefundRows] = useState<WarehouseItem[]>([]);
   const [feedbackChild, setFeedbackChild] = useState<Child | null>(null);
   const [feedbackRows, setFeedbackRows] = useState<FeedbackEvent[]>([]);
+  const [reportChild, setReportChild] = useState<Child | null>(null);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  const [aiConfig, setAiConfig] = useState<ParentAiServiceConfig>({ baseUrl: "", model: "", prompt: "", hasKey: false });
+  const [aiApiKey, setAiApiKey] = useState("");
+  const [aiModels, setAiModels] = useState<string[]>([]);
+  const [aiFetching, setAiFetching] = useState(false);
+  const [aiRefreshing, setAiRefreshing] = useState(false);
   const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -38,14 +44,15 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     loadLockRef.current = true;
     let hasError = false;
     try {
-      const [childRows, categoryRows, taskRows, rewardRows, achievementRows, feedbackRows, dash] = await Promise.all([
+      const [childRows, categoryRows, taskRows, rewardRows, achievementRows, feedbackRows, dash, aiRows] = await Promise.all([
         api<Child[]>("/children").catch(() => { hasError = true; return [] as Child[]; }),
         api<Category[]>("/task-categories").catch(() => { hasError = true; return [] as Category[]; }),
         api<Task[]>("/tasks").catch(() => { hasError = true; return [] as Task[]; }),
         api<Reward[]>("/rewards").catch(() => { hasError = true; return [] as Reward[]; }),
         api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
         api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; }),
-        api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; })
+        api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; }),
+        api<ParentAiServiceConfig>("/parent/ai-service").catch(() => { hasError = true; return { baseUrl: "", hasKey: false, model: "", prompt: "" }; })
       ]);
       setChildren(childRows);
       setCategories(categoryRows);
@@ -54,6 +61,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       setAchievements(achievementRows);
       setFeedbackTemplates(feedbackRows);
       setDashboard(dash);
+      setAiConfig(aiRows as ParentAiServiceConfig);
+      if ((aiRows as ParentAiServiceConfig).model)
+        setAiModels((prev) => (prev.includes((aiRows as ParentAiServiceConfig).model) ? prev : [(aiRows as ParentAiServiceConfig).model, ...prev]));
       if (hasError) setError("部分数据加载失败，可点击重试");
     } catch (err) {
       setError("加载数据失败，可点击重试");
@@ -235,16 +245,15 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     setFeedbackChild(child);
   }
 
-  async function recallFeedback(id: string) {
-    if (!window.confirm("确认撤回这条表扬/批评？积分会自动冲正。")) return;
+  async function recallSelectedFeedback(ids: string[]) {
+    if (!ids.length) return;
+    if (!feedbackChild) return;
     await run(
-      () => api(`/feedback-events/${encodeURIComponent(id)}/recall`, { method: "PATCH", body: JSON.stringify({}) }),
-      "表扬/批评已撤回"
+      () => Promise.all(ids.map((id) => api(`/feedback-events/${encodeURIComponent(id)}/recall`, { method: "PATCH", body: JSON.stringify({}) }))).then(() => undefined),
+      ids.length > 1 ? "表扬/批评已批量撤回" : "表扬/批评已撤回"
     );
-    if (feedbackChild) {
-      const rows = await api<FeedbackEvent[]>(`/children/${encodeURIComponent(feedbackChild.id)}/feedback-events`).catch(() => []);
-      setFeedbackRows(rows);
-    }
+    setFeedbackChild(null);
+    setFeedbackRows([]);
   }
 
   return (
@@ -305,7 +314,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         <>
           <div className="grid two">
             <CreateChild onCreate={(data) => create("/children", data, "孩子账号已创建")} />
-            <ChildManager children={children} onEdit={(child) => setEditChild(child)} onToggle={toggleChild} onDelete={deleteChild} onExport={exportChildPrint} onReport={exportChildReport} onRefund={(child) => void refundChildReward(child)} onFeedbackRecall={(child) => void openFeedbackRecall(child)} />
+            <ChildManager children={children} onEdit={(child) => setEditChild(child)} onToggle={toggleChild} onDelete={deleteChild} onReport={(child) => setReportChild(child)} onRefund={(child) => void refundChildReward(child)} onFeedbackRecall={(child) => void openFeedbackRecall(child)} />
           </div>
         </>
       )}
@@ -355,6 +364,34 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               </Field>
               <button className="primary"><KeyRound size={18} />保存密码</button>
             </form>
+          <section className="panel setting-group">
+            <div className="panel-title">
+              <Sparkles />
+              <h2>AI 服务</h2>
+            </div>
+            <form className="stack compact" onSubmit={async (event) => { event.preventDefault(); await run(async () => { await api("/parent/ai-service", { method: "PATCH", body: JSON.stringify({ baseUrl: aiConfig.baseUrl, apiKey: aiApiKey, model: aiConfig.model, prompt: aiConfig.prompt }) }); setAiApiKey(""); setAiConfig({ ...aiConfig, hasKey: !!aiApiKey || aiConfig.hasKey }); }, "AI 服务配置已保存"); }}>
+              <Field label="Base URL">
+                <input value={aiConfig.baseUrl} onChange={(e) => setAiConfig({ ...aiConfig, baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
+              </Field>
+              <Field label="API Key">
+                <input value={aiApiKey} onChange={(e) => setAiApiKey(e.target.value)} type="password" placeholder={aiConfig.hasKey ? "已设置，留空则保留" : "请输入 API Key"} autoComplete="new-password" />
+              </Field>
+              <Field label="模型">
+                <div className="inline-fields">
+                  <select value={aiConfig.model} onChange={(e) => setAiConfig({ ...aiConfig, model: e.target.value })} style={{ flex: 1 }}>
+                    {!aiConfig.model && <option value="">请选择或拉取模型列表</option>}
+                    {aiModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                  </select>
+                  <button type="button" className="secondary" disabled={aiFetching || !aiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const modelsBody: { baseUrl: string; apiKey?: string } = { baseUrl: aiConfig.baseUrl }; if (aiApiKey) modelsBody.apiKey = aiApiKey; const data = await api<{ models: string[] }>("/parent/ai-service/models", { method: "POST", body: JSON.stringify(modelsBody) }); setAiModels(data.models); if (data.models.length && !aiConfig.model) setAiConfig({ ...aiConfig, model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
+                </div>
+              </Field>
+              <Field label="提示词">
+                <textarea value={aiConfig.prompt} onChange={(e) => setAiConfig({ ...aiConfig, prompt: e.target.value })} rows={4} />
+              </Field>
+              <button className="primary"><Sparkles size={18} />保存 AI 配置</button>
+              <button type="button" className="secondary" disabled={aiRefreshing} onClick={async () => { setAiRefreshing(true); try { const r = await api<{ success: number; failed: number }>("/parent/ai-service/refresh-greetings", { method: "POST" }); setMessage("AI 寄语刷新完成：成功 " + r.success + "，失败 " + r.failed); } catch (err) { setError(err instanceof Error ? err.message : "刷新失败"); } finally { setAiRefreshing(false); } }}>{aiRefreshing ? "刷新中..." : "刷新 AI 寄语"}</button>
+            </form>
+          </section>
           </section>
         </>
       )}
@@ -372,7 +409,15 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           child={feedbackChild}
           rows={feedbackRows}
           onClose={() => { setFeedbackChild(null); setFeedbackRows([]); }}
-          onRecall={(id) => void recallFeedback(id)}
+          onRecall={(ids) => void recallSelectedFeedback(ids)}
+        />
+      )}
+      {reportChild && (
+        <ReportDialog
+          child={reportChild}
+          onClose={() => setReportChild(null)}
+          onPrint={exportChildPrint}
+          onReport={exportChildReport}
         />
       )}
       {editChild && (
@@ -579,7 +624,12 @@ export function RefundRewardDialog({ child, rows, onRefund, onClose }: { child: 
   );
 }
 
-export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child: Child; rows: FeedbackEvent[]; onRecall: (id: string) => void; onClose: () => void }) {
+export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child: Child; rows: FeedbackEvent[]; onRecall: (ids: string[]) => void; onClose: () => void }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const total = rows.filter((item) => selected.includes(item.id)).reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
+  function toggle(id: string, checked: boolean) {
+    setSelected((current) => checked ? [...current, id] : current.filter((item) => item !== id));
+  }
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <section className="panel refund-modal">
@@ -588,19 +638,49 @@ export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child
           <h2>撤回反馈</h2>
           <button type="button" className="secondary" onClick={onClose}>关闭</button>
         </div>
-        <p className="muted-text">{child.display_name} 近7天的表扬与批评可在这里撤回。撤回后积分会自动冲正，记录保留7天。</p>
+        <p className="muted-text">{child.display_name} 近 7 天的表扬与批评可在这里撤回。撤回后积分会自动冲正，记录保留 7 天。</p>
         <div className="list scroll-list refund-list">
           {rows.length ? rows.map((item) => (
-            <article className="row" key={item.id}>
+            <label className="row selectable-row" key={item.id}>
+              <input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => toggle(item.id, event.target.checked)} />
               <div>
-                <strong>{item.source_type === "praise" ? "表扬" : "批评"} · {item.template_title || item.note || "反馈"}</strong>
-                <span>{item.localCreatedAt || formatTime(item.created_at)} · {item.amount >= 0 ? "+" : ""}{item.amount} 积分{item.revoked_at ? " · 已撤回" : ""}</span>
+                <strong>{item.sourceLabel || ((item.source_type === "praise" ? "表扬" : "批评") + " · " + (item.template_title || item.note || "反馈"))}</strong>
+                <span>{item.localCreatedAt || formatTime(item.created_at)} · {item.amount >= 0 ? "+" : ""}{item.amount} 积分</span>
               </div>
-              <button className="secondary" disabled={!!item.revoked_at} onClick={() => onRecall(item.id)}>
-                <RotateCcw size={16} />撤回
-              </button>
-            </article>
-          )) : <Empty text="近7天没有可撤回的表扬或批评" />}
+            </label>
+          )) : <Empty text="近 7 天没有可撤回的表扬或批评" />}
+        </div>
+        <div className="actions">
+          <button className="primary" disabled={!selected.length} onClick={() => onRecall(selected)}>
+            <RotateCcw size={18} />撤回{selected.length ? " " + selected.length + " 项 · " + total + " 积分" : ""}
+          </button>
+          <button type="button" className="secondary" onClick={onClose}>取消</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function ReportDialog({ child, onPrint, onReport, onClose }: { child: Child; onPrint: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <section className="panel refund-modal">
+        <div className="panel-title compact-title">
+          <Printer />
+          <h2>报表</h2>
+          <button type="button" className="secondary" onClick={onClose}>关闭</button>
+        </div>
+        <p className="muted-text">{child.display_name} 的打印清单、周报和月报都从这里进入。</p>
+        <div className="report-actions">
+          <button className="primary" onClick={() => { onPrint(child); onClose(); }}>
+            <Printer size={18} />打印清单
+          </button>
+          <button className="secondary" onClick={() => { onReport(child, "weekly"); onClose(); }}>
+            <Printer size={18} />查看周报
+          </button>
+          <button className="secondary" onClick={() => { onReport(child, "monthly"); onClose(); }}>
+            <Printer size={18} />查看月报
+          </button>
         </div>
       </section>
     </div>
@@ -618,7 +698,7 @@ export function CreateChild({ onCreate }: { onCreate: (data: any) => void }) {
   );
 }
 
-export function ChildManager({ children, onEdit, onToggle, onDelete, onExport, onReport, onRefund, onFeedbackRecall }: { children: Child[]; onEdit: (child: Child) => void; onToggle: (child: Child) => void; onDelete: (child: Child) => void; onExport: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onRefund: (child: Child) => void; onFeedbackRecall: (child: Child) => void }) {
+export function ChildManager({ children, onEdit, onToggle, onDelete, onReport, onRefund, onFeedbackRecall }: { children: Child[]; onEdit: (child: Child) => void; onToggle: (child: Child) => void; onDelete: (child: Child) => void; onReport: (child: Child) => void; onRefund: (child: Child) => void; onFeedbackRecall: (child: Child) => void }) {
   return (
     <section className="panel">
       <div className="panel-title"><Users /><h2>孩子账号管理</h2></div>
@@ -631,9 +711,7 @@ export function ChildManager({ children, onEdit, onToggle, onDelete, onExport, o
             </div>
             <div className="actions">
               <button className="secondary" onClick={() => onEdit(child)}>修改</button>
-              <button className="secondary" onClick={() => onExport(child)}><Printer size={16} />打印清单</button>
-              <button className="secondary" onClick={() => onReport(child, "weekly")}><Printer size={16} />周报</button>
-              <button className="secondary" onClick={() => onReport(child, "monthly")}><Printer size={16} />月报</button>
+              <button className="secondary" onClick={() => onReport(child)}><Printer size={16} />报表</button>
               <button className="secondary" onClick={() => onFeedbackRecall(child)}><RotateCcw size={16} />撤回反馈</button>
               <button className="secondary" onClick={() => onRefund(child)}><RotateCcw size={16} />退还奖励</button>
               <button className="secondary" onClick={() => onToggle(child)}>{child.status === "active" ? "停用" : "启用"}</button>

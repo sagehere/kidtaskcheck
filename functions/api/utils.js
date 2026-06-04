@@ -1033,6 +1033,17 @@ export async function notificationSource(env, item) {
             const label = row.source_type === "criticism" ? "批评" : "表扬";
             return { sourceTypeLabel: label, sourceLabel: `${label}：${row.title}` };
         }
+        if (row?.source_type === "feedback_recall") {
+            const original = await env.DB.prepare("SELECT pl.source_type, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id=?").bind(row.source_id).first();
+            if (original?.title) {
+                const label = original.source_type === "criticism" ? "批评" : "表扬";
+                return { sourceTypeLabel: `${label}撤回`, sourceLabel: `${label}：${original.title}` };
+            }
+            if (original?.source_type) {
+                const label = eventTypeLabel(original.source_type);
+                return { sourceTypeLabel: `${label}撤回`, sourceLabel: `${label}` };
+            }
+        }
         if (row?.source_type) {
             const label = eventTypeLabel(row.source_type);
             return { sourceTypeLabel: label, sourceLabel: label };
@@ -1062,6 +1073,17 @@ export async function ledgerSource(env, row) {
             return { sourceTypeLabel: label, sourceLabel: `${label}：${found.title}` };
         return { sourceTypeLabel: label, sourceLabel: label };
     }
+    if (row.source_type === "feedback_recall") {
+        const original = await env.DB.prepare("SELECT pl.source_type, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id=?").bind(row.source_id).first();
+        if (original?.title) {
+            const label = original.source_type === "criticism" ? "批评" : "表扬";
+            return { sourceTypeLabel: `${label}撤回`, sourceLabel: `${label}撤回：${original.title}` };
+        }
+        if (original?.source_type) {
+            const label = eventTypeLabel(original.source_type);
+            return { sourceTypeLabel: `${label}撤回`, sourceLabel: `${label}撤回` };
+        }
+    }
     const fallback = eventTypeLabel(row.source_type);
     return { sourceTypeLabel: fallback, sourceLabel: fallback };
 }
@@ -1078,6 +1100,39 @@ export function aiConfigHash(config) {
         chars.push((h >>> 0).toString(36).slice(-2));
     }
     return chars.slice(0, 8).join("");
+}
+
+export async function getParentAiServiceConfig(env, parentId) {
+    const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
+    return {
+        baseUrl: row?.base_url || "",
+        apiKey: row?.api_key || "",
+        model: row?.model || "",
+        prompt: row?.prompt || "",
+        hasKey: !!row?.api_key,
+        updatedAt: row?.updated_at || ""
+    };
+}
+
+export async function loadAiGreetingSnapshot(env, child, offset) {
+    if (!child?.ai_enabled)
+        return { greeting: "", aiRefreshPending: false };
+    const config = await getParentAiServiceConfig(env, child.parent_id);
+    if (!config.baseUrl || !config.apiKey || !config.model || !config.prompt)
+        return { greeting: "", aiRefreshPending: false };
+    const configHash = aiConfigHash(config);
+    const now = nowIso();
+    const range = reportWindowRange("weekly", now, offset);
+    const weekKey = periodKey("weekly", range.start, offset);
+    const cached = await env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=? AND previous_week_key=? AND config_hash=?")
+        .bind(child.id, weekKey, configHash)
+        .first();
+    if (cached?.greeting)
+        return { greeting: cached.greeting, aiRefreshPending: false };
+    const stale = await env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=? ORDER BY generated_at DESC LIMIT 1")
+        .bind(child.id)
+        .first();
+    return { greeting: stale?.greeting || "", aiRefreshPending: true };
 }
 export async function previousWeekReportSummary(env, childId, offset) {
     const now = nowIso();
@@ -1235,6 +1290,110 @@ export const AI_REFRESH_DELAY_MS = 2000;
 export const AI_REFRESH_COOLDOWN_MS = 30000;
 export const AI_REFRESH_MAX_RETRIES = 3;
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export async function callParentAiService(env, prompt, config) {
+    const baseUrl = config?.baseUrl || "";
+    const apiKey = config?.apiKey || "";
+    const model = config?.model || "";
+    if (!baseUrl || !apiKey || !model)
+        return "";
+    if (isPrivateUrl(baseUrl))
+        return "";
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), AI_FETCH_TIMEOUT_MS);
+        const resp = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], max_tokens: 300 }),
+            signal: controller.signal,
+            redirect: "manual"
+        });
+        clearTimeout(timeoutId);
+        if (resp.status === 0 || resp.type === "opaqueredirect")
+            return "";
+        if (!resp.ok)
+            return "";
+        const data = await resp.json();
+        const text = data?.choices?.[0]?.message?.content || "";
+        const cleaned = text.replace(/\s+/g, " ").trim().replace(/，+/g, "，").replace(/。+/g, "。");
+        return truncateAiOutput(cleaned);
+    }
+    catch {
+        return "";
+    }
+}
+
+export async function generateParentAiGreeting(env, child, offset, forceRefresh = false) {
+    if (!child.ai_enabled)
+        return "";
+    const config = await getParentAiServiceConfig(env, child.parent_id);
+    if (!config.baseUrl || !config.apiKey || !config.model || !config.prompt)
+        return "";
+    const hash = aiConfigHash(config);
+    const now = nowIso();
+    const range = reportWindowRange("weekly", now, offset);
+    const weekKey = periodKey("weekly", range.start, offset);
+    const cached = await env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=? AND previous_week_key=? AND config_hash=?")
+        .bind(child.id, weekKey, hash)
+        .first();
+    if (cached?.greeting && !forceRefresh)
+        return cached.greeting;
+    const report = await previousWeekReportSummary(env, child.id, offset);
+    const [assignedTasks, assignedRewards, feedbackTemplates] = await Promise.all([
+        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description
+FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL
+ORDER BY tc.name, t.created_at DESC`).bind(child.id, child.parent_id).all(),
+        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period, r.limit_count, r.redeem_weekdays, r.is_active, r.description
+FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id
+WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL
+ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(),
+        env.DB.prepare("SELECT kind, title, points, is_active, description FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(child.parent_id).all()
+    ]);
+    const assignments = { tasks: assignedTasks.results, rewards: assignedRewards.results, feedbackTemplates: feedbackTemplates.results };
+    const aiPrompt = buildAiPrompt(child, report, config, assignments);
+    if (!aiPrompt)
+        return "";
+    const greeting = await callParentAiService(env, aiPrompt, config);
+    if (greeting) {
+        await env.DB.prepare("INSERT OR REPLACE INTO ai_child_greetings (child_id, previous_week_key, config_hash, greeting, generated_at) VALUES (?, ?, ?, ?, ?)")
+            .bind(child.id, weekKey, hash, greeting, now)
+            .run();
+    }
+    return greeting;
+}
+
+export async function refreshParentAiGreetings(env, offset, parentId) {
+    const children = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE ai_enabled=1 AND deleted_at IS NULL AND parent_id=?").bind(parentId).all();
+    if (!children.results.length)
+        return { success: 0, failed: 0 };
+    let failed = [...children.results];
+    let successCount = 0;
+    let attempt = 0;
+    while (failed.length > 0 && attempt < AI_REFRESH_MAX_RETRIES) {
+        attempt++;
+        const stillFailed = [];
+        for (const child of failed) {
+            try {
+                const greeting = await generateParentAiGreeting(env, child, offset, true);
+                if (greeting)
+                    successCount++;
+                else
+                    stillFailed.push(child);
+            }
+            catch {
+                stillFailed.push(child);
+            }
+            await sleep(AI_REFRESH_DELAY_MS);
+        }
+        failed = stillFailed;
+        if (failed.length > 0 && attempt < AI_REFRESH_MAX_RETRIES)
+            await sleep(AI_REFRESH_COOLDOWN_MS);
+    }
+    return { success: successCount, failed: failed.length };
+}
 export async function batchRefreshGreetings(env, offset) {
     const children = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE ai_enabled=1 AND deleted_at IS NULL").all();
     if (!children.results.length)

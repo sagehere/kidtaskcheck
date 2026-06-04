@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, recalcAchievements, notify, generateAiGreeting } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, recalcAchievements, notify, loadAiGreetingSnapshot, generateParentAiGreeting } from "../utils.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
     if (path === "/task-submissions" && method === "POST") {
@@ -122,6 +122,24 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
             .run();
         return ok(true);
     }
+    if (path === "/dashboard/child-summary" && method === "GET") {
+        const a = requireRole(actor, ["child"]);
+        const offset = await timezoneOffsetMinutes(env);
+        const childRow = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=?")
+            .bind(a.id)
+            .first();
+        if (!childRow)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const snapshot = await loadAiGreetingSnapshot(env, childRow, offset);
+        if (snapshot.aiRefreshPending && childRow.ai_enabled)
+            ctx?.waitUntil?.(generateParentAiGreeting(env, childRow, offset, true));
+        return ok({
+            balance: await balance(env, a.id),
+            aiGreeting: snapshot.greeting,
+            aiRefreshPending: snapshot.aiRefreshPending,
+            child: a
+        });
+    }
     if (path === "/dashboard/child" && method === "GET") {
         const a = requireRole(actor, ["child"]);
         const offset = await timezoneOffsetMinutes(env);
@@ -187,16 +205,6 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
         const visiblePinnedTaskId = taskRows.some((task) => task.id === pinnedTaskId) ? pinnedTaskId : null;
         const visiblePinnedRewardId = rewards.some((reward) => reward.id === pinnedRewardId) ? pinnedRewardId : null;
         const childRow = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=?").bind(a.id).first();
-        let aiGreeting = childRow ? await generateAiGreeting(env, childRow, offset) : "";
-        let aiRefreshPending = false;
-        if (!aiGreeting && childRow?.ai_enabled) {
-            const stale = await env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=? ORDER BY generated_at DESC LIMIT 1").bind(childRow.id).first();
-            if (stale?.greeting) {
-                aiGreeting = stale.greeting;
-                aiRefreshPending = true;
-                ctx?.waitUntil?.(generateAiGreeting(env, childRow, offset, true));
-            }
-        }
         return ok({
             child: a,
             balance: await balance(env, a.id),
@@ -204,8 +212,8 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
             pinnedRewardId: visiblePinnedRewardId,
             tasks: taskRows,
             rewards,
-            aiGreeting,
-            aiRefreshPending,
+            aiGreeting: "",
+            aiRefreshPending: false,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
         });
     }

@@ -3,6 +3,7 @@ import { resetTestEnv } from "./helpers/setup";
 import { handleAuthRoutes } from "../functions/api/routes/auth.js";
 import { handleAdminRoutes } from "../functions/api/routes/admin.js";
 import { handleChildRoutes } from "../functions/api/routes/child.js";
+import { handleParentRoutes } from "../functions/api/routes/parent.js";
 import { ensureAdmin, actorFromRequest, loginAttempts, sessionCookie, validateHttpsUrl, isPrivateUrl, truncateAiOutput, id, hashPassword } from "../functions/api/utils.js";
 
 function makeRequest(m: string, p: string, b?: any, c?: string): Request {
@@ -132,10 +133,14 @@ describe("Input Validation", () => {
   });
 });
 
-describe("Admin Input Validation", () => {
+describe("Parent AI Service Validation", () => {
   let env: any;
+  let parentId: string;
   beforeEach(async () => {
     env = resetTestEnv(); await ensureAdmin(env); loginAttempts.clear();
+    parentId = id();
+    const pw = await hashPassword("parent-ai-pw");
+    env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, ?, ?, 'parent', 'AI Parent')").bind(parentId, "parent-ai", pw).run();
   });
   async function asAdmin() {
     const c = await login(env, "admin", "test-admin-pw");
@@ -143,19 +148,25 @@ describe("Admin Input Validation", () => {
     return { cookie: c, actor: a };
   }
   it("rejects AI baseUrl with HTTP", async () => {
-    const { actor } = await asAdmin();
-    const r = await safe(handleAdminRoutes, "/admin/ai-service", "PATCH", makeRequest("PATCH", "/admin/ai-service", { baseUrl: "http://localhost" }), env, actor);
+    const actor = { type: "user", role: "parent", id: parentId };
+    const r = await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "http://localhost", model: "gpt-4o-mini", prompt: "hello" }), env, actor);
     expect(r!.status).toBe(400);
   });
   it("rejects AI baseUrl with localhost", async () => {
-    const { actor } = await asAdmin();
-    const r = await safe(handleAdminRoutes, "/admin/ai-service", "PATCH", makeRequest("PATCH", "/admin/ai-service", { baseUrl: "https://localhost:8080" }), env, actor);
+    const actor = { type: "user", role: "parent", id: parentId };
+    const r = await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://localhost:8080", model: "gpt-4o-mini", prompt: "hello" }), env, actor);
     expect(r!.status).toBe(400);
   });
   it("accepts valid HTTPS AI baseUrl", async () => {
-    const { actor } = await asAdmin();
-    const r = await safe(handleAdminRoutes, "/admin/ai-service", "PATCH", makeRequest("PATCH", "/admin/ai-service", { baseUrl: "https://api.openai.com/v1" }), env, actor);
+    const actor = { type: "user", role: "parent", id: parentId };
+    const r = await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", prompt: "hello", apiKey: "sk-test" }), env, actor);
     expect(r!.status).toBe(200);
+    const getRes = await safe(handleParentRoutes, "/parent/ai-service", "GET", makeRequest("GET", "/parent/ai-service"), env, actor);
+    expect(getRes!.status).toBe(200);
+    const config = await getRes!.json();
+    expect(config.data.baseUrl).toBe("https://api.openai.com/v1");
+    expect(config.data.model).toBe("gpt-4o-mini");
+    expect(config.data.hasKey).toBe(true);
   });
   it("rejects gallery URL with javascript scheme", async () => {
     const { actor } = await asAdmin();

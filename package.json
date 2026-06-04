@@ -12,6 +12,7 @@
     "pages:dev": "wrangler pages dev dist --d1=DB --port 8788 --persist-to .wrangler/state --log-level none",
     "pages:build": "npm run build && npm run db:migrate:remote",
     "pages:publish": "npm run pages:build && wrangler pages deploy dist",
+    "scheduler:deploy": "wrangler deploy --config wrangler.scheduler.toml",
     "deploy": "echo '请使用 npm run pages:publish 进行部署' && exit 1",
     "db:migrate:local": "wrangler d1 migrations apply kids_task_checkin --local",
     "db:migrate:remote": "wrangler d1 migrations apply kids_task_checkin --remote"

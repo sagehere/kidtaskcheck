@@ -1,6 +1,9 @@
-name = "kids-task-checkin"
+name = "kids-task-checkin-ai-scheduler"
+main = "workers/ai-scheduler.js"
 compatibility_date = "2026-05-25"
-pages_build_output_dir = "dist"
+
+[triggers]
+crons = ["*/30 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
@@ -11,4 +14,4 @@ database_id = "dbfc66d6-e579-4b66-95aa-26e2d41e5c79"
 APP_NAME = "儿童任务打卡"
 ADMIN_USERNAME = "testadmin"
 # 生产环境请在 Cloudflare Secrets 中设置 ADMIN_PASSWORD、ENVIRONMENT、APP_URL
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"

@@ -7,9 +7,9 @@ import { repairSqlite0002 } from "../scripts/sqlite-repair-0002.mjs";
 const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
 describe("Task 35: Migration Smoke Test", () => {
-  it("all 18 migration files apply sequentially on empty DB without errors", () => {
+  it("all 19 migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(18);
+    expect(files.length).toBe(19);
     const db = new SqliteTestDb();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
@@ -43,6 +43,11 @@ describe("Task 35: Migration Smoke Test", () => {
     expect(tableNames).toContain("ai_scheduled_refresh_runs");
     expect(tableNames).toContain("ai_generation_queue");
     expect(tableNames).toContain("system_error_logs");
+    const aiColumns = db.prepare("PRAGMA table_info(parent_ai_service_settings)").all().results as any[];
+    const aiColumnNames = aiColumns.map((column: any) => column.name);
+    expect(aiColumnNames).toContain("image_base_url");
+    expect(aiColumnNames).toContain("image_api_key");
+    expect(aiColumnNames).toContain("image_model");
     db.close();
   });
 

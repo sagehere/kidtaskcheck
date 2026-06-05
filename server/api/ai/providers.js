@@ -134,3 +134,85 @@ export async function callParentAiService(env, prompt, config, options = {}) {
 export async function callParentAiServiceForReport(env, prompt, config) {
     return callParentAiService(env, prompt, config, { maxTokens: 600, noTruncate: true });
 }
+
+function imageDataUrl(format, value) {
+    const cleanFormat = ["png", "jpeg", "webp"].includes(format) ? format : "jpeg";
+    return `data:image/${cleanFormat};base64,${value}`;
+}
+
+function parseImageResponse(data, format) {
+    const first = Array.isArray(data?.data) ? data.data[0] : null;
+    const raw = first?.url || first?.b64_json || data?.url || data?.b64_json || data?.choices?.[0]?.message?.content || "";
+    const value = String(raw || "").trim();
+    if (!value) return "";
+    if (/^https?:\/\//i.test(value) || /^data:image\//i.test(value)) return value;
+    const urlMatch = value.match(/https?:\/\/[^\s"'<>]+/i);
+    if (urlMatch) return urlMatch[0];
+    const base64Match = value.match(/(?:data:image\/[a-z]+;base64,)?([A-Za-z0-9+/=]{80,})/);
+    if (base64Match) {
+        if (value.startsWith("data:image/")) return value;
+        return imageDataUrl(format, base64Match[1]);
+    }
+    return "";
+}
+
+export async function callParentImageService(env, prompt, config) {
+    const baseUrl = config?.imageBaseUrl || "";
+    const apiKey = config?.imageApiKey || "";
+    const model = config?.imageModel || "gpt-image-2";
+    const format = config?.imageFormat || "jpeg";
+    if (!baseUrl || !apiKey || !model || !prompt) {
+        throw new AiProviderError("Image AI config is incomplete", { code: "AI_CONFIG_INCOMPLETE", retryable: false });
+    }
+    if (isPrivateUrl(baseUrl)) {
+        throw new AiProviderError("Image AI base URL is not allowed", { code: "AI_PRIVATE_URL", retryable: false });
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), AI_FETCH_TIMEOUT_MS);
+    try {
+        const endpoint = `${baseUrl.replace(/\/+$/, "")}/images/generations`;
+        const resp = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                accept: "application/json",
+                authorization: `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model,
+                prompt,
+                n: config?.imageN || 1,
+                size: config?.imageSize || "1024x1024",
+                quality: config?.imageQuality || "low",
+                format
+            }),
+            signal: controller.signal,
+            redirect: "manual",
+        });
+        clearTimeout(timeoutId);
+        if (resp.status === 0 || resp.type === "opaqueredirect") {
+            throw new AiProviderError("Image AI redirects are not allowed", { status: resp.status, code: "AI_SERVICE_ERROR", retryable: false });
+        }
+        if (!resp.ok) {
+            throw new AiProviderError(`Image AI request failed with ${resp.status}`, {
+                status: resp.status,
+                code: resp.status === 429 ? "AI_RATE_LIMITED" : "AI_SERVICE_ERROR",
+                retryable: resp.status === 429 || resp.status >= 500
+            });
+        }
+        const data = await resp.json().catch(() => ({}));
+        const imageUrl = parseImageResponse(data, format);
+        if (!imageUrl) {
+            throw new AiProviderError("Image AI response did not include an image", { code: "AI_EMPTY_IMAGE", retryable: false });
+        }
+        return imageUrl;
+    }
+    catch (error) {
+        clearTimeout(timeoutId);
+        if (error instanceof AiProviderError) throw error;
+        throw new AiProviderError(error?.name === "AbortError" ? "Image AI request timed out" : "Image AI request failed", {
+            code: error?.name === "AbortError" ? "AI_TIMEOUT" : "AI_NETWORK_ERROR",
+            retryable: true
+        });
+    }
+}

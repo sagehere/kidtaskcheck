@@ -172,6 +172,26 @@ describe("Parent AI Service Validation", () => {
     vi.stubGlobal("fetch", fetchMock);
     return fetchMock;
   }
+  function stubImage(responseBody: any = { data: [{ url: "https://cdn.example.com/report.jpeg" }] }) {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://image.example.com/v1/images/generations");
+      expect(init?.method).toBe("POST");
+      expect(init?.redirect).toBe("manual");
+      expect(init?.signal).toBeDefined();
+      expect((init?.headers as Record<string, string>)?.authorization).toBe("Bearer img-key");
+      const body = JSON.parse(String(init?.body || "{}"));
+      expect(body.model).toBe("gpt-image-2");
+      expect(body.n).toBe(1);
+      expect(body.size).toBe("1024x1024");
+      expect(body.quality).toBe("low");
+      expect(body.format).toBe("jpeg");
+      expect(body.prompt).toContain("cartoon style");
+      expect(body.prompt).toContain("AI Child");
+      return new Response(JSON.stringify(responseBody), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
   it("rejects AI baseUrl with HTTP", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
     const r = await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "http://localhost", model: "gpt-4o-mini", prompt: "hello" }), env, actor);
@@ -206,14 +226,26 @@ describe("Parent AI Service Validation", () => {
   });
   it("keeps saved AI key when later updates omit apiKey", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
-    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1/", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
-    const r = await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1/", model: "gpt-b", prompt: "updated" }), env, actor);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1/", model: "gpt-a", prompt: "hello", apiKey: "sk-test", imageBaseUrl: "https://image.example.com/v1/", imageModel: "gpt-image-2", imagePrompt: "cartoon style", imageApiKey: "img-key" }), env, actor);
+    const r = await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1/", model: "gpt-b", prompt: "updated", imageModel: "gpt-image-2", imagePrompt: "updated cartoon" }), env, actor);
     expect(r!.status).toBe(200);
-    const row = env.DB.prepare("SELECT base_url, model, prompt, api_key FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
+    const row = env.DB.prepare("SELECT base_url, model, prompt, api_key, image_base_url, image_prompt, image_api_key FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
     expect(row.base_url).toBe("https://api.example.com/v1");
     expect(row.model).toBe("gpt-b");
     expect(row.prompt).toBe("updated");
     expect(row.api_key).toBe("sk-test");
+    expect(row.image_base_url).toBe("https://image.example.com/v1");
+    expect(row.image_prompt).toBe("updated cartoon");
+    expect(row.image_api_key).toBe("img-key");
+    const getRes = await safe(handleParentRoutes, "/parent/ai-service", "GET", makeRequest("GET", "/parent/ai-service"), env, actor);
+    const config = await getRes!.json();
+    expect(config.data.hasImageKey).toBe(true);
+    expect(config.data.imageApiKey).toBeUndefined();
+  });
+  it("rejects invalid image AI baseUrl", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const r = await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test", imageBaseUrl: "http://image.example.com/v1", imageModel: "gpt-image-2", imagePrompt: "cartoon style", imageApiKey: "img-key" }), env, actor);
+    expect(r!.status).toBe(400);
   });
   it("fetches AI models with saved key, timeout, and manual redirects", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
@@ -311,6 +343,56 @@ describe("Parent AI Service Validation", () => {
     expect(env.DB.prepare("SELECT COUNT(*) as count FROM ai_report_commentaries").first().count).toBe(0);
     expect(env.DB.prepare("SELECT COUNT(*) as count FROM ai_child_greetings").first().count).toBe(0);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it("generates a cartoon weekly report image without caching it", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test", imageBaseUrl: "https://image.example.com/v1", imageModel: "gpt-image-2", imagePrompt: "cartoon style", imageApiKey: "img-key", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1 }), env, actor);
+    const fetchMock = stubImage();
+    const r = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "weekly" }), env, actor);
+    expect(r!.status).toBe(200);
+    const data = await r!.json();
+    expect(data.data.imageUrl).toBe("https://cdn.example.com/report.jpeg");
+    expect(data.data.format).toBe("jpeg");
+    expect(data.data.filename).toContain("weekly-cartoon-report.jpeg");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(env.DB.prepare("SELECT COUNT(*) as count FROM ai_report_commentaries").first().count).toBe(0);
+  });
+  it("parses cartoon report image URLs, base64 payloads, and choice content", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test", imageBaseUrl: "https://image.example.com/v1", imageModel: "gpt-image-2", imagePrompt: "cartoon style", imageApiKey: "img-key" }), env, actor);
+    const base64 = "a".repeat(120);
+    const responses = [
+      { data: [{ url: "https://cdn.example.com/a.jpeg" }] },
+      { b64_json: base64 },
+      { choices: [{ message: { content: "https://cdn.example.com/from-choice.jpeg" } }] }
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://image.example.com/v1/images/generations");
+      expect((init?.headers as Record<string, string>)?.authorization).toBe("Bearer img-key");
+      return new Response(JSON.stringify(responses.shift()), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const urls: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "monthly" }), env, actor);
+      expect(r!.status).toBe(200);
+      const data = await r!.json();
+      urls.push(data.data.imageUrl);
+    }
+    expect(urls).toEqual([
+      "https://cdn.example.com/a.jpeg",
+      `data:image/jpeg;base64,${base64}`,
+      "https://cdn.example.com/from-choice.jpeg"
+    ]);
+  });
+  it("rejects cartoon report generation when image config is incomplete", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    const r = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "weekly" }), env, actor);
+    expect(r!.status).toBe(400);
   });
   it("old manual AI refresh and queue endpoints are unavailable", async () => {
     const actor = { type: "user", role: "parent", id: parentId };

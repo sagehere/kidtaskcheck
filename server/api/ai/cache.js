@@ -26,10 +26,22 @@ export function aiReportConfigHash(config, periodType) {
     return chars.slice(0, 8).join("");
 }
 
+export function aiImageConfigHash(config) {
+    const hash = ["sha256", config.imageBaseUrl || "", config.imageModel || "", config.imagePrompt || "", config.imageSize || "", config.imageQuality || "", config.imageFormat || "", config.imageN || ""].join("|");
+    const chars = [];
+    let h = 0;
+    for (let i = 0; i < hash.length; i++) {
+        h = ((h << 5) - h) + hash.charCodeAt(i);
+        h |= 0;
+        chars.push((h >>> 0).toString(36).slice(-2));
+    }
+    return chars.slice(0, 8).join("");
+}
+
 export async function getParentAiServiceConfig(env, parentId) {
     try {
         await ensureParentAiServiceSettings(env);
-        const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, report_prompt, monthly_prompt, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
+        const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, report_prompt, monthly_prompt, image_base_url, image_api_key, image_model, image_prompt, image_size, image_quality, image_format, image_n, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
         return {
             baseUrl: row?.base_url || "",
             apiKey: row?.api_key || "",
@@ -37,12 +49,21 @@ export async function getParentAiServiceConfig(env, parentId) {
             prompt: row?.prompt || "",
             reportPrompt: row?.report_prompt || "",
             monthlyPrompt: row?.monthly_prompt || "",
+            imageBaseUrl: row?.image_base_url || "",
+            imageApiKey: row?.image_api_key || "",
+            imageModel: row?.image_model || "gpt-image-2",
+            imagePrompt: row?.image_prompt || "",
+            imageSize: row?.image_size || "1024x1024",
+            imageQuality: row?.image_quality || "low",
+            imageFormat: row?.image_format || "jpeg",
+            imageN: Number(row?.image_n || 1),
             hasKey: !!row?.api_key,
+            hasImageKey: !!row?.image_api_key,
             updatedAt: row?.updated_at || "",
         };
     }
     catch {
-        return { baseUrl: "", apiKey: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, updatedAt: "" };
+        return { baseUrl: "", apiKey: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", imageBaseUrl: "", imageApiKey: "", imageModel: "gpt-image-2", imagePrompt: "", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasKey: false, hasImageKey: false, updatedAt: "" };
     }
 }
 
@@ -76,10 +97,26 @@ export async function ensureParentAiServiceSettings(env) {
   prompt TEXT NOT NULL DEFAULT '',
   report_prompt TEXT NOT NULL DEFAULT '',
   monthly_prompt TEXT NOT NULL DEFAULT '',
+  image_base_url TEXT NOT NULL DEFAULT '',
+  image_api_key TEXT NOT NULL DEFAULT '',
+  image_model TEXT NOT NULL DEFAULT 'gpt-image-2',
+  image_prompt TEXT NOT NULL DEFAULT '',
+  image_size TEXT NOT NULL DEFAULT '1024x1024',
+  image_quality TEXT NOT NULL DEFAULT 'low',
+  image_format TEXT NOT NULL DEFAULT 'jpeg',
+  image_n INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL DEFAULT ''
 )`).run();
     await ensureColumn(env, "parent_ai_service_settings", "report_prompt", "report_prompt TEXT NOT NULL DEFAULT ''");
     await ensureColumn(env, "parent_ai_service_settings", "monthly_prompt", "monthly_prompt TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "image_base_url", "image_base_url TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "image_api_key", "image_api_key TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "image_model", "image_model TEXT NOT NULL DEFAULT 'gpt-image-2'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_prompt", "image_prompt TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "image_size", "image_size TEXT NOT NULL DEFAULT '1024x1024'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_quality", "image_quality TEXT NOT NULL DEFAULT 'low'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_format", "image_format TEXT NOT NULL DEFAULT 'jpeg'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_n", "image_n INTEGER NOT NULL DEFAULT 1");
 }
 
 export async function ensureAiReportCommentaries(env) {

@@ -1,6 +1,6 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
 import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema } from "../utils.js";
-import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels } from "../ai/index.js";
+import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, generateCartoonReportImage, previousCompletedReportRange, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels } from "../ai/index.js";
 
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
@@ -31,7 +31,15 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
             prompt: config.prompt,
             reportPrompt: config.reportPrompt,
             monthlyPrompt: config.monthlyPrompt,
+            imageBaseUrl: config.imageBaseUrl,
+            imageModel: config.imageModel,
+            imagePrompt: config.imagePrompt,
+            imageSize: config.imageSize,
+            imageQuality: config.imageQuality,
+            imageFormat: config.imageFormat,
+            imageN: config.imageN,
             hasKey: config.hasKey,
+            hasImageKey: config.hasImageKey,
             updatedAt: config.updatedAt
         });
     }
@@ -44,19 +52,37 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
         const nextPrompt = input.prompt !== undefined ? String(input.prompt).trim() : current.prompt;
         const nextReportPrompt = input.reportPrompt !== undefined ? String(input.reportPrompt).trim() : (current.reportPrompt || "");
         const nextMonthlyPrompt = input.monthlyPrompt !== undefined ? String(input.monthlyPrompt).trim() : (current.monthlyPrompt || "");
+        const nextImageBaseUrl = input.imageBaseUrl !== undefined ? String(input.imageBaseUrl).trim().replace(/\/+$/, "") : (current.imageBaseUrl || "");
+        const nextImageModel = input.imageModel !== undefined ? String(input.imageModel).trim() : (current.imageModel || "gpt-image-2");
+        const nextImagePrompt = input.imagePrompt !== undefined ? String(input.imagePrompt).trim() : (current.imagePrompt || "");
+        const nextImageSize = input.imageSize !== undefined ? String(input.imageSize).trim() : (current.imageSize || "1024x1024");
+        const nextImageQuality = input.imageQuality !== undefined ? String(input.imageQuality).trim() : (current.imageQuality || "low");
+        const nextImageFormat = input.imageFormat !== undefined ? String(input.imageFormat).trim() : (current.imageFormat || "jpeg");
+        const rawImageN = input.imageN !== undefined ? Number(input.imageN) : Number(current.imageN || 1);
+        const nextImageN = Number.isInteger(rawImageN) ? Math.min(10, Math.max(1, rawImageN)) : 1;
         if (!nextBaseUrl || !nextModel || !nextPrompt)
             return fail("BAD_REQUEST", "请完整填写 AI 服务配置");
         const urlErr = validateHttpsUrl(nextBaseUrl, "AI Base URL");
         if (urlErr)
             return fail("BAD_REQUEST", urlErr);
+        if (nextImageBaseUrl) {
+            const imageUrlErr = validateHttpsUrl(nextImageBaseUrl, "绘图 AI Base URL");
+            if (imageUrlErr)
+                return fail("BAD_REQUEST", imageUrlErr);
+        }
+        if (nextImageFormat && !["png", "jpeg", "webp"].includes(nextImageFormat))
+            return fail("BAD_REQUEST", "图片格式须为 png、jpeg 或 webp");
+        if (nextImageQuality && !["low", "medium", "high", "auto"].includes(nextImageQuality))
+            return fail("BAD_REQUEST", "图片画质须为 low、medium、high 或 auto");
         const nextApiKey = input.apiKey !== undefined && String(input.apiKey).trim() ? String(input.apiKey).trim() : current.apiKey;
+        const nextImageApiKey = input.imageApiKey !== undefined && String(input.imageApiKey).trim() ? String(input.imageApiKey).trim() : current.imageApiKey;
         const updatedAt = nowIso();
-        await env.DB.prepare(`INSERT INTO parent_ai_service_settings (parent_id, base_url, api_key, model, prompt, report_prompt, monthly_prompt, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, prompt=excluded.prompt, report_prompt=excluded.report_prompt, monthly_prompt=excluded.monthly_prompt, updated_at=excluded.updated_at`)
-            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, nextReportPrompt, nextMonthlyPrompt, updatedAt)
+        await env.DB.prepare(`INSERT INTO parent_ai_service_settings (parent_id, base_url, api_key, model, prompt, report_prompt, monthly_prompt, image_base_url, image_api_key, image_model, image_prompt, image_size, image_quality, image_format, image_n, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, prompt=excluded.prompt, report_prompt=excluded.report_prompt, monthly_prompt=excluded.monthly_prompt, image_base_url=excluded.image_base_url, image_api_key=excluded.image_api_key, image_model=excluded.image_model, image_prompt=excluded.image_prompt, image_size=excluded.image_size, image_quality=excluded.image_quality, image_format=excluded.image_format, image_n=excluded.image_n, updated_at=excluded.updated_at`)
+            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, nextReportPrompt, nextMonthlyPrompt, nextImageBaseUrl, nextImageApiKey, nextImageModel, nextImagePrompt, nextImageSize, nextImageQuality, nextImageFormat, nextImageN, updatedAt)
             .run();
-        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, reportPrompt: nextReportPrompt, monthlyPrompt: nextMonthlyPrompt, hasKey: !!nextApiKey, updatedAt });
+        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, reportPrompt: nextReportPrompt, monthlyPrompt: nextMonthlyPrompt, imageBaseUrl: nextImageBaseUrl, imageModel: nextImageModel, imagePrompt: nextImagePrompt, imageSize: nextImageSize, imageQuality: nextImageQuality, imageFormat: nextImageFormat, imageN: nextImageN, hasKey: !!nextApiKey, hasImageKey: !!nextImageApiKey, updatedAt });
     }
     if (path === "/parent/ai-service/models" && method === "POST") {
         const a = requireRole(actor, ["parent"]);
@@ -153,6 +179,39 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             text = await generateReportCommentary(env, child, period, range.label, offset, true, { cache: false, range });
         }
         return ok({ text });
+    }
+    if (path === "/parent/ai-service/cartoon-report" && method === "POST") {
+        const a = requireRole(actor, ["parent"]);
+        const input = await body(request);
+        const period = String(input.period || "") === "monthly" ? "monthly" : String(input.period || "") === "weekly" ? "weekly" : "";
+        if (!period)
+            return fail("BAD_REQUEST", "无效的报表周期", 400);
+        const child = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(String(input.childId || ""), a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        if (!child.ai_enabled)
+            return fail("BAD_REQUEST", "请先为该孩子启用 AI", 400);
+        const config = await getParentAiServiceConfig(env, a.id);
+        if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.imagePrompt)
+            return fail("BAD_REQUEST", "请先完整保存卡通报告绘图配置", 400);
+        const imageUrlErr = validateHttpsUrl(config.imageBaseUrl, "绘图 AI Base URL");
+        if (imageUrlErr)
+            return fail("BAD_REQUEST", imageUrlErr, 400);
+        const offset = await timezoneOffsetMinutes(env);
+        const range = previousCompletedReportRange(period, nowIso(), offset);
+        try {
+            const result = await generateCartoonReportImage(env, child, period, range);
+            return ok(result);
+        } catch (error) {
+            const code = error?.code || error?.message || "";
+            if (String(code).includes("CONFIG") || String(code).includes("config") || String(code).includes("ai_image_config"))
+                return fail("BAD_REQUEST", "请先完整保存卡通报告绘图配置", 400);
+            if (String(code).includes("TIMEOUT") || String(code).includes("NETWORK") || String(code).includes("SERVICE") || String(code).includes("RATE"))
+                return fail("AI_SERVICE_ERROR", "卡通报告生成失败，请稍后重试", 502);
+            return fail("AI_SERVICE_ERROR", "AI 未返回可用图片", 502);
+        }
     }
     if (path === "/children") {
         const a = requireRole(actor, ["parent"]);

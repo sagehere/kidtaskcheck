@@ -2,7 +2,7 @@ import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
 import { nowIso, balance } from "../utils.js";
 import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries } from "./cache.js";
 import { buildAiPrompt, buildReportAiPrompt, previousWeekReportSummary } from "./prompt.js";
-import { callParentAiService, callParentAiServiceForReport } from "./providers.js";
+import { callParentAiService, callParentAiServiceForReport, callParentImageService } from "./providers.js";
 
 export class NonRetryableError extends Error {
     constructor(message) {
@@ -15,6 +15,95 @@ export function previousCompletedReportRange(periodType, input, offset) {
     const current = reportWindowRange(periodType, input, offset);
     const previousAnchor = new Date(new Date(current.start).getTime() - 1).toISOString();
     return reportWindowRange(periodType, previousAnchor, offset);
+}
+
+export async function collectReportData(env, child, parentId, range) {
+    const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows, assignedTasks, assignedRewards, feedbackTemplates] = await Promise.all([
+        env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC")
+            .bind(child.id, parentId, range.start, range.end).all(),
+        env.DB.prepare(`SELECT s.*, t.title, tc.name category_name
+FROM task_submissions s JOIN tasks t ON t.id=s.task_id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE s.child_id=? AND s.parent_id=? AND s.submitted_at>=? AND s.submitted_at<? ORDER BY s.submitted_at DESC`)
+            .bind(child.id, parentId, range.start, range.end).all(),
+        env.DB.prepare(`SELECT rr.*, r.title, r.cost_points
+FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id
+WHERE rr.child_id=? AND rr.parent_id=? AND rr.requested_at>=? AND rr.requested_at<? ORDER BY rr.requested_at DESC`)
+            .bind(child.id, parentId, range.start, range.end).all(),
+        env.DB.prepare(`SELECT pl.*, ft.title template_title
+FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
+WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND pl.created_at>=? AND pl.created_at<? ORDER BY pl.created_at DESC`)
+            .bind(child.id, parentId, range.start, range.end).all(),
+        env.DB.prepare(`SELECT a.title, ca.unlocked_at
+FROM child_achievements ca JOIN achievements a ON a.id=ca.achievement_id
+WHERE ca.child_id=? AND a.parent_id=? AND ca.unlocked_at>=? AND ca.unlocked_at<? ORDER BY ca.unlocked_at DESC`)
+            .bind(child.id, parentId, range.start, range.end).all(),
+        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description
+FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL
+ORDER BY tc.name, t.created_at DESC`).bind(child.id, parentId).all(),
+        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period, r.limit_count, r.redeem_weekdays, r.is_active, r.description
+FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id
+WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL
+ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, parentId).all(),
+        env.DB.prepare("SELECT kind, title, points, is_active, description FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(parentId).all(),
+    ]);
+    const tasks = taskRows.results;
+    const ledger = ledgerRows.results;
+    const netPoints = ledger.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const currentBalance = await balance(env, child.id);
+    const categoryCounts = [...tasks.filter((row) => row.status === "approved").reduce((map, row) => map.set(row.category_name || "未分类", (map.get(row.category_name || "未分类") || 0) + 1), new Map()).entries()];
+    return {
+        tasks,
+        rewards: rewardRows.results,
+        ledger,
+        feedback: feedbackRows.results,
+        achievements: achievementRows.results,
+        netPoints,
+        currentBalance,
+        categoryCounts,
+        range,
+        assignments: {
+            tasks: assignedTasks.results,
+            rewards: assignedRewards.results,
+            feedbackTemplates: feedbackTemplates.results,
+        },
+    };
+}
+
+function truncatePrompt(userPrompt, summary, maxLength = 1000) {
+    const prefix = String(userPrompt || "").trim();
+    if (!prefix) return "";
+    const separator = "\n\n报表内容：\n";
+    const budget = maxLength - prefix.length - separator.length;
+    if (budget <= 0) return prefix.slice(0, maxLength);
+    return `${prefix}${separator}${summary.slice(0, budget)}`;
+}
+
+export function buildCartoonReportPrompt(child, reportData, config, periodType) {
+    const userPrompt = config?.imagePrompt || "";
+    const approved = reportData.tasks.filter((row) => row.status === "approved").length;
+    const rejected = reportData.tasks.filter((row) => row.status === "rejected").length;
+    const pending = reportData.tasks.filter((row) => row.status === "pending").length;
+    const praiseCount = reportData.feedback.filter((row) => row.source_type === "praise").length;
+    const criticismCount = reportData.feedback.filter((row) => row.source_type === "criticism").length;
+    const categories = reportData.categoryCounts?.length ? reportData.categoryCounts.map(([name, count]) => `${name}${count}项`).join("，") : "暂无分类完成";
+    const rewards = reportData.rewards?.slice(0, 5).map((row) => row.title).filter(Boolean).join("，") || "暂无奖励兑换";
+    const achievements = reportData.achievements?.slice(0, 5).map((row) => row.title).filter(Boolean).join("，") || "暂无新成就";
+    const periodLabel = periodType === "monthly" ? "上月月报" : "上周周报";
+    const summary = [
+        `孩子：${child.display_name}`,
+        `报告：${periodLabel}，周期 ${reportData.range?.label || ""}`,
+        `任务：通过${approved}项，待审${pending}项，驳回${rejected}项`,
+        `分类亮点：${categories}`,
+        `表扬批评：表扬${praiseCount}次，批评${criticismCount}次`,
+        `积分：本期${reportData.netPoints >= 0 ? "+" : ""}${reportData.netPoints}，当前余额${reportData.currentBalance}`,
+        `奖励：${rewards}`,
+        `成就：${achievements}`,
+        "请画成适合孩子看的卡通报告画面，画面要积极、清晰、避免出现真实个人隐私文字。"
+    ].join("\n");
+    return truncatePrompt(userPrompt, summary);
 }
 
 export async function generateParentAiGreeting(env, child, offset, forceRefresh = false, options = {}) {
@@ -72,57 +161,7 @@ export async function generateReportCommentary(env, child, periodType, periodKey
         if (cached?.commentary && !forceRefresh) return cached.commentary;
     }
     const range = options.range || reportWindowRange(periodType, now, offset);
-    const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows, assignedTasks, assignedRewards, feedbackTemplates] = await Promise.all([
-        env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC")
-            .bind(child.id, child.parent_id, range.start, range.end).all(),
-        env.DB.prepare(`SELECT s.*, t.title, tc.name category_name
-FROM task_submissions s JOIN tasks t ON t.id=s.task_id
-LEFT JOIN task_categories tc ON tc.id=t.category_id
-WHERE s.child_id=? AND s.parent_id=? AND s.submitted_at>=? AND s.submitted_at<? ORDER BY s.submitted_at DESC`)
-            .bind(child.id, child.parent_id, range.start, range.end).all(),
-        env.DB.prepare(`SELECT rr.*, r.title, r.cost_points
-FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id
-WHERE rr.child_id=? AND rr.parent_id=? AND rr.requested_at>=? AND rr.requested_at<? ORDER BY rr.requested_at DESC`)
-            .bind(child.id, child.parent_id, range.start, range.end).all(),
-        env.DB.prepare(`SELECT pl.*, ft.title template_title
-FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
-WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND pl.created_at>=? AND pl.created_at<? ORDER BY pl.created_at DESC`)
-            .bind(child.id, child.parent_id, range.start, range.end).all(),
-        env.DB.prepare(`SELECT a.title, ca.unlocked_at
-FROM child_achievements ca JOIN achievements a ON a.id=ca.achievement_id
-WHERE ca.child_id=? AND a.parent_id=? AND ca.unlocked_at>=? AND ca.unlocked_at<? ORDER BY ca.unlocked_at DESC`)
-            .bind(child.id, child.parent_id, range.start, range.end).all(),
-        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description
-FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
-LEFT JOIN task_categories tc ON tc.id=t.category_id
-WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL
-ORDER BY tc.name, t.created_at DESC`).bind(child.id, child.parent_id).all(),
-        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period, r.limit_count, r.redeem_weekdays, r.is_active, r.description
-FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id
-WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL
-ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(),
-        env.DB.prepare("SELECT kind, title, points, is_active, description FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(child.parent_id).all(),
-    ]);
-    const netPoints = ledgerRows.results.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-    const currentBalance = await balance(env, child.id);
-    const taskResults = taskRows.results;
-    const categoryCounts = [...taskResults.filter((row) => row.status === "approved").reduce((map, row) => map.set(row.category_name || "未分类", (map.get(row.category_name || "未分类") || 0) + 1), new Map()).entries()];
-    const reportData = {
-        tasks: taskResults,
-        rewards: rewardRows.results,
-        ledger: ledgerRows.results,
-        feedback: feedbackRows.results,
-        achievements: achievementRows.results,
-        netPoints,
-        currentBalance,
-        categoryCounts,
-        range,
-        assignments: {
-            tasks: assignedTasks.results,
-            rewards: assignedRewards.results,
-            feedbackTemplates: feedbackTemplates.results,
-        },
-    };
+    const reportData = await collectReportData(env, child, child.parent_id, range);
     const aiPrompt = buildReportAiPrompt(child, reportData, config, periodType, offset);
     if (!aiPrompt) return "";
     const commentary = options.ai
@@ -134,4 +173,22 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(
             .run();
     }
     return commentary;
+}
+
+export async function generateCartoonReportImage(env, child, periodType, range) {
+    if (!child?.ai_enabled) throw new NonRetryableError("ai_disabled");
+    const config = await getParentAiServiceConfig(env, child.parent_id);
+    if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.imagePrompt) {
+        throw new NonRetryableError("ai_image_config_incomplete");
+    }
+    const reportData = await collectReportData(env, child, child.parent_id, range);
+    const prompt = buildCartoonReportPrompt(child, reportData, config, periodType);
+    if (!prompt) throw new NonRetryableError("ai_image_prompt_empty");
+    const imageUrl = await callParentImageService(env, prompt, config);
+    return {
+        imageUrl,
+        format: config.imageFormat || "jpeg",
+        filename: `${child.display_name}-${periodType === "monthly" ? "monthly" : "weekly"}-cartoon-report.${config.imageFormat || "jpeg"}`,
+        promptPreview: prompt.slice(0, 240)
+    };
 }

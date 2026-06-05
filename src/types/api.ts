@@ -55,8 +55,27 @@ export type EmojiSource = {
 
 export type EmojiOption = { emoji: string; name: string; shortNames: string[]; category: string; sortOrder: number; search: string; rank: number };
 
-export type AiServiceConfig = { baseUrl: string; model: string; prompt: string; reportPrompt?: string; monthlyPrompt?: string; hasKey: boolean; apiKey?: string; updatedAt?: string };
+export type AiServiceConfig = {
+  baseUrl: string;
+  model: string;
+  prompt: string;
+  reportPrompt?: string;
+  monthlyPrompt?: string;
+  hasKey: boolean;
+  apiKey?: string;
+  imageBaseUrl?: string;
+  imageModel?: string;
+  imagePrompt?: string;
+  imageSize?: string;
+  imageQuality?: string;
+  imageFormat?: "png" | "jpeg" | "webp" | string;
+  imageN?: number;
+  hasImageKey?: boolean;
+  imageApiKey?: string;
+  updatedAt?: string;
+};
 export type ParentAiServiceConfig = AiServiceConfig;
+export type CartoonReportResponse = { imageUrl: string; format: string; filename: string; promptPreview?: string };
 export const REFRESH_INTERVAL_MS = 12000;
 export const DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
 export const WEEKDAY_OPTIONS = [

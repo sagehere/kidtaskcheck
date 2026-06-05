@@ -1,7 +1,7 @@
 export {
     AI_FETCH_TIMEOUT_MS, AI_MAX_OUTPUT_LENGTH, AiProviderError,
     truncateAiOutput, detectProvider,
-    listModels, callParentAiService, callParentAiServiceForReport,
+    listModels, callParentAiService, callParentAiServiceForReport, callParentImageService,
 } from "./providers.js";
 
 export {
@@ -10,14 +10,14 @@ export {
 } from "./prompt.js";
 
 export {
-    aiConfigHash, aiReportConfigHash,
+    aiConfigHash, aiReportConfigHash, aiImageConfigHash,
     getParentAiServiceConfig, loadAiGreetingSnapshot,
     ensureParentAiServiceSettings, ensureAiReportCommentaries,
 } from "./cache.js";
 
 export {
-    generateParentAiGreeting, generateReportCommentary,
-    previousCompletedReportRange,
+    generateParentAiGreeting, generateReportCommentary, generateCartoonReportImage,
+    previousCompletedReportRange, collectReportData, buildCartoonReportPrompt,
 } from "./orchestrator.js";
 
 export {

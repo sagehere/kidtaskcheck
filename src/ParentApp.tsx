@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, formatSource, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -11,7 +11,7 @@ import { Shell } from "./components/Shell";
 import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, formatAchievementRule } from "./lib/appHelpers";
 
 type ParentAiServiceStoredConfig = Omit<ParentAiServiceConfig, "apiKey"> & { updatedAt?: string };
-const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false };
+const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, imageBaseUrl: "", imageModel: "gpt-image-2", imagePrompt: "", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasImageKey: false };
 
 export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [children, setChildren] = useState<Child[]>([]);
@@ -32,6 +32,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [savedAiConfig, setSavedAiConfig] = useState<ParentAiServiceStoredConfig>({ ...EMPTY_AI_DRAFT });
   const [draftAiConfig, setDraftAiConfig] = useState<ParentAiServiceConfig>({ ...EMPTY_AI_DRAFT });
   const [draftAiApiKey, setDraftAiApiKey] = useState("");
+  const [draftImageApiKey, setDraftImageApiKey] = useState("");
   const [aiModels, setAiModels] = useState<string[]>([]);
   const [aiFetching, setAiFetching] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
@@ -39,6 +40,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [selectedAiTestChildId, setSelectedAiTestChildId] = useState("");
   const [aiPreviewing, setAiPreviewing] = useState<"" | "greeting" | "weeklyReport" | "monthlyReport">("");
   const [aiPreviewResult, setAiPreviewResult] = useState<{ title: string; text: string } | null>(null);
+  const [cartoonReportGenerating, setCartoonReportGenerating] = useState<"" | "weekly" | "monthly">("");
+  const [cartoonReportResult, setCartoonReportResult] = useState<(CartoonReportResponse & { title: string }) | null>(null);
   const [aiConfigLoaded, setAiConfigLoaded] = useState(false);
   const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
@@ -57,9 +60,18 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       prompt: nextConfig.prompt,
       reportPrompt: nextConfig.reportPrompt || "",
       monthlyPrompt: nextConfig.monthlyPrompt || "",
-      hasKey: nextConfig.hasKey
+      hasKey: nextConfig.hasKey,
+      imageBaseUrl: nextConfig.imageBaseUrl || "",
+      imageModel: nextConfig.imageModel || "gpt-image-2",
+      imagePrompt: nextConfig.imagePrompt || "",
+      imageSize: nextConfig.imageSize || "1024x1024",
+      imageQuality: nextConfig.imageQuality || "low",
+      imageFormat: nextConfig.imageFormat || "jpeg",
+      imageN: nextConfig.imageN || 1,
+      hasImageKey: nextConfig.hasImageKey || false
     });
     setDraftAiApiKey("");
+    setDraftImageApiKey("");
     aiDraftInitializedRef.current = true;
     aiDraftDirtyRef.current = false;
   }
@@ -83,6 +95,11 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   function updateAiApiKey(value: string) {
     markAiDraftDirty();
     setDraftAiApiKey(value);
+  }
+
+  function updateImageApiKey(value: string) {
+    markAiDraftDirty();
+    setDraftImageApiKey(value);
   }
 
   async function previewAiContent(type: "greeting" | "weeklyReport" | "monthlyReport", title: string, childId: string) {
@@ -118,7 +135,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
         api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; }),
         api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; }),
-        api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ baseUrl: "", hasKey: false, model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", updatedAt: "" }))
+        api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ ...EMPTY_AI_DRAFT, updatedAt: "" }))
       ]);
       setChildren(childRows);
       setCategories(categoryRows);
@@ -156,7 +173,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   useEffect(() => {
     if (activeTab !== "settings" || !aiConfigLoaded || aiDraftInitializedRef.current || aiDraftDirtyRef.current) return;
     syncAiDraft(savedAiConfig);
-  }, [activeTab, aiConfigLoaded, savedAiConfig.baseUrl, savedAiConfig.model, savedAiConfig.prompt, savedAiConfig.hasKey]);
+  }, [activeTab, aiConfigLoaded, savedAiConfig.baseUrl, savedAiConfig.model, savedAiConfig.prompt, savedAiConfig.hasKey, savedAiConfig.imageBaseUrl, savedAiConfig.imageModel, savedAiConfig.imagePrompt, savedAiConfig.hasImageKey]);
   useEffect(() => {
     if (ledgerChild) void loadLedger(ledgerChild);
   }, [dashboard, ledgerChild?.id]);
@@ -292,6 +309,25 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     window.open(`/api/children/${encodeURIComponent(child.id)}/report?period=${period}`, "_blank", "noopener,noreferrer");
   }
 
+  async function generateCartoonReport(child: Child, period: "weekly" | "monthly") {
+    setCartoonReportGenerating(period);
+    setError("");
+    try {
+      const result = await api<CartoonReportResponse>("/parent/ai-service/cartoon-report", {
+        method: "POST",
+        body: JSON.stringify({ childId: child.id, period })
+      });
+      setCartoonReportResult({
+        ...result,
+        title: `${child.display_name} ${period === "monthly" ? "上月月报" : "上周周报"}卡通报告`
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "卡通报告生成失败");
+    } finally {
+      setCartoonReportGenerating("");
+    }
+  }
+
   async function refundChildReward(child: Child) {
     const rows = await api<WarehouseItem[]>(`/children/${encodeURIComponent(child.id)}/warehouse`).catch(() => []);
     setRefundRows(rows);
@@ -326,6 +362,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   }
 
   const aiDraftApiKeyValue = draftAiApiKey.trim();
+  const imageDraftApiKeyValue = draftImageApiKey.trim();
   const aiFetchApiKey = aiDraftApiKeyValue;
   const aiTestChildren = children.filter((child) => child.ai_enabled === 1 && child.status === "active");
   const aiTestChildId = selectedAiTestChildId || aiTestChildren[0]?.id || "";
@@ -447,6 +484,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             <form className="stack compact" onSubmit={async (event) => {
               event.preventDefault();
               const nextApiKey = aiDraftApiKeyValue;
+              const nextImageApiKey = imageDraftApiKeyValue;
               await run(async () => {
                 const response = await api<Partial<ParentAiServiceStoredConfig>>("/parent/ai-service", {
                   method: "PATCH",
@@ -456,7 +494,15 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                     model: draftAiConfig.model,
                     prompt: draftAiConfig.prompt,
                     reportPrompt: draftAiConfig.reportPrompt,
-                    monthlyPrompt: draftAiConfig.monthlyPrompt
+                    monthlyPrompt: draftAiConfig.monthlyPrompt,
+                    imageBaseUrl: draftAiConfig.imageBaseUrl,
+                    imageApiKey: nextImageApiKey || undefined,
+                    imageModel: draftAiConfig.imageModel,
+                    imagePrompt: draftAiConfig.imagePrompt,
+                    imageSize: draftAiConfig.imageSize,
+                    imageQuality: draftAiConfig.imageQuality,
+                    imageFormat: draftAiConfig.imageFormat,
+                    imageN: draftAiConfig.imageN
                   })
                 });
                 const nextSaved: ParentAiServiceStoredConfig = {
@@ -466,6 +512,14 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                   model: response.model ?? draftAiConfig.model,
                   prompt: response.prompt ?? draftAiConfig.prompt,
                   hasKey: (response.hasKey ?? savedAiConfig.hasKey) || !!nextApiKey,
+                  imageBaseUrl: response.imageBaseUrl ?? draftAiConfig.imageBaseUrl,
+                  imageModel: response.imageModel ?? draftAiConfig.imageModel,
+                  imagePrompt: response.imagePrompt ?? draftAiConfig.imagePrompt,
+                  imageSize: response.imageSize ?? draftAiConfig.imageSize,
+                  imageQuality: response.imageQuality ?? draftAiConfig.imageQuality,
+                  imageFormat: response.imageFormat ?? draftAiConfig.imageFormat,
+                  imageN: response.imageN ?? draftAiConfig.imageN,
+                  hasImageKey: (response.hasImageKey ?? savedAiConfig.hasImageKey) || !!nextImageApiKey,
                   updatedAt: response.updatedAt ?? savedAiConfig.updatedAt
                 };
                 storeSavedAiConfig(nextSaved);
@@ -526,6 +580,55 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                   <textarea value={draftAiConfig.monthlyPrompt || ""} onChange={(e) => updateAiDraft({ monthlyPrompt: e.target.value })} rows={3} placeholder="留空使用默认提示词" />
                 </Field>
               </div>
+              <div className="setting-section">
+                <h3>卡通报告绘图</h3>
+                <Field label="绘图 Base URL">
+                  <input value={draftAiConfig.imageBaseUrl || ""} onChange={(e) => updateAiDraft({ imageBaseUrl: e.target.value })} placeholder="https://api.example.com/v1" />
+                </Field>
+                <Field label="绘图 API Key">
+                  <input value={draftImageApiKey} onChange={(e) => updateImageApiKey(e.target.value)} type="password" placeholder={savedAiConfig.hasImageKey ? "已设置，留空则保留" : "请输入绘图 API Key"} autoComplete="new-password" />
+                </Field>
+                <Field label="绘图模型">
+                  <input value={draftAiConfig.imageModel || "gpt-image-2"} onChange={(e) => updateAiDraft({ imageModel: e.target.value })} placeholder="gpt-image-2" />
+                </Field>
+                <Field label="绘图提示词">
+                  <textarea value={draftAiConfig.imagePrompt || ""} onChange={(e) => updateAiDraft({ imagePrompt: e.target.value })} rows={4} placeholder="绘制一张儿童绘本风格的成长报告卡片，画面温暖明亮，突出孩子的努力和成就。" />
+                </Field>
+                <div className="grid two compact-fields">
+                  <Field label="尺寸">
+                    <select value={draftAiConfig.imageSize || "1024x1024"} onChange={(e) => updateAiDraft({ imageSize: e.target.value })}>
+                      <option value="1024x1024">1024x1024</option>
+                      <option value="1536x1024">1536x1024</option>
+                      <option value="1024x1536">1024x1536</option>
+                      <option value="2048x2048">2048x2048</option>
+                      <option value="2048x1152">2048x1152</option>
+                      <option value="3840x2160">3840x2160</option>
+                      <option value="2160x3840">2160x3840</option>
+                      <option value="auto">auto</option>
+                    </select>
+                  </Field>
+                  <Field label="画质">
+                    <select value={draftAiConfig.imageQuality || "low"} onChange={(e) => updateAiDraft({ imageQuality: e.target.value })}>
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="auto">auto</option>
+                    </select>
+                  </Field>
+                </div>
+                <div className="grid two compact-fields">
+                  <Field label="格式">
+                    <select value={draftAiConfig.imageFormat || "jpeg"} onChange={(e) => updateAiDraft({ imageFormat: e.target.value })}>
+                      <option value="jpeg">jpeg</option>
+                      <option value="png">png</option>
+                      <option value="webp">webp</option>
+                    </select>
+                  </Field>
+                  <Field label="数量">
+                    <input type="number" min="1" max="10" value={draftAiConfig.imageN || 1} onChange={(e) => updateAiDraft({ imageN: Number(e.target.value) })} />
+                  </Field>
+                </div>
+              </div>
               <button className="primary"><Sparkles size={18} />保存 AI 配置</button>
               <div className="inline-fields">
                 <button type="button" className="secondary" onClick={() => { syncAiDraft(savedAiConfig); setMessage("AI 配置已恢复为已保存内容"); }}>
@@ -581,6 +684,14 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           onClose={() => setReportChild(null)}
           onPrint={exportChildPrint}
           onReport={exportChildReport}
+          onCartoonReport={(child, period) => void generateCartoonReport(child, period)}
+          generating={cartoonReportGenerating}
+        />
+      )}
+      {cartoonReportResult && (
+        <CartoonReportDialog
+          result={cartoonReportResult}
+          onClose={() => setCartoonReportResult(null)}
         />
       )}
       {aiPreviewResult && (
@@ -831,7 +942,7 @@ export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child
   );
 }
 
-export function ReportDialog({ child, onPrint, onReport, onClose }: { child: Child; onPrint: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onClose: () => void }) {
+export function ReportDialog({ child, onPrint, onReport, onCartoonReport, generating, onClose }: { child: Child; onPrint: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onCartoonReport: (child: Child, period: "weekly" | "monthly") => void; generating: "" | "weekly" | "monthly"; onClose: () => void }) {
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <section className="panel refund-modal">
@@ -845,12 +956,43 @@ export function ReportDialog({ child, onPrint, onReport, onClose }: { child: Chi
           <button className="primary" onClick={() => { onPrint(child); onClose(); }}>
             <Printer size={18} />打印清单
           </button>
-          <button className="secondary" onClick={() => { onReport(child, "weekly"); onClose(); }}>
-            <Printer size={18} />上周周报
-          </button>
-          <button className="secondary" onClick={() => { onReport(child, "monthly"); onClose(); }}>
-            <Printer size={18} />上月月报
-          </button>
+          <div className="report-action-row">
+            <button className="secondary" onClick={() => { onReport(child, "weekly"); onClose(); }}>
+              <Printer size={18} />上周周报
+            </button>
+            <button className="secondary" disabled={!!generating} onClick={() => onCartoonReport(child, "weekly")}>
+              <Sparkles size={18} />{generating === "weekly" ? "绘制中..." : "绘制卡通周报"}
+            </button>
+          </div>
+          <div className="report-action-row">
+            <button className="secondary" onClick={() => { onReport(child, "monthly"); onClose(); }}>
+              <Printer size={18} />上月月报
+            </button>
+            <button className="secondary" disabled={!!generating} onClick={() => onCartoonReport(child, "monthly")}>
+              <Sparkles size={18} />{generating === "monthly" ? "绘制中..." : "绘制卡通月报"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function CartoonReportDialog({ result, onClose }: { result: CartoonReportResponse & { title: string }; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <section className="panel refund-modal cartoon-report-modal">
+        <div className="panel-title compact-title">
+          <Sparkles />
+          <h2>{result.title}</h2>
+          <button type="button" className="secondary" onClick={onClose}>关闭</button>
+        </div>
+        <img className="cartoon-report-image" src={result.imageUrl} alt={result.title} />
+        <div className="actions">
+          <a className="primary download-link" href={result.imageUrl} download={result.filename}>
+            <Download size={18} />下载图片
+          </a>
+          <button type="button" className="secondary" onClick={onClose}>完成</button>
         </div>
       </section>
     </div>

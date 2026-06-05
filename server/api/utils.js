@@ -172,10 +172,26 @@ export async function ensureParentAiServiceSettings(env) {
   prompt TEXT NOT NULL DEFAULT '',
   report_prompt TEXT NOT NULL DEFAULT '',
   monthly_prompt TEXT NOT NULL DEFAULT '',
+  image_base_url TEXT NOT NULL DEFAULT '',
+  image_api_key TEXT NOT NULL DEFAULT '',
+  image_model TEXT NOT NULL DEFAULT 'gpt-image-2',
+  image_prompt TEXT NOT NULL DEFAULT '',
+  image_size TEXT NOT NULL DEFAULT '1024x1024',
+  image_quality TEXT NOT NULL DEFAULT 'low',
+  image_format TEXT NOT NULL DEFAULT 'jpeg',
+  image_n INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL DEFAULT ''
 )`).run();
     await ensureColumn(env, "parent_ai_service_settings", "report_prompt", "report_prompt TEXT NOT NULL DEFAULT ''");
     await ensureColumn(env, "parent_ai_service_settings", "monthly_prompt", "monthly_prompt TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "image_base_url", "image_base_url TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "image_api_key", "image_api_key TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "image_model", "image_model TEXT NOT NULL DEFAULT 'gpt-image-2'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_prompt", "image_prompt TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "image_size", "image_size TEXT NOT NULL DEFAULT '1024x1024'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_quality", "image_quality TEXT NOT NULL DEFAULT 'low'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_format", "image_format TEXT NOT NULL DEFAULT 'jpeg'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_n", "image_n INTEGER NOT NULL DEFAULT 1");
 }
 export async function timezoneOffsetMinutes(env) {
     const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key='timezone_offset_minutes'").first();

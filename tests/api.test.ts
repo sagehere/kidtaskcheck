@@ -5,7 +5,8 @@ import { handleAdminRoutes } from "../server/api/routes/admin.js";
 import { handleChildRoutes } from "../server/api/routes/child.js";
 import { handleParentRoutes } from "../server/api/routes/parent.js";
 import { ensureAdmin, actorFromRequest, loginAttempts, sessionCookie, validateHttpsUrl, isPrivateUrl, id, hashPassword } from "../server/api/utils.js";
-import { truncateAiOutput, aiReportConfigHash, runScheduledAiRefresh } from "../server/api/ai/index.js";
+import { truncateAiOutput, aiReportConfigHash, processAiGenerationQueue, runScheduledAiRefresh } from "../server/api/ai/index.js";
+import { api } from "../src/api/client";
 import { reportWindowRange } from "../src/lib/domain";
 
 function makeRequest(m: string, p: string, b?: any, c?: string): Request {
@@ -239,6 +240,8 @@ describe("Parent AI Service Validation", () => {
     const result = await runScheduledAiRefresh(env, new Date("2026-06-07T16:00:00.000Z"));
     expect(result.jobs.map((job: any) => job.jobType)).toEqual(["greeting_weekly", "report_weekly"]);
     expect(result.jobs.every((job: any) => job.skipped === false)).toBe(true);
+    expect(result.jobs.map((job: any) => job.enqueued)).toEqual([1, 1]);
+    expect(result.queue.completed).toBe(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const weeklyKey = reportWindowRange("weekly", "2026-06-07T00:00:00.000Z", 480).label;
     const commentary = env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_type='weekly' AND period_key=?").bind(childId, weeklyKey).first() as any;
@@ -248,6 +251,7 @@ describe("Parent AI Service Validation", () => {
 
     const second = await runScheduledAiRefresh(env, new Date("2026-06-07T16:30:00.000Z"));
     expect(second.jobs.every((job: any) => job.skipped === true)).toBe(true);
+    expect(second.queue.empty).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
   it("runs first-of-month scheduled refresh for previous monthly commentary", async () => {
@@ -257,10 +261,43 @@ describe("Parent AI Service Validation", () => {
     const fetchMock = stubChat("Scheduled monthly");
     const result = await runScheduledAiRefresh(env, new Date("2026-06-30T16:00:00.000Z"));
     expect(result.jobs.map((job: any) => job.jobType)).toEqual(["report_monthly"]);
+    expect(result.jobs[0].enqueued).toBe(1);
+    expect(result.queue.completed).toBe(1);
     const monthlyKey = reportWindowRange("monthly", "2026-06-15T00:00:00.000Z", 480).label;
     const row = env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_type='monthly' AND period_key=?").bind(childId, monthlyKey).first() as any;
     expect(row.commentary).toBe("Scheduled monthly");
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it("retries AI rate limits and logs final queue failure", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("rate limited", { status: 429 })));
+
+    const scheduled = await runScheduledAiRefresh(env, new Date("2026-06-07T16:00:00.000Z"));
+    expect(scheduled.queue.retried).toBe(2);
+    let rows = env.DB.prepare("SELECT type, status, retry_count, error_code FROM ai_generation_queue ORDER BY type").all().results as any[];
+    expect(rows.every((row) => row.status === "pending")).toBe(true);
+    expect(rows.every((row) => row.retry_count === 1)).toBe(true);
+    expect(rows.every((row) => row.error_code === "AI_RATE_LIMITED")).toBe(true);
+
+    env.DB.prepare("UPDATE ai_generation_queue SET retry_count=2, next_attempt_at='2000-01-01T00:00:00.000Z'").run();
+    const processed = await processAiGenerationQueue(env, { offset: 480, maxJobs: 2, intervalMs: 0 } as any);
+    expect(processed.failed).toBe(2);
+    rows = env.DB.prepare("SELECT status, retry_count FROM ai_generation_queue").all().results as any[];
+    expect(rows.every((row) => row.status === "failed")).toBe(true);
+    expect(rows.every((row) => row.retry_count === 3)).toBe(true);
+    const logs = env.DB.prepare("SELECT source, message FROM system_error_logs WHERE source='ai_queue'").all().results as any[];
+    expect(logs.length).toBe(2);
+    expect(logs[0].message).toContain("429");
+  });
+  it("does not call the AI provider for non-retryable queued jobs", async () => {
+    await seedAiChild(0);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const scheduled = await runScheduledAiRefresh(env, new Date("2026-06-07T16:00:00.000Z"));
+    expect(scheduled.jobs.map((job: any) => job.enqueued)).toEqual([0, 0]);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
   it("previews AI content without writing caches", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
@@ -358,5 +395,40 @@ describe("Parent AI Service Validation", () => {
     const { actor } = await asAdmin();
     const r = await safe(handleAdminRoutes, "/admin/gallery-images", "POST", makeRequest("POST", "/admin/gallery-images", { name: "test", url: "file:///etc/passwd" }), env, actor);
     expect(r!.status).toBe(400);
+  });
+  it("allows only admins to read system error logs", async () => {
+    const { actor } = await asAdmin();
+    env.DB.prepare("INSERT INTO system_error_logs (id, source, message, created_at) VALUES ('log-1', 'api', 'boom', '2026-06-01T00:00:00.000Z')").run();
+    const okRes = await safe(handleAdminRoutes, "/admin/system-error-logs", "GET", makeRequest("GET", "/admin/system-error-logs"), env, actor);
+    expect(okRes!.status).toBe(200);
+    const data = await okRes!.json();
+    expect(data.data[0].message).toBe("boom");
+
+    const denied = await safe(handleAdminRoutes, "/admin/system-error-logs", "GET", makeRequest("GET", "/admin/system-error-logs"), env, { type: "user", role: "parent", id: parentId });
+    expect(denied!.status).toBe(403);
+  });
+});
+
+describe("API client auth errors", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows bad credentials for login 401 without dispatching unauthorized", async () => {
+    const dispatch = vi.fn();
+    vi.stubGlobal("CustomEvent", class CustomEvent { type: string; constructor(type: string) { this.type = type; } });
+    vi.stubGlobal("window", { dispatchEvent: dispatch });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "BAD_CREDENTIALS", message: "账号或密码错误" } }), { status: 401, headers: { "content-type": "application/json" } })));
+    await expect(api("/auth/login", { method: "POST", body: JSON.stringify({ username: "admin", password: "bad" }) })).rejects.toThrow("账号或密码错误");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps session-expired behavior for non-login 401", async () => {
+    const dispatch = vi.fn();
+    vi.stubGlobal("CustomEvent", class CustomEvent { type: string; constructor(type: string) { this.type = type; } });
+    vi.stubGlobal("window", { dispatchEvent: dispatch });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "UNAUTHENTICATED", message: "请先登录" } }), { status: 401, headers: { "content-type": "application/json" } })));
+    await expect(api("/admin/users")).rejects.toThrow("登录已过期");
+    expect(dispatch).toHaveBeenCalledOnce();
   });
 });

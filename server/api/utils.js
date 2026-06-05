@@ -206,6 +206,40 @@ export function localTimeText(value, offsetMinutes) {
         return "";
     return new Date(new Date(value).getTime() + offsetMinutes * 60000).toISOString().replace("T", " ").slice(0, 19);
 }
+export async function ensureSystemErrorLogs(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS system_error_logs (
+  id TEXT PRIMARY KEY,
+  level TEXT NOT NULL DEFAULT 'error' CHECK(level IN ('error', 'warning')),
+  source TEXT NOT NULL,
+  message TEXT NOT NULL,
+  stack TEXT,
+  status INTEGER,
+  method TEXT,
+  path TEXT,
+  actor_type TEXT,
+  actor_id TEXT,
+  metadata_json TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`).run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_system_error_logs_created ON system_error_logs(created_at DESC)").run();
+}
+export async function logSystemError(env, { level = "error", source, message, stack = "", status = null, method = "", path = "", actor = null, metadata = {} }) {
+    try {
+        await ensureSystemErrorLogs(env);
+        await env.DB.prepare(`INSERT INTO system_error_logs
+(id, level, source, message, stack, status, method, path, actor_type, actor_id, metadata_json, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .bind(id(), level, source || "system", String(message || "system error").slice(0, 1000), String(stack || "").slice(0, 4000), status, method || "", path || "", actor?.type || "", actor?.id || "", JSON.stringify(metadata || {}).slice(0, 4000), nowIso())
+            .run();
+    } catch (error) {
+        console.error("failed to write system error log:", error?.stack || error);
+    }
+}
+export async function cleanupSystemErrorLogs(env, retentionDays = 92) {
+    await ensureSystemErrorLogs(env);
+    const cutoff = new Date(Date.now() - retentionDays * DAY_MS).toISOString();
+    await env.DB.prepare("DELETE FROM system_error_logs WHERE created_at<?").bind(cutoff).run();
+}
 export function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({
         "&": "&amp;",
@@ -410,16 +444,28 @@ export async function maybeRunMaintenance(env) {
     const shortDays = await settingNumber(env, "short_record_retention_days", 7);
     const detailCutoff = new Date(Date.now() - detailDays * DAY_MS).toISOString();
     const shortCutoff = new Date(Date.now() - shortDays * DAY_MS).toISOString();
-    await cleanupShortRetention(env, shortCutoff);
-    const offset = await timezoneOffsetMinutes(env);
-    await archiveOldActivity(env, detailCutoff, offset);
-    await hardDeleteSoftDeleted(env, detailCutoff);
-    await updateSetting(env, "cleanup_last_run_at", now);
+    try {
+        await cleanupShortRetention(env, shortCutoff);
+        const offset = await timezoneOffsetMinutes(env);
+        await archiveOldActivity(env, detailCutoff, offset);
+        await hardDeleteSoftDeleted(env, detailCutoff);
+        await cleanupSystemErrorLogs(env);
+        await updateSetting(env, "cleanup_last_run_at", now);
+    } catch (error) {
+        await logSystemError(env, {
+            source: "maintenance",
+            message: error?.message || String(error || "maintenance failed"),
+            stack: error?.stack || "",
+            status: 500
+        });
+        throw error;
+    }
 }
 export async function bootstrap(env) {
     if (!bootstrapPromise) {
         bootstrapPromise = (async () => {
             await ensureSystemSettings(env);
+            await ensureSystemErrorLogs(env);
             await ensureAdmin(env);
             await maybeRunMaintenance(env);
         })().catch((error) => {
@@ -1154,4 +1200,3 @@ export function isPrivateUrl(urlString) {
         return true;
     }
 }
-

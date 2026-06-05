@@ -26,6 +26,21 @@ export type FeedbackEvent = Record<string, any> & {
 };
 export type LedgerResponse = { items: LedgerRow[]; timezoneOffsetMinutes: number; timezoneLabel: string };
 export type SystemSettings = { timezoneOffsetMinutes: number; timezoneLabel: string };
+export type SystemErrorLog = {
+  id: string;
+  level: "error" | "warning";
+  source: string;
+  message: string;
+  stack?: string;
+  status?: number | null;
+  method?: string;
+  path?: string;
+  actor_type?: string;
+  actor_id?: string;
+  metadata_json?: string;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+};
 export type ChildDashboardSummary = { balance: number; aiGreeting: string; aiRefreshPending: boolean; child: Child | null };
 
 export type EmojiSource = {

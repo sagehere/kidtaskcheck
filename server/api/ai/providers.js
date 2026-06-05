@@ -3,6 +3,16 @@ import { isPrivateUrl } from "../utils.js";
 export const AI_FETCH_TIMEOUT_MS = 15000;
 export const AI_MAX_OUTPUT_LENGTH = 120;
 
+export class AiProviderError extends Error {
+    constructor(message, { status = 0, code = "AI_PROVIDER_ERROR", retryable = true } = {}) {
+        super(message);
+        this.name = "AiProviderError";
+        this.status = status;
+        this.code = code;
+        this.retryable = retryable;
+    }
+}
+
 export function truncateAiOutput(text) {
     if (!text) return "";
     return text.length > AI_MAX_OUTPUT_LENGTH ? text.slice(0, AI_MAX_OUTPUT_LENGTH) + "…" : text;
@@ -74,6 +84,7 @@ export async function callParentAiService(env, prompt, config, options = {}) {
     const model = config?.model || "";
     const maxTokens = options?.maxTokens ?? 300;
     const noTruncate = !!options?.noTruncate;
+    const throwOnError = !!options?.throwOnError;
     if (!baseUrl || !apiKey || !model)
         return "";
     if (isPrivateUrl(baseUrl))
@@ -93,13 +104,29 @@ export async function callParentAiService(env, prompt, config, options = {}) {
         });
         clearTimeout(timeoutId);
         if (resp.status === 0 || resp.type === "opaqueredirect") return "";
-        if (!resp.ok) return "";
+        if (!resp.ok) {
+            if (throwOnError) {
+                throw new AiProviderError(`AI service request failed with ${resp.status}`, {
+                    status: resp.status,
+                    code: resp.status === 429 ? "AI_RATE_LIMITED" : "AI_SERVICE_ERROR",
+                    retryable: resp.status === 429 || resp.status >= 500
+                });
+            }
+            return "";
+        }
         const data = await resp.json();
         const text = provider.parseChatResponse(data);
         const cleaned = text.replace(/\s+/g, " ").trim().replace(/，+/g, "，").replace(/。+/g, "。");
         return noTruncate ? cleaned : truncateAiOutput(cleaned);
     }
-    catch {
+    catch (error) {
+        if (throwOnError) {
+            if (error instanceof AiProviderError) throw error;
+            throw new AiProviderError(error?.name === "AbortError" ? "AI service request timed out" : "AI service request failed", {
+                code: error?.name === "AbortError" ? "AI_TIMEOUT" : "AI_NETWORK_ERROR",
+                retryable: true
+            });
+        }
         return "";
     }
 }

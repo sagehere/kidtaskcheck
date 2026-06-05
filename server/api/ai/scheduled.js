@@ -1,5 +1,6 @@
 import { nowIso, timezoneOffsetMinutes } from "../utils.js";
-import { generateParentAiGreeting, generateReportCommentary, previousCompletedReportRange } from "./orchestrator.js";
+import { previousCompletedReportRange } from "./orchestrator.js";
+import { enqueueScheduledAiJobs, processAiGenerationQueue } from "./queue.js";
 
 const MINUTE_MS = 60000;
 
@@ -53,29 +54,11 @@ ORDER BY parent_id, created_at ASC`).all();
     return rows.results;
 }
 
-async function generateForChildren(env, children, generate) {
-    let success = 0;
-    let failed = 0;
-    let lastError = "";
-    for (const child of children) {
-        try {
-            const result = await generate(child);
-            if (result) success++;
-            else failed++;
-        } catch (error) {
-            failed++;
-            lastError = String(error?.message || error).slice(0, 200);
-        }
-    }
-    return { success, failed, lastError };
-}
-
-async function runJob(env, jobType, periodKey, triggeredAt, generate) {
+async function runJob(env, jobType, periodKey, triggeredAt, children, enqueueJobs) {
     const reserved = await reserveRun(env, jobType, periodKey, triggeredAt);
-    if (!reserved) return { jobType, periodKey, skipped: true, success: 0, failed: 0 };
-    const children = await activeAiChildren(env);
-    const result = await generateForChildren(env, children, generate);
-    await completeRun(env, jobType, periodKey, result);
+    if (!reserved) return { jobType, periodKey, skipped: true, enqueued: 0, existing: 0 };
+    const result = await enqueueScheduledAiJobs(env, children, enqueueJobs);
+    await completeRun(env, jobType, periodKey, { success: result.enqueued, failed: 0, lastError: "" });
     return { jobType, periodKey, skipped: false, ...result };
 }
 
@@ -83,30 +66,38 @@ export async function runScheduledAiRefresh(env, scheduledAt = new Date()) {
     const offset = await timezoneOffsetMinutes(env);
     const triggeredAt = new Date(scheduledAt).toISOString();
     const parts = localParts(triggeredAt, offset);
-    if (parts.hour !== 0) return { skipped: true, reason: "outside_midnight_window", jobs: [] };
+    const queueRanges = {};
+    const children = await activeAiChildren(env);
+    if (parts.hour !== 0) {
+        const queue = await processAiGenerationQueue(env, { offset });
+        return { skipped: true, reason: "outside_midnight_window", jobs: [], queue };
+    }
 
     const jobs = [];
     if (parts.weekday === 1) {
         const weeklyRange = previousCompletedReportRange("weekly", triggeredAt, offset);
+        queueRanges[`report_weekly:${weeklyRange.label}`] = weeklyRange;
         jobs.push(
-            await runJob(env, "greeting_weekly", weeklyRange.label, triggeredAt, (child) =>
-                generateParentAiGreeting(env, child, offset, true)
-            )
+            await runJob(env, "greeting_weekly", weeklyRange.label, triggeredAt, children, [
+                { type: "greeting", periodKey: weeklyRange.label }
+            ])
         );
         jobs.push(
-            await runJob(env, "report_weekly", weeklyRange.label, triggeredAt, (child) =>
-                generateReportCommentary(env, child, "weekly", weeklyRange.label, offset, true, { range: weeklyRange })
-            )
+            await runJob(env, "report_weekly", weeklyRange.label, triggeredAt, children, [
+                { type: "report_weekly", periodKey: weeklyRange.label }
+            ])
         );
     }
     if (parts.day === 1) {
         const monthlyRange = previousCompletedReportRange("monthly", triggeredAt, offset);
+        queueRanges[`report_monthly:${monthlyRange.label}`] = monthlyRange;
         jobs.push(
-            await runJob(env, "report_monthly", monthlyRange.label, triggeredAt, (child) =>
-                generateReportCommentary(env, child, "monthly", monthlyRange.label, offset, true, { range: monthlyRange })
-            )
+            await runJob(env, "report_monthly", monthlyRange.label, triggeredAt, children, [
+                { type: "report_monthly", periodKey: monthlyRange.label }
+            ])
         );
     }
 
-    return { skipped: jobs.length === 0, reason: jobs.length ? "" : "no_due_jobs", jobs };
+    const queue = await processAiGenerationQueue(env, { offset, ranges: queueRanges });
+    return { skipped: jobs.length === 0, reason: jobs.length ? "" : "no_due_jobs", jobs, queue };
 }

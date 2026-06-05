@@ -49,7 +49,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(
     const aiPrompt = buildAiPrompt(child, report, config, assignments);
     if (!aiPrompt)
         return "";
-    const greeting = await callParentAiService(env, aiPrompt, config);
+    const greeting = await callParentAiService(env, aiPrompt, config, options.ai || {});
     if (greeting && options.cache !== false) {
         await env.DB.prepare("INSERT OR REPLACE INTO ai_child_greetings (child_id, previous_week_key, config_hash, greeting, generated_at) VALUES (?, ?, ?, ?, ?)")
             .bind(child.id, weekKey, hash, greeting, now)
@@ -125,7 +125,9 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(
     };
     const aiPrompt = buildReportAiPrompt(child, reportData, config, periodType, offset);
     if (!aiPrompt) return "";
-    const commentary = await callParentAiServiceForReport(env, aiPrompt, config);
+    const commentary = options.ai
+        ? await callParentAiService(env, aiPrompt, config, { maxTokens: 600, noTruncate: true, ...options.ai })
+        : await callParentAiServiceForReport(env, aiPrompt, config);
     if (commentary && options.cache !== false) {
         await env.DB.prepare("INSERT OR REPLACE INTO ai_report_commentaries (child_id, parent_id, period_key, period_type, config_hash, commentary, generated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(child.id, child.parent_id, periodKey, periodType, hash, commentary, now)

@@ -1,5 +1,5 @@
 import { runScheduledAiRefresh } from "./api/ai/index.js";
-import { bootstrap } from "./api/utils.js";
+import { bootstrap, logSystemError } from "./api/utils.js";
 import { createRuntimeEnv } from "./runtime-env.mjs";
 
 const intervalMs = Number(process.env.SCHEDULER_INTERVAL_MS || 30 * 60 * 1000);
@@ -12,6 +12,12 @@ async function tick() {
     console.log(JSON.stringify({ at: new Date().toISOString(), ...result }));
   } catch (error) {
     console.error("scheduled refresh failed:", error?.stack || error);
+    await logSystemError(env, {
+      source: "scheduler",
+      message: error?.message || String(error || "scheduled refresh failed"),
+      stack: error?.stack || "",
+      status: 500
+    });
   }
 }
 

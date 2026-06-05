@@ -812,6 +812,35 @@ button:disabled {
   background: #f0fbf8;
 }
 
+.system-log-list {
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.system-log-row {
+  align-items: flex-start;
+}
+
+.system-log-row > div:first-child {
+  width: 100%;
+}
+
+.system-log-detail {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #ece7dd;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #1f2933;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .row .source-line {
   color: #22577a;
   font-weight: 800;

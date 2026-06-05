@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Image, KeyRound, Plus, Settings, Shield, Trash2, UserRound, Users } from "lucide-react";
-import { Me, Gallery, SystemSettings } from "./types/api";
+import { AlertTriangle, Image, KeyRound, Plus, RefreshCw, Settings, Shield, Trash2, UserRound, Users } from "lucide-react";
+import { Me, Gallery, SystemErrorLog, SystemSettings } from "./types/api";
 import { api } from "./api/client";
 import { Field, FeedbackToast } from "./components/UI";
 import { Shell } from "./components/Shell";
@@ -15,18 +15,22 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [profileForm, setProfileForm] = useState({ username: me.username, displayName: me.displayName, currentPassword: "", newPassword: "", confirmPassword: "" });
   const [imageForm, setImageForm] = useState({ name: "", url: "", usage: "general" });
   const [settings, setSettings] = useState<SystemSettings>({ timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" });
+  const [systemLogs, setSystemLogs] = useState<SystemErrorLog[]>([]);
+  const [expandedLogId, setExpandedLogId] = useState("");
 
   async function load() {
     let hasError = false;
     try {
-      const [userRows, galleryRows, settingRows] = await Promise.all([
+      const [userRows, galleryRows, settingRows, logRows] = await Promise.all([
         api<any[]>("/admin/users").catch(() => { hasError = true; return []; }),
         api<Gallery[]>("/admin/gallery-images").catch(() => { hasError = true; return []; }),
-        api<SystemSettings>("/admin/system-settings").catch(() => { hasError = true; return { timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" }; })
+        api<SystemSettings>("/admin/system-settings").catch(() => { hasError = true; return { timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" }; }),
+        api<SystemErrorLog[]>("/admin/system-error-logs").catch(() => { hasError = true; return []; })
       ]);
       setUsers(userRows as any[]);
       setGallery(galleryRows as Gallery[]);
       setSettings(settingRows as SystemSettings);
+      setSystemLogs(logRows as SystemErrorLog[]);
       if (hasError) setError("部分数据加载失败，可点击重试");
     } catch (err) {
       setError("加载数据失败，可点击重试");
@@ -106,6 +110,13 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     }, "系统设置已更新");
   }
 
+  async function refreshSystemLogs() {
+    await run(async () => {
+      const rows = await api<SystemErrorLog[]>("/admin/system-error-logs");
+      setSystemLogs(rows);
+    }, "系统错误日志已刷新");
+  }
+
   return (
     <Shell me={me} refresh={refresh}>
       <section className="hero-band admin">
@@ -165,6 +176,36 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           </div>
           <button className="primary"><Settings size={18} />保存系统设置</button>
         </form>
+      </section>
+      <section className="panel setting-group">
+        <div className="panel-title">
+          <AlertTriangle />
+          <h2>系统错误日志</h2>
+          <button type="button" className="icon" title="刷新" aria-label="刷新系统错误日志" onClick={() => void refreshSystemLogs()}>
+            <RefreshCw size={18} />
+          </button>
+        </div>
+        <div className="list system-log-list">
+          {systemLogs.length === 0 ? (
+            <div className="empty">近 3 个月暂无系统级错误</div>
+          ) : systemLogs.map((item) => (
+            <article className="row system-log-row" key={item.id}>
+              <div>
+                <strong>{item.source} · {item.status || item.level}</strong>
+                <span>{new Date(item.created_at).toLocaleString()} {item.method ? ` · ${item.method}` : ""} {item.path || ""}</span>
+                <span>{item.message}</span>
+                {expandedLogId === item.id && (
+                  <pre className="system-log-detail">{item.stack || item.metadata_json || JSON.stringify(item.metadata || {}, null, 2)}</pre>
+                )}
+              </div>
+              <div className="actions">
+                <button type="button" className="secondary" onClick={() => setExpandedLogId(expandedLogId === item.id ? "" : item.id)}>
+                  {expandedLogId === item.id ? "收起" : "详情"}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
       </section>
       <div className="grid two">
         <section className="panel">

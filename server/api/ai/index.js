@@ -1,5 +1,5 @@
 export {
-    AI_FETCH_TIMEOUT_MS, AI_MAX_OUTPUT_LENGTH,
+    AI_FETCH_TIMEOUT_MS, AI_MAX_OUTPUT_LENGTH, AiProviderError,
     truncateAiOutput, detectProvider,
     listModels, callParentAiService, callParentAiServiceForReport,
 } from "./providers.js";
@@ -23,3 +23,7 @@ export {
 export {
     ensureAiScheduledRefreshRuns, runScheduledAiRefresh,
 } from "./scheduled.js";
+
+export {
+    ensureAiGenerationQueue, enqueueScheduledAiJobs, processAiGenerationQueue,
+} from "./queue.js";

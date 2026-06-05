@@ -1,4 +1,4 @@
-import { actorFromRequest, bootstrap, fail, validateNonGetRequest } from "./utils.js";
+import { actorFromRequest, bootstrap, fail, logSystemError, validateNonGetRequest } from "./utils.js";
 import { handleAuthRoutes } from "./routes/auth.js";
 import { handleAdminRoutes } from "./routes/admin.js";
 import { handleParentRoutes } from "./routes/parent.js";
@@ -40,6 +40,17 @@ export async function handleApiRequest(request, env, ctx) {
             return fail("DUPLICATE_OPERATION", "操作冲突，请重试", 409);
         }
         console.error("Unhandled error:", error?.stack || error);
+        try {
+            const url = new URL(request.url);
+            await logSystemError(env, {
+                source: "api",
+                message: error?.message || String(error || "Unhandled error"),
+                stack: error?.stack || "",
+                status: 500,
+                method: request.method,
+                path: url.pathname
+            });
+        } catch {}
         return fail("SERVER_ERROR", "服务器错误，请稍后重试", 500);
     }
 }

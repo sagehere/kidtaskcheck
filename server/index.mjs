@@ -4,7 +4,7 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleApiRequest } from "./api/router.mjs";
 import { runScheduledAiRefresh } from "./api/ai/index.js";
-import { bootstrap } from "./api/utils.js";
+import { bootstrap, logSystemError } from "./api/utils.js";
 import { createSqliteDb } from "./sqlite-db.mjs";
 import { createNodeExecutionContext, createRuntimeEnv } from "./runtime-env.mjs";
 
@@ -150,6 +150,14 @@ const server = createServer(async (req, res) => {
     serveStatic(req, res);
   } catch (error) {
     console.error("Node server error:", error?.stack || error);
+    await logSystemError(env, {
+      source: "node_server",
+      message: error?.message || String(error || "server error"),
+      stack: error?.stack || "",
+      status: 500,
+      method: req.method,
+      path: req.url || ""
+    });
     res.writeHead(500, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ error: { code: "SERVER_ERROR", message: "server error" } }));
   }
@@ -170,6 +178,12 @@ if (process.env.ENABLE_BUILTIN_SCHEDULER === "true") {
       console.log(JSON.stringify({ at: new Date().toISOString(), ...result }));
     } catch (error) {
       console.error("scheduled refresh failed:", error?.stack || error);
+      await logSystemError(env, {
+        source: "scheduler",
+        message: error?.message || String(error || "scheduled refresh failed"),
+        stack: error?.stack || "",
+        status: 500
+      });
     }
   }
 

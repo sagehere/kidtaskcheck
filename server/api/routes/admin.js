@@ -1,5 +1,14 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES } from "../../../src/lib/domain.js";
-import { ok, fail, json, body, id, nowIso, requireRole, hashPassword, verifyPassword, usernameExists, clampTimezoneOffset, timezoneOffsetMinutes, timezoneLabel, updateSetting, validateInput, INPUT_RULES, validateEnum } from "../utils.js";
+import { ok, fail, json, body, id, nowIso, requireRole, hashPassword, verifyPassword, usernameExists, clampTimezoneOffset, timezoneOffsetMinutes, timezoneLabel, updateSetting, validateInput, INPUT_RULES, validateEnum, ensureSystemErrorLogs, cleanupSystemErrorLogs } from "../utils.js";
+
+function parseMetadata(value) {
+    if (!value) return null;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return null;
+    }
+}
 
 export async function handleAdminRoutes(path, method, request, env, actor) {
     if (path === "/admin/users" && method === "GET") {
@@ -45,6 +54,28 @@ export async function handleAdminRoutes(path, method, request, env, actor) {
                 .bind(String(offset), nowIso())
                 .run();
             return ok({ timezoneOffsetMinutes: offset, timezoneLabel: timezoneLabel(offset) });
+        }
+    }
+    if (path === "/admin/system-error-logs") {
+        requireRole(actor, ["admin"]);
+        await ensureSystemErrorLogs(env);
+        if (method === "GET") {
+            const url = new URL(request.url);
+            const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") || 80)));
+            const rows = await env.DB.prepare(`SELECT id, level, source, message, stack, status, method, path, actor_type, actor_id, metadata_json, created_at
+FROM system_error_logs
+ORDER BY created_at DESC
+LIMIT ?`)
+                .bind(limit)
+                .all();
+            return ok(rows.results.map((row) => ({
+                ...row,
+                metadata: parseMetadata(row.metadata_json)
+            })));
+        }
+        if (method === "POST") {
+            await cleanupSystemErrorLogs(env);
+            return ok(true);
         }
     }
     if (path === "/admin/users" && method === "POST") {

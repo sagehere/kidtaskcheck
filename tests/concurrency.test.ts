@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { resetTestEnv } from "./helpers/setup";
-import { ensureAdmin, hashPassword, id } from "../functions/api/utils.js";
-import { handleParentRoutes } from "../functions/api/routes/parent.js";
-import { handleChildRoutes } from "../functions/api/routes/child.js";
+import { ensureAdmin, hashPassword, id } from "../server/api/utils.js";
+import { handleParentRoutes } from "../server/api/routes/parent.js";
+import { handleChildRoutes } from "../server/api/routes/child.js";
 
 function makeRequest(m: string, p: string, b?: any): Request {
   return new Request(`http://localhost/api${p}`, { method: m, headers: { "content-type": "application/json" }, ...(b ? { body: JSON.stringify(b) } : {}) });
@@ -40,7 +40,7 @@ describe("Idempotency & Limit Enforcement", () => {
     const r1 = makeRequest("PATCH", `/task-submissions/${subId}/review`, { approved: true, note: "" });
     const res1 = await safe(handleParentRoutes, norm(new URL(r1.url).pathname), "PATCH", r1, env, pa());
     expect(res1!.status).toBe(200);
-    // Second approval fails because status is no longer 'pending' â†’ 404
+    // Second approval fails because status is no longer 'pending' â†?404
     const r2 = makeRequest("PATCH", `/task-submissions/${subId}/review`, { approved: true, note: "" });
     const res2 = await safe(handleParentRoutes, norm(new URL(r2.url).pathname), "PATCH", r2, env, pa());
     expect(res2!.status).toBe(404);

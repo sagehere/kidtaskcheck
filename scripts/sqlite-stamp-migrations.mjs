@@ -1,10 +1,10 @@
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { createSqliteD1 } from "../server/d1-sqlite-adapter.mjs";
+import { createSqliteDb } from "../server/sqlite-db.mjs";
 
 const databasePath = resolve(process.env.DATABASE_PATH || "./data/taskcheck.sqlite");
 const migrationsDir = resolve(process.env.MIGRATIONS_DIR || "./migrations");
-const db = createSqliteD1(databasePath);
+const db = createSqliteDb(databasePath);
 
 db.exec(`CREATE TABLE IF NOT EXISTS __vps_migrations (
   name TEXT PRIMARY KEY,

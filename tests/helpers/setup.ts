@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { createTestEnv } from "./d1-mock";
+import { createTestEnv } from "./sqlite-test-db";
 
 const MIGRATIONS_DIR = join(__dirname, "../../migrations");
 
@@ -30,7 +30,7 @@ export function getTestEnv() {
 }
 
 export function resetTestEnv() {
-  if (_setupEnv) _setupEnv._d1.close();
+  if (_setupEnv) _setupEnv._db.close();
   _setupEnv = applyMigrationsAndBootstrap();
   return _setupEnv;
 }

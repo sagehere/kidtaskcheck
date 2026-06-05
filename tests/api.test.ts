@@ -1,11 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { resetTestEnv } from "./helpers/setup";
-import { handleAuthRoutes } from "../functions/api/routes/auth.js";
-import { handleAdminRoutes } from "../functions/api/routes/admin.js";
-import { handleChildRoutes } from "../functions/api/routes/child.js";
-import { handleParentRoutes } from "../functions/api/routes/parent.js";
-import { ensureAdmin, actorFromRequest, loginAttempts, sessionCookie, validateHttpsUrl, isPrivateUrl, id, hashPassword } from "../functions/api/utils.js";
-import { truncateAiOutput, aiReportConfigHash, runScheduledAiRefresh } from "../functions/api/ai/index.js";
+import { handleAuthRoutes } from "../server/api/routes/auth.js";
+import { handleAdminRoutes } from "../server/api/routes/admin.js";
+import { handleChildRoutes } from "../server/api/routes/child.js";
+import { handleParentRoutes } from "../server/api/routes/parent.js";
+import { ensureAdmin, actorFromRequest, loginAttempts, sessionCookie, validateHttpsUrl, isPrivateUrl, id, hashPassword } from "../server/api/utils.js";
+import { truncateAiOutput, aiReportConfigHash, runScheduledAiRefresh } from "../server/api/ai/index.js";
 import { reportWindowRange } from "../src/lib/domain";
 
 function makeRequest(m: string, p: string, b?: any, c?: string): Request {

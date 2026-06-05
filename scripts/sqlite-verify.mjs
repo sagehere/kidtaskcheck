@@ -1,8 +1,8 @@
 import { resolve } from "node:path";
-import { createSqliteD1 } from "../server/d1-sqlite-adapter.mjs";
+import { createSqliteDb } from "../server/sqlite-db.mjs";
 
 const databasePath = resolve(process.env.DATABASE_PATH || "./data/taskcheck.sqlite");
-const db = createSqliteD1(databasePath);
+const db = createSqliteDb(databasePath);
 
 const integrity = db.prepare("PRAGMA integrity_check").first();
 const foreignKeys = db.prepare("PRAGMA foreign_key_check").all().results;

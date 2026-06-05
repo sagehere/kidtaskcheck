@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 
 type BindValue = string | number | null | boolean;
 
-class D1Statement {
+class SqliteTestStatement {
   private sql: string;
   private db: DatabaseSync;
   private params: BindValue[] = [];
@@ -41,7 +41,7 @@ class D1Statement {
   }
 }
 
-export class D1Mock {
+export class SqliteTestDb {
   private db: DatabaseSync;
 
   constructor() {
@@ -50,7 +50,7 @@ export class D1Mock {
   }
 
   prepare(sql: string) {
-    return new D1Statement(this.db, sql);
+    return new SqliteTestStatement(this.db, sql);
   }
 
   exec(sql: string) {
@@ -86,6 +86,6 @@ export class D1Mock {
 }
 
 export function createTestEnv(extras: Record<string, any> = {}): any {
-  const d1 = new D1Mock();
-  return { DB: d1, ADMIN_USERNAME: "admin", ADMIN_PASSWORD: "test-admin-pw", ENVIRONMENT: "test", ...extras, _d1: d1 };
+  const db = new SqliteTestDb();
+  return { DB: db, ADMIN_USERNAME: "admin", ADMIN_PASSWORD: "test-admin-pw", ENVIRONMENT: "test", ...extras, _db: db };
 }

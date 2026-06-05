@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { resetTestEnv } from "./helpers/setup";
-import { ensureAdmin, hashPassword, id } from "../functions/api/utils.js";
-import { handleParentRoutes } from "../functions/api/routes/parent.js";
-import { handleChildRoutes } from "../functions/api/routes/child.js";
+import { ensureAdmin, hashPassword, id } from "../server/api/utils.js";
+import { handleParentRoutes } from "../server/api/routes/parent.js";
+import { handleChildRoutes } from "../server/api/routes/child.js";
 
 function makeRequest(method: string, path: string, body?: any): Request {
   const headers: Record<string, string> = { "content-type": "application/json" };

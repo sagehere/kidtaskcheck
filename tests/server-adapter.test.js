@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createSqliteD1 } from "../server/d1-sqlite-adapter.mjs";
+import { createSqliteDb } from "../server/sqlite-db.mjs";
 
-describe("Sqlite D1 adapter", () => {
-  it("supports D1 prepare/bind/run/all/first", () => {
-    const db = createSqliteD1(":memory:");
+describe("SQLite database adapter", () => {
+  it("supports prepare/bind/run/all/first", () => {
+    const db = createSqliteDb(":memory:");
     db.exec("CREATE TABLE items (id TEXT PRIMARY KEY, done INTEGER NOT NULL)");
 
     const result = db.prepare("INSERT INTO items (id, done) VALUES (?, ?)").bind("a", true).run();
@@ -15,7 +15,7 @@ describe("Sqlite D1 adapter", () => {
   });
 
   it("rolls back failed batches", () => {
-    const db = createSqliteD1(":memory:");
+    const db = createSqliteDb(":memory:");
     db.exec("CREATE TABLE items (id TEXT PRIMARY KEY)");
 
     expect(() => db.batch([

@@ -1,9 +1,9 @@
-import { createSqliteD1 } from "./d1-sqlite-adapter.mjs";
+import { createSqliteDb } from "./sqlite-db.mjs";
 
 let db;
 
 export function createRuntimeEnv(overrides = {}) {
-  db ||= createSqliteD1(overrides.DATABASE_PATH || process.env.DATABASE_PATH);
+  db ||= createSqliteDb(overrides.DATABASE_PATH || process.env.DATABASE_PATH);
   return {
     DB: db,
     APP_NAME: process.env.APP_NAME || "Kids Task Checkin",

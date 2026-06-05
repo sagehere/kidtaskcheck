@@ -2,7 +2,7 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { onRequest } from "../functions/api/[[path]].js";
+import { handleApiRequest } from "./api/router.mjs";
 import { createNodeExecutionContext, createRuntimeEnv } from "./runtime-env.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -106,11 +106,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (pathname.startsWith("/api")) {
-      const response = await onRequest({
-        request: nodeRequestToWeb(req),
-        env,
-        ctx: createNodeExecutionContext()
-      });
+      const response = await handleApiRequest(nodeRequestToWeb(req), env, createNodeExecutionContext());
       await writeWebResponse(res, response);
       return;
     }

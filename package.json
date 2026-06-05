@@ -9,15 +9,9 @@
     "preview": "vite preview --config vite.config.mjs --configLoader native",
     "preview:static": "node scripts/static-server.mjs",
     "test": "vitest run --config vite.config.mjs --configLoader runner",
-    "pages:dev": "wrangler pages dev dist --d1=DB --port 8788 --persist-to .wrangler/state --log-level none",
-    "pages:build": "npm run build && npm run db:migrate:remote",
-    "pages:publish": "npm run pages:build && wrangler pages deploy dist",
-    "scheduler:deploy": "wrangler deploy --config wrangler.scheduler.toml",
-    "deploy": "echo '请使用 npm run pages:publish 进行部署' && exit 1",
-    "db:migrate:local": "wrangler d1 migrations apply kids_task_checkin --local",
-    "db:migrate:remote": "wrangler d1 migrations apply kids_task_checkin --remote",
     "server": "node server/index.mjs",
     "scheduler": "node server/scheduler.mjs",
+    "deploy": "docker compose pull && docker compose up -d",
     "db:migrate:sqlite": "node scripts/sqlite-migrate.mjs",
     "db:stamp:sqlite": "node scripts/sqlite-stamp-migrations.mjs",
     "db:verify:sqlite": "node scripts/sqlite-verify.mjs"
@@ -31,11 +25,9 @@
     "vite": "^6.0.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260524.0",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "typescript": "^5.8.0",
-    "vitest": "^3.0.0",
-    "wrangler": "^4.18.0"
+    "vitest": "^3.0.0"
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { resetTestEnv } from "./helpers/setup";
-import { ensureAdmin, hashPassword, id } from "../functions/api/utils.js";
+import { ensureAdmin, hashPassword, id } from "../server/api/utils.js";
 
 describe("Task 37: Notification Acknowledge", () => {
   let env: any, pid: string, cid: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPrivateUrl } from "../functions/api/utils.js";
+import { isPrivateUrl } from "../server/api/utils.js";
 
 describe("Task 36: AI Mock Tests", () => {
   describe("Base URL validation", () => {

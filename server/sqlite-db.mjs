@@ -8,7 +8,7 @@ function normalizeParam(value) {
   return value;
 }
 
-export class SqliteD1Statement {
+export class SqliteStatement {
   #db;
   #sql;
   #params = [];
@@ -51,7 +51,7 @@ export class SqliteD1Statement {
   }
 }
 
-export class SqliteD1Database {
+export class SqliteDatabase {
   #db;
 
   constructor(path) {
@@ -63,7 +63,7 @@ export class SqliteD1Database {
   }
 
   prepare(sql) {
-    return new SqliteD1Statement(this.#db, sql);
+    return new SqliteStatement(this.#db, sql);
   }
 
   exec(sql) {
@@ -88,6 +88,6 @@ export class SqliteD1Database {
   }
 }
 
-export function createSqliteD1(path = process.env.DATABASE_PATH || "./data/taskcheck.sqlite") {
-  return new SqliteD1Database(path);
+export function createSqliteDb(path = process.env.DATABASE_PATH || "./data/taskcheck.sqlite") {
+  return new SqliteDatabase(path);
 }

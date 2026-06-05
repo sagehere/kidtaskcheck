@@ -1,4 +1,4 @@
-import { bootstrap, fail, validateNonGetRequest, requireRole, actorFromRequest, ok, cookie, body, id, nowIso, json } from "./utils.js";
+import { actorFromRequest, bootstrap, fail, validateNonGetRequest } from "./utils.js";
 import { handleAuthRoutes } from "./routes/auth.js";
 import { handleAdminRoutes } from "./routes/admin.js";
 import { handleParentRoutes } from "./routes/parent.js";
@@ -26,7 +26,7 @@ async function route(request, env, ctx) {
     return fail("NOT_FOUND", "接口不存在", 404);
 }
 
-export const onRequest = async ({ request, env, ctx }) => {
+export async function handleApiRequest(request, env, ctx) {
     try {
         validateNonGetRequest(request, env);
         return await route(request, env, ctx);
@@ -42,4 +42,4 @@ export const onRequest = async ({ request, env, ctx }) => {
         console.error("Unhandled error:", error?.stack || error);
         return fail("SERVER_ERROR", "服务器错误，请稍后重试", 500);
     }
-};
+}

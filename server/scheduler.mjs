@@ -1,5 +1,5 @@
-import { runScheduledAiRefresh } from "../functions/api/ai/index.js";
-import { bootstrap } from "../functions/api/utils.js";
+import { runScheduledAiRefresh } from "./api/ai/index.js";
+import { bootstrap } from "./api/utils.js";
 import { createRuntimeEnv } from "./runtime-env.mjs";
 
 const intervalMs = Number(process.env.SCHEDULER_INTERVAL_MS || 30 * 60 * 1000);

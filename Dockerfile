@@ -11,7 +11,6 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
-COPY functions ./functions
 COPY src/lib ./src/lib
 COPY server ./server
 COPY scripts ./scripts

@@ -11,7 +11,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/sagehere/taskcheck
+  IMAGE_NAME: ghcr.io/sagehere/kidtaskcheck
 
 jobs:
   build:

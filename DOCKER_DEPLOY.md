@@ -26,9 +26,7 @@ Edit the included `docker-compose.yml` before deploying:
 ```bash
 mkdir -p data
 docker compose pull
-docker compose run --rm app npm run db:migrate:sqlite
 docker compose up -d
-docker compose run --rm app npm run db:verify:sqlite
 ```
 
 ## Nginx Proxy Manager
@@ -48,9 +46,7 @@ Create a Proxy Host:
 
 ```bash
 docker compose pull
-docker compose run --rm app npm run db:migrate:sqlite
 docker compose up -d
-docker compose run --rm app npm run db:verify:sqlite
 ```
 
 ## Logs

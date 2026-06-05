@@ -1,16 +1,51 @@
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleApiRequest } from "./api/router.mjs";
 import { runScheduledAiRefresh } from "./api/ai/index.js";
 import { bootstrap } from "./api/utils.js";
+import { createSqliteDb } from "./sqlite-db.mjs";
 import { createNodeExecutionContext, createRuntimeEnv } from "./runtime-env.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const distDir = resolve(process.env.STATIC_DIR || join(root, "dist"));
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
+const databasePath = resolve(process.env.DATABASE_PATH || join(root, "data", "taskcheck.sqlite"));
+const migrationsDir = resolve(process.env.MIGRATIONS_DIR || join(root, "migrations"));
+
+function runMigrations() {
+  if (!existsSync(migrationsDir)) {
+    console.log("migrations directory not found, skipping");
+    return;
+  }
+  const db = createSqliteDb(databasePath);
+  db.exec(`CREATE TABLE IF NOT EXISTS __vps_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`);
+  const applied = new Set(
+    db.prepare("SELECT name FROM __vps_migrations").all().results.map((row) => row.name)
+  );
+  const files = readdirSync(migrationsDir).filter((file) => file.endsWith(".sql")).sort();
+  for (const file of files) {
+    if (applied.has(file)) continue;
+    const sql = readFileSync(join(migrationsDir, file), "utf8");
+    try {
+      db.exec(sql);
+      db.prepare("INSERT INTO __vps_migrations (name) VALUES (?)").bind(file).run();
+      console.log(`applied migration: ${file}`);
+    } catch (error) {
+      console.error(`migration failed: ${file}:`, error?.message || error);
+      process.exit(1);
+    }
+  }
+  db.close();
+}
+
+runMigrations();
+
 const env = createRuntimeEnv();
 
 const contentTypes = {

@@ -36,9 +36,7 @@ Start from the GitHub-hosted image:
 ```bash
 mkdir -p data
 docker compose pull
-docker compose run --rm app npm run db:migrate:sqlite
 docker compose up -d
-docker compose run --rm app npm run db:verify:sqlite
 ```
 
 Use Nginx Proxy Manager to proxy your public domain to:
@@ -53,9 +51,7 @@ Enable HTTPS and Force SSL in Nginx Proxy Manager. `APP_URL` must exactly match 
 
 ```bash
 docker compose pull
-docker compose run --rm app npm run db:migrate:sqlite
 docker compose up -d
-docker compose run --rm app npm run db:verify:sqlite
 ```
 
 ## Backups
@@ -77,9 +73,6 @@ npm run build
 npm test
 npm run server
 ENABLE_BUILTIN_SCHEDULER=true npm run server
-npm run db:migrate:sqlite
-npm run db:stamp:sqlite
-npm run db:verify:sqlite
 ```
 
 ## Safety Notes

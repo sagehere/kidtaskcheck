@@ -1540,5 +1540,10 @@ button:disabled {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+.ai-section-divider {
+  border: none;
+  border-top: 1px solid var(--border-color, #ddd);
+  margin: 1.25rem 0;
+}
 .success-text { color: var(--success-color, #22c55e); }
 .error-text { color: var(--error-color, #ef4444); }

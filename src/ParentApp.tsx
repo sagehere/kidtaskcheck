@@ -527,7 +527,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               }, "AI 服务配置已保存");
             }}>
               <div className="setting-section">
-                <h3>连接配置</h3>
+                <h3>寄语与评语生成</h3>
                 <Field label="Base URL">
                   <input value={draftAiConfig.baseUrl} onChange={(e) => updateAiDraft({ baseUrl: e.target.value })} placeholder="https://api.deepseek.com/v1" />
                 </Field>
@@ -555,9 +555,6 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                     </span>
                   )}
                 </div>
-              </div>
-              <div className="setting-section">
-                <h3>模型选择</h3>
                 <Field label="模型">
                   <div className="inline-fields">
                     <select value={draftAiConfig.model} onChange={(e) => updateAiDraft({ model: e.target.value })} style={{ flex: 1 }}>
@@ -567,9 +564,6 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                     <button type="button" className="secondary" disabled={aiFetching || !draftAiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const modelsBody: { baseUrl: string; apiKey?: string } = { baseUrl: draftAiConfig.baseUrl }; if (aiFetchApiKey) modelsBody.apiKey = aiFetchApiKey; const data = await api<{ models: string[] }>("/parent/ai-service/models", { method: "POST", body: JSON.stringify(modelsBody) }); setAiModels(data.models); if (data.models.length && !draftAiConfig.model) updateAiDraft({ model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
                   </div>
                 </Field>
-              </div>
-              <div className="setting-section">
-                <h3>提示词设置</h3>
                 <Field label="寄语提示词">
                   <textarea value={draftAiConfig.prompt} onChange={(e) => updateAiDraft({ prompt: e.target.value })} rows={4} />
                 </Field>
@@ -580,8 +574,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                   <textarea value={draftAiConfig.monthlyPrompt || ""} onChange={(e) => updateAiDraft({ monthlyPrompt: e.target.value })} rows={3} placeholder="留空使用默认提示词" />
                 </Field>
               </div>
+              <hr className="ai-section-divider" />
               <div className="setting-section">
-                <h3>卡通报告绘图</h3>
+                <h3>绘图配置</h3>
                 <Field label="绘图 Base URL">
                   <input value={draftAiConfig.imageBaseUrl || ""} onChange={(e) => updateAiDraft({ imageBaseUrl: e.target.value })} placeholder="https://api.example.com/v1" />
                 </Field>

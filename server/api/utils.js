@@ -1106,8 +1106,11 @@ export async function ledgerSource(env, row) {
 export async function withLedgerSources(env, rows, offset) {
     return Promise.all(rows.map(async (row) => ({ ...row, localCreatedAt: localTimeText(row.created_at, offset), ...(await ledgerSource(env, row)) })));
 }
-export function sessionCookie(value, env) {
-    const secure = env.ENVIRONMENT === "production" ? "; Secure" : "";
+export function sessionCookie(value, env, request) {
+    const proto = request?.headers?.get("x-forwarded-proto")
+        || (request?.url ? new URL(request.url).protocol.replace(":", "") : "")
+        || (env.APP_URL ? new URL(env.APP_URL).protocol.replace(":", "") : "http");
+    const secure = proto === "https" ? "; Secure" : "";
     return `session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 86400}${secure}`;
 }
 export function validateNonGetRequest(request, env) {

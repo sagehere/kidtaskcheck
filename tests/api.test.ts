@@ -35,11 +35,13 @@ describe("Auth", () => {
     const c = r!.headers.get("set-cookie") || "";
     expect(c).toContain("session=");
   });
-  it("login cookie includes Secure in production", () => {
-    expect(sessionCookie("tok", { ENVIRONMENT: "production" })).toContain("Secure");
+  it("login cookie includes Secure when request is HTTPS", () => {
+    const req = new Request("https://example.com/api/auth/login", { headers: { "x-forwarded-proto": "https" } });
+    expect(sessionCookie("tok", {}, req)).toContain("Secure");
   });
-  it("login cookie omits Secure in dev", () => {
-    expect(sessionCookie("tok", {})).not.toContain("Secure");
+  it("login cookie omits Secure when request is HTTP", () => {
+    const req = new Request("http://localhost:3000/api/auth/login");
+    expect(sessionCookie("tok", {}, req)).not.toContain("Secure");
   });
   it("rate-limits after 5 rapid failures", async () => {
     for (let i = 0; i < 6; i++) {

@@ -7,7 +7,7 @@ export async function handleAuthRoutes(path, method, request, env, actor) {
         const token = cookie(request, "session");
         if (token)
             await env.DB.prepare("DELETE FROM sessions WHERE token=?").bind(token).run();
-        return json({ data: true }, { headers: { "set-cookie": sessionCookie("", env).replace(/Max-Age=\d+/, "Max-Age=0") } });
+        return json({ data: true }, { headers: { "set-cookie": sessionCookie("", env, request).replace(/Max-Age=\d+/, "Max-Age=0") } });
     }
     if (path === "/auth/login" && method === "POST") {
         const input = await body(request);
@@ -45,7 +45,7 @@ export async function handleAuthRoutes(path, method, request, env, actor) {
         await env.DB.prepare("INSERT INTO sessions (token, actor_type, actor_id, expires_at) VALUES (?, ?, ?, ?)")
             .bind(token, user ? "user" : "child", account.id, expires)
             .run();
-        return json({ data: { role: user ? user.role : "child", displayName: account.display_name } }, { headers: { "set-cookie": sessionCookie(token, env) } });
+        return json({ data: { role: user ? user.role : "child", displayName: account.display_name } }, { headers: { "set-cookie": sessionCookie(token, env, request) } });
     }
     return null;
 }

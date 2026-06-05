@@ -1,0 +1,45 @@
+services:
+  app:
+    image: ${APP_IMAGE:-ghcr.io/sagehere/taskcheck:latest}
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/taskcheck.sqlite
+      PORT: 3000
+      HOST: 0.0.0.0
+    volumes:
+      - ./data:/app/data
+
+  scheduler:
+    image: ${APP_IMAGE:-ghcr.io/sagehere/taskcheck:latest}
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: ["node", "server/scheduler.mjs"]
+    environment:
+      DATABASE_PATH: /app/data/taskcheck.sqlite
+      SCHEDULER_INTERVAL_MS: 1800000
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - app
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

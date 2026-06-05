@@ -1,6 +1,6 @@
 import { isPrivateUrl } from "../utils.js";
 
-export const AI_FETCH_TIMEOUT_MS = 15000;
+export const AI_FETCH_TIMEOUT_MS = 120000;
 export const AI_MAX_OUTPUT_LENGTH = 120;
 
 export class AiProviderError extends Error {

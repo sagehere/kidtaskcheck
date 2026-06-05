@@ -6,31 +6,15 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     environment:
-      APP_NAME: Kids Task Checkin
-      ADMIN_USERNAME: admin
-      ADMIN_PASSWORD: change-this-before-production
-      ENVIRONMENT: production
-      APP_URL: https://taskcheck.example.com
-      DATABASE_PATH: /app/data/taskcheck.sqlite
-      PORT: 3000
-      HOST: 0.0.0.0
+      APP_NAME: "Kids Task Checkin"
+      ADMIN_USERNAME: "admin"
+      ADMIN_PASSWORD: "change-this-before-production"
+      ENVIRONMENT: "production"
+      APP_URL: "https://taskcheck.example.com"
+      DATABASE_PATH: "/app/data/taskcheck.sqlite"
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      ENABLE_BUILTIN_SCHEDULER: "true"
+      SCHEDULER_INTERVAL_MS: "1800000"
     volumes:
       - ./data:/app/data
-
-  scheduler:
-    image: ${APP_IMAGE:-ghcr.io/sagehere/kidtaskcheck:latest}
-    build: .
-    restart: unless-stopped
-    command: ["node", "server/scheduler.mjs"]
-    environment:
-      APP_NAME: Kids Task Checkin
-      ADMIN_USERNAME: admin
-      ADMIN_PASSWORD: change-this-before-production
-      ENVIRONMENT: production
-      APP_URL: https://taskcheck.example.com
-      DATABASE_PATH: /app/data/taskcheck.sqlite
-      SCHEDULER_INTERVAL_MS: 1800000
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      - app

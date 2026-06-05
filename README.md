@@ -8,7 +8,7 @@ A self-hosted family task and reward app for children. The project is now a Dock
 - Backend: Node.js HTTP server in `server/index.mjs`.
 - API modules: `server/api`.
 - Database: SQLite via `node:sqlite`, stored at `data/taskcheck.sqlite`.
-- Scheduler: `server/scheduler.mjs` runs AI report/greeting refresh jobs.
+- Scheduler: Built into `server/index.mjs`, enable with `ENABLE_BUILTIN_SCHEDULER=true`.
 - Container image: `ghcr.io/sagehere/kidtaskcheck:latest`.
 
 ## Local Development
@@ -76,7 +76,7 @@ Keep `data/` and `backups/` off Git.
 npm run build
 npm test
 npm run server
-npm run scheduler
+ENABLE_BUILTIN_SCHEDULER=true npm run server
 npm run db:migrate:sqlite
 npm run db:stamp:sqlite
 npm run db:verify:sqlite

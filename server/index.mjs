@@ -3,6 +3,8 @@ import { createServer } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleApiRequest } from "./api/router.mjs";
+import { runScheduledAiRefresh } from "./api/ai/index.js";
+import { bootstrap } from "./api/utils.js";
 import { createNodeExecutionContext, createRuntimeEnv } from "./runtime-env.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -121,3 +123,21 @@ const server = createServer(async (req, res) => {
 server.listen(port, host, () => {
   console.log(`taskcheck server listening on http://${host}:${port}`);
 });
+
+if (process.env.ENABLE_BUILTIN_SCHEDULER === "true") {
+  const intervalMs = Number(process.env.SCHEDULER_INTERVAL_MS || 30 * 60 * 1000);
+  console.log(`builtin scheduler enabled, interval=${intervalMs}ms`);
+
+  async function schedulerTick() {
+    try {
+      await bootstrap(env);
+      const result = await runScheduledAiRefresh(env, new Date());
+      console.log(JSON.stringify({ at: new Date().toISOString(), ...result }));
+    } catch (error) {
+      console.error("scheduled refresh failed:", error?.stack || error);
+    }
+  }
+
+  schedulerTick();
+  setInterval(() => void schedulerTick(), intervalMs);
+}

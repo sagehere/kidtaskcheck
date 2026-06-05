@@ -57,7 +57,6 @@ docker compose run --rm app npm run db:verify:sqlite
 
 ```bash
 docker compose logs -f app
-docker compose logs -f scheduler
 ```
 
 ## Backups

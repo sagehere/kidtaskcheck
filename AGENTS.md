@@ -9,7 +9,7 @@ This is a Docker-first Node.js + React + SQLite family task check-in app. There 
 - Install: `npm install`
 - Full verification: `npm run build && npm test`
 - Start local Node server: `npm run server`
-- Start AI scheduler locally: `npm run scheduler`
+- Start local Node server with scheduler: `ENABLE_BUILTIN_SCHEDULER=true npm run server`
 - Apply SQLite migrations: `npm run db:migrate:sqlite`
 - Verify SQLite database: `npm run db:verify:sqlite`
 - Docker update: `docker compose pull && docker compose up -d`

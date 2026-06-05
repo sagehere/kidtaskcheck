@@ -14,6 +14,7 @@
     "deploy": "docker compose pull && docker compose up -d",
     "db:migrate:sqlite": "node scripts/sqlite-migrate.mjs",
     "db:stamp:sqlite": "node scripts/sqlite-stamp-migrations.mjs",
+    "db:repair:0002": "node scripts/sqlite-repair-0002.mjs",
     "db:verify:sqlite": "node scripts/sqlite-verify.mjs"
   },
   "dependencies": {

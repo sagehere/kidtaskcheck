@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { SqliteTestDb } from "./helpers/sqlite-test-db";
+import { repairSqlite0002 } from "../scripts/sqlite-repair-0002.mjs";
 
 const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
@@ -63,6 +64,41 @@ describe("Task 35: Migration Smoke Test", () => {
     db.exec(sql12);
     const after = db.prepare("SELECT COUNT(*) as count FROM ai_child_greetings").all().results as any[];
     expect(after[0].count).toBe(1);
+    db.close();
+  });
+
+  it("0002 repair stamps a database that already completed the schema rewrite", () => {
+    const db = new SqliteTestDb();
+    db.exec(readFileSync(join(MIGRATIONS_DIR, "0001_initial.sql"), "utf8"));
+    db.exec(readFileSync(join(MIGRATIONS_DIR, "0002_limits_and_repeat_submissions.sql"), "utf8"));
+    db.exec(`CREATE TABLE __vps_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.prepare("INSERT INTO __vps_migrations (name) VALUES (?)").bind("0001_initial.sql").run();
+
+    const result = repairSqlite0002(db, () => {});
+
+    expect(result.action).toBe("stamp");
+    expect(db.prepare("SELECT name FROM __vps_migrations WHERE name = ?").bind("0002_limits_and_repeat_submissions.sql").first()).toBeTruthy();
+    db.close();
+  });
+
+  it("0002 repair completes the task_submissions rewrite after a partial ALTER TABLE", () => {
+    const db = new SqliteTestDb();
+    db.exec(readFileSync(join(MIGRATIONS_DIR, "0001_initial.sql"), "utf8"));
+    db.exec("ALTER TABLE tasks ADD COLUMN limit_count INTEGER NOT NULL DEFAULT 1");
+    db.exec(`CREATE TABLE __vps_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.prepare("INSERT INTO __vps_migrations (name) VALUES (?)").bind("0001_initial.sql").run();
+
+    const result = repairSqlite0002(db, () => {});
+
+    expect(result.action).toBe("complete_task_submissions_rewrite_and_stamp");
+    expect(result.after.hasOldTaskSubmissionUnique).toBe(false);
+    expect(db.prepare("SELECT name FROM __vps_migrations WHERE name = ?").bind("0002_limits_and_repeat_submissions.sql").first()).toBeTruthy();
     db.close();
   });
 });

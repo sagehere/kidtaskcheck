@@ -66,6 +66,34 @@ cp data/backup.sqlite backups/taskcheck-$(date +%F).sqlite
 
 Keep `data/` and `backups/` off Git.
 
+## Docker Migration Repair
+
+If Docker logs repeat this error after an update:
+
+```text
+migration failed: 0002_limits_and_repeat_submissions.sql: duplicate column name: limit_count
+```
+
+the SQLite schema already has `tasks.limit_count`, but `__vps_migrations` is missing the `0002` record. Do not delete the database unless you intentionally want to lose local data.
+
+Back up the database first:
+
+```bash
+mkdir -p backups
+docker compose exec app node -e "import { DatabaseSync } from 'node:sqlite'; const db = new DatabaseSync('/app/data/taskcheck.sqlite'); db.exec(\"VACUUM INTO '/app/data/repair-before-0002.sqlite'\"); db.close();"
+cp data/repair-before-0002.sqlite backups/taskcheck-repair-before-0002-$(date +%F-%H%M%S).sqlite
+```
+
+Then run the targeted repair script:
+
+```bash
+docker compose run --rm app npm run db:repair:0002
+docker compose up -d
+docker compose logs --tail=80 app
+```
+
+The repair only handles this known `0002` half-migration state. It stamps the migration when the schema rewrite is already complete, or finishes the `task_submissions` rewrite before stamping. If it reports an integrity or shape mismatch, stop and restore from backup or inspect the database manually.
+
 ## Useful Scripts
 
 ```bash
@@ -73,6 +101,7 @@ npm run build
 npm test
 npm run server
 ENABLE_BUILTIN_SCHEDULER=true npm run server
+npm run db:repair:0002
 ```
 
 ## Safety Notes

@@ -279,7 +279,8 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             childId: child.id,
             periodType: period,
             periodKey: range.label,
-            resetFailed: !!input.retry
+            resetFailed: !!input.retry,
+            force: !!input.force
         });
         ctx?.waitUntil?.(processCartoonReportJobs(env, { maxJobs: 1 }));
         return ok(publicCartoonJob(job));

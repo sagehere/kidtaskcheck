@@ -53,6 +53,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const pollingRef = useRef<number | null>(null);
   const aiDraftInitializedRef = useRef(false);
   const aiDraftDirtyRef = useRef(false);
+  const cartoonAbortRef = useRef<AbortController | null>(null);
 
   function syncAiDraft(nextConfig: ParentAiServiceStoredConfig) {
     setDraftAiConfig({
@@ -340,34 +341,56 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     window.open(`/api/children/${encodeURIComponent(child.id)}/report?period=${period}`, "_blank", "noopener,noreferrer");
   }
 
-  async function pollCartoonReport(job: CartoonReportResponse, title: string) {
+  async function pollCartoonReport(job: CartoonReportResponse, title: string, signal: AbortSignal): Promise<{ job: CartoonReportResponse; aborted: boolean }> {
     if (!job.id || job.status === "completed" || job.status === "failed") {
-      setCartoonReportResult({ ...job, title });
-      return;
+      if (!signal.aborted) setCartoonReportResult({ ...job, title });
+      return { job, aborted: signal.aborted };
     }
+    let last: CartoonReportResponse = job;
     for (let attempt = 0; attempt < 80; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 3000));
+      if (signal.aborted) return { job: last, aborted: true };
+      await new Promise<void>((resolve) => {
+        const timer = window.setTimeout(resolve, 3000);
+        signal.addEventListener("abort", () => { window.clearTimeout(timer); resolve(); }, { once: true });
+      });
+      if (signal.aborted) return { job: last, aborted: true };
       const next = await api<CartoonReportResponse>(`/parent/ai-service/cartoon-report/${job.id}`);
+      last = next;
+      if (signal.aborted) return { job: next, aborted: true };
       setCartoonReportResult({ ...next, title });
-      if (next.status === "completed" || next.status === "failed") return;
+      if (next.status === "completed" || next.status === "failed") return { job: next, aborted: false };
     }
+    return { job: last, aborted: signal.aborted };
   }
 
-  async function generateCartoonReport(child: Child, period: "weekly" | "monthly", retry = false) {
+  async function generateCartoonReport(child: Child, period: "weekly" | "monthly", retry = false, force = false) {
+    cartoonAbortRef.current?.abort();
+    const controller = new AbortController();
+    cartoonAbortRef.current = controller;
     setCartoonReportGenerating(period);
     setError("");
     try {
       const result = await api<CartoonReportResponse>("/parent/ai-service/cartoon-report", {
         method: "POST",
-        body: JSON.stringify({ childId: child.id, period, retry })
+        body: JSON.stringify({ childId: child.id, period, retry, force })
       });
       const title = `${child.display_name} ${period === "monthly" ? "上月月报" : "上周周报"}卡通报告`;
       setCartoonReportResult({ ...result, title });
-      await pollCartoonReport(result, title);
+      const final = await pollCartoonReport(result, title, controller.signal);
+      if (final.aborted) {
+        if (final.job.status === "completed" && final.job.imageUrl) {
+          setMessage("卡通报告已在后台生成完成，可重新进入“报表”查看");
+        } else if (final.job.status === "failed") {
+          setError(`卡通报告生成失败：${final.job.lastError || "未知错误"}`);
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "卡通报告生成失败");
+      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "卡通报告生成失败");
     } finally {
-      setCartoonReportGenerating("");
+      if (cartoonAbortRef.current === controller) {
+        cartoonAbortRef.current = null;
+        setCartoonReportGenerating("");
+      }
     }
   }
 
@@ -755,9 +778,16 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           result={cartoonReportResult}
           onRetry={(result) => {
             const child = children.find((item) => item.id === result.childId);
-            if (child && result.period) void generateCartoonReport(child, result.period, true);
+            if (child && result.period) void generateCartoonReport(child, result.period, true, result.status === "completed");
           }}
-          onClose={() => setCartoonReportResult(null)}
+          onRegenerate={(result) => {
+            const child = children.find((item) => item.id === result.childId);
+            if (child && result.period) void generateCartoonReport(child, result.period, false, true);
+          }}
+          onClose={() => {
+            cartoonAbortRef.current?.abort();
+            setCartoonReportResult(null);
+          }}
         />
       )}
       {aiPreviewResult && (
@@ -1044,7 +1074,7 @@ export function ReportDialog({ child, onPrint, onReport, onCartoonReport, genera
   );
 }
 
-export function CartoonReportDialog({ result, onRetry, onClose }: { result: CartoonReportResponse & { title: string }; onRetry: (result: CartoonReportResponse & { title: string }) => void; onClose: () => void }) {
+export function CartoonReportDialog({ result, onRetry, onRegenerate, onClose }: { result: CartoonReportResponse & { title: string }; onRetry: (result: CartoonReportResponse & { title: string }) => void; onRegenerate: (result: CartoonReportResponse & { title: string }) => void; onClose: () => void }) {
   const working = result.status === "pending" || result.status === "processing" || (!result.status && !result.imageUrl);
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
@@ -1064,6 +1094,7 @@ export function CartoonReportDialog({ result, onRetry, onClose }: { result: Cart
             </a>
           )}
           {result.status === "failed" && <button type="button" className="primary" onClick={() => onRetry(result)}><Sparkles size={18} />重试生成</button>}
+          {result.status === "completed" && <button type="button" className="primary" onClick={() => onRegenerate(result)}><Sparkles size={18} />重新生成</button>}
           <button type="button" className="secondary" onClick={onClose}>完成</button>
         </div>
       </section>

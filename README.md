@@ -25,13 +25,17 @@ The Node server listens on port `3000` by default. Set `PORT` to override it.
 
 ## Docker Deployment
 
-Edit `docker-compose.yml` before production:
+### Before Production — Mandatory Changes
 
-- Change `ADMIN_PASSWORD`.
-- Change `APP_URL` to the HTTPS URL configured in Nginx Proxy Manager.
-- Keep `DATABASE_PATH=/app/data/taskcheck.sqlite`.
+Edit `docker-compose.yml` and modify these fields:
 
-Start from the GitHub-hosted image:
+| 变量 | 必须改？ | 说明 |
+|---|---|---|
+| `ADMIN_PASSWORD` | **是** | 默认密码 `change-me-admin-password` 会在 production 模式下阻止容器启动，防止安全隐患 |
+| `ADMIN_USERNAME` | 可选 | 管理员登录名，默认 `admin`，按需修改 |
+| `APP_URL` | **是** | 你的公网 HTTPS 地址（如 `https://kid.your.com`），用于 CORS 白名单。**必须与浏览器地址栏完全一致**，否则前端登录会被浏览器拦截 |
+
+### Start
 
 ```bash
 mkdir -p data
@@ -39,13 +43,15 @@ docker compose pull
 docker compose up -d
 ```
 
-Use Nginx Proxy Manager to proxy your public domain to:
+### Reverse Proxy (Nginx Proxy Manager)
 
-```text
-http://127.0.0.1:3000
-```
+代理目标：`http://127.0.0.1:3000`（容器只监听本地，不直接暴露公网）。
 
-Enable HTTPS and Force SSL in Nginx Proxy Manager. `APP_URL` must exactly match the public URL, including protocol and port if any.
+启用 HTTPS 和 Force SSL。`APP_URL` 必须与 NPM 中配置的公网地址完全一致。
+
+### CORS 说明
+
+`APP_URL` 用于设置服务端 CORS 允许来源。浏览器安全策略要求前端页面域名与 API 请求目标域名一致时才能正常请求。不设或设错会导致登录/数据请求被浏览器拦截。
 
 ## Updates
 

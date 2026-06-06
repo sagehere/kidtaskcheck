@@ -59,20 +59,37 @@ export function publicCartoonJob(row) {
     };
 }
 
-export async function enqueueCartoonReportJob(env, { parentId, childId, periodType, periodKey, resetFailed = false }) {
+export async function enqueueCartoonReportJob(env, { parentId, childId, periodType, periodKey, resetFailed = false, force = false }) {
     await ensureAiCartoonReportJobs(env);
     const now = nowIso();
+    const forceFlag = force ? 1 : 0;
+    const resetFlag = (force || resetFailed) ? 1 : 0;
+    const clearImage = force ? 1 : 0;
     await env.DB.prepare(`INSERT INTO ai_cartoon_report_jobs
 (id, parent_id, child_id, period_type, period_key, status, retry_count, max_retries, created_at, updated_at, next_attempt_at)
 VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
 ON CONFLICT(parent_id, child_id, period_type, period_key) DO UPDATE SET
-  status=CASE WHEN ai_cartoon_report_jobs.status='failed' AND ? THEN 'pending' ELSE ai_cartoon_report_jobs.status END,
-  retry_count=CASE WHEN ai_cartoon_report_jobs.status='failed' AND ? THEN 0 ELSE ai_cartoon_report_jobs.retry_count END,
-  last_error=CASE WHEN ai_cartoon_report_jobs.status='failed' AND ? THEN NULL ELSE ai_cartoon_report_jobs.last_error END,
-  error_code=CASE WHEN ai_cartoon_report_jobs.status='failed' AND ? THEN NULL ELSE ai_cartoon_report_jobs.error_code END,
-  next_attempt_at=CASE WHEN ai_cartoon_report_jobs.status='failed' AND ? THEN excluded.next_attempt_at ELSE ai_cartoon_report_jobs.next_attempt_at END,
+  status=CASE WHEN ?=1 THEN 'pending' WHEN ai_cartoon_report_jobs.status='failed' AND ?=1 THEN 'pending' ELSE ai_cartoon_report_jobs.status END,
+  retry_count=CASE WHEN ?=1 THEN 0 WHEN ai_cartoon_report_jobs.status='failed' AND ?=1 THEN 0 ELSE ai_cartoon_report_jobs.retry_count END,
+  last_error=CASE WHEN ?=1 THEN NULL WHEN ai_cartoon_report_jobs.status='failed' AND ?=1 THEN NULL ELSE ai_cartoon_report_jobs.last_error END,
+  error_code=CASE WHEN ?=1 THEN NULL WHEN ai_cartoon_report_jobs.status='failed' AND ?=1 THEN NULL ELSE ai_cartoon_report_jobs.error_code END,
+  image_url=CASE WHEN ?=1 THEN NULL ELSE ai_cartoon_report_jobs.image_url END,
+  format=CASE WHEN ?=1 THEN 'jpeg' ELSE ai_cartoon_report_jobs.format END,
+  filename=CASE WHEN ?=1 THEN '' ELSE ai_cartoon_report_jobs.filename END,
+  prompt_preview=CASE WHEN ?=1 THEN '' ELSE ai_cartoon_report_jobs.prompt_preview END,
+  started_at=CASE WHEN ?=1 THEN NULL ELSE ai_cartoon_report_jobs.started_at END,
+  completed_at=CASE WHEN ?=1 THEN NULL ELSE ai_cartoon_report_jobs.completed_at END,
+  next_attempt_at=CASE WHEN ?=1 THEN excluded.next_attempt_at WHEN ai_cartoon_report_jobs.status='failed' AND ?=1 THEN excluded.next_attempt_at ELSE ai_cartoon_report_jobs.next_attempt_at END,
   updated_at=excluded.updated_at`)
-        .bind(id(), parentId, childId, periodType, periodKey, DEFAULT_MAX_RETRIES, now, now, now, resetFailed ? 1 : 0, resetFailed ? 1 : 0, resetFailed ? 1 : 0, resetFailed ? 1 : 0, resetFailed ? 1 : 0)
+        .bind(
+            id(), parentId, childId, periodType, periodKey, DEFAULT_MAX_RETRIES, now, now, now,
+            forceFlag, resetFlag,
+            forceFlag, resetFlag,
+            forceFlag, resetFlag,
+            forceFlag, resetFlag,
+            clearImage, clearImage, clearImage, clearImage, clearImage, clearImage,
+            forceFlag, resetFlag
+        )
         .run();
     return env.DB.prepare("SELECT * FROM ai_cartoon_report_jobs WHERE parent_id=? AND child_id=? AND period_type=? AND period_key=?")
         .bind(parentId, childId, periodType, periodKey)

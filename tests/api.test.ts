@@ -478,6 +478,59 @@ describe("Parent AI Service Validation", () => {
     const r = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "weekly" }), env, actor);
     expect(r!.status).toBe(400);
   });
+  it("force=true re-enqueues a completed cartoon job and clears the cached image", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test", imageBaseUrl: "https://image.example.com/v1", imageModel: "gpt-image-2", imagePrompt: "cartoon style", imageApiKey: "img-key", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1 }), env, actor);
+    stubImage({ data: [{ url: "https://cdn.example.com/first.jpeg" }] });
+    const r1 = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "weekly" }), env, actor);
+    expect(r1!.status).toBe(200);
+    const data1 = await r1!.json();
+    await processCartoonReportJobs(env, { maxJobs: 1 } as any);
+    const get1 = await safe(handleParentRoutes, `/parent/ai-service/cartoon-report/${data1.data.id}`, "GET", makeRequest("GET", `/parent/ai-service/cartoon-report/${data1.data.id}`), env, actor);
+    const completed1 = await get1!.json();
+    expect(completed1.data.status).toBe("completed");
+    expect(completed1.data.imageUrl).toBe("https://cdn.example.com/first.jpeg");
+    stubImage({ data: [{ url: "https://cdn.example.com/second.jpeg" }] });
+    const r2 = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "weekly", force: true }), env, actor);
+    expect(r2!.status).toBe(200);
+    const data2 = await r2!.json();
+    expect(data2.data.id).toBe(data1.data.id);
+    expect(data2.data.status).toBe("pending");
+    expect(data2.data.imageUrl).toBe("");
+    await processCartoonReportJobs(env, { maxJobs: 1 } as any);
+    const get2 = await safe(handleParentRoutes, `/parent/ai-service/cartoon-report/${data1.data.id}`, "GET", makeRequest("GET", `/parent/ai-service/cartoon-report/${data1.data.id}`), env, actor);
+    const completed2 = await get2!.json();
+    expect(completed2.data.status).toBe("completed");
+    expect(completed2.data.imageUrl).toBe("https://cdn.example.com/second.jpeg");
+  });
+  it("force=true preempts a processing cartoon job and re-acquires the lock", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test", imageBaseUrl: "https://image.example.com/v1", imageModel: "gpt-image-2", imagePrompt: "cartoon style", imageApiKey: "img-key", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1 }), env, actor);
+    const r1 = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "monthly" }), env, actor);
+    const data1 = await r1!.json();
+    await env.DB.prepare("UPDATE ai_cartoon_report_jobs SET status='processing', started_at=?, locked_until=?, updated_at=? WHERE id=?")
+      .bind(new Date().toISOString(), new Date(Date.now() + 600_000).toISOString(), new Date().toISOString(), data1.data.id).run();
+    const processing = await env.DB.prepare("SELECT status FROM ai_cartoon_report_jobs WHERE id=?").bind(data1.data.id).first();
+    expect(processing.status).toBe("processing");
+    stubImage({ data: [{ url: "https://cdn.example.com/regen.jpeg" }] });
+    const r2 = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "monthly", force: true }), env, actor);
+    expect(r2!.status).toBe(200);
+    const data2 = await r2!.json();
+    expect(data2.data.id).toBe(data1.data.id);
+    expect(data2.data.status).toBe("pending");
+    const after = await env.DB.prepare("SELECT status, started_at, completed_at, image_url FROM ai_cartoon_report_jobs WHERE id=?").bind(data1.data.id).first();
+    expect(after.status).toBe("pending");
+    expect(after.started_at).toBeNull();
+    expect(after.completed_at).toBeNull();
+    expect(after.image_url).toBeNull();
+    await processCartoonReportJobs(env, { maxJobs: 1 } as any);
+    const get = await safe(handleParentRoutes, `/parent/ai-service/cartoon-report/${data1.data.id}`, "GET", makeRequest("GET", `/parent/ai-service/cartoon-report/${data1.data.id}`), env, actor);
+    const completed = await get!.json();
+    expect(completed.data.status).toBe("completed");
+    expect(completed.data.imageUrl).toBe("https://cdn.example.com/regen.jpeg");
+  });
   it("old manual AI refresh and queue endpoints are unavailable", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
     for (const [path, method] of [

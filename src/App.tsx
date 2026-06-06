@@ -81,7 +81,7 @@ function App() {
   return (
     <AppShell>
       {me.role === "admin" && <AdminApp me={me} refresh={loadMe} />}
-      {me.role === "parent" && <ParentApp me={me} refresh={loadMe} />}
+      {(me.role === "parent" || me.role === "parent_delegate") && <ParentApp me={me} refresh={loadMe} />}
       {me.role === "child" && <ChildApp me={me} refresh={loadMe} />}
     </AppShell>
   );

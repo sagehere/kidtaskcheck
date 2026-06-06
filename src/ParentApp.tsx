@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ParentDelegate } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, formatSource, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -20,6 +20,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [achievements, setAchievements] = useState<any[]>([]);
   const [feedbackTemplates, setFeedbackTemplates] = useState<FeedbackTemplate[]>([]);
+  const [delegates, setDelegates] = useState<ParentDelegate[]>([]);
   const [dashboard, setDashboard] = useState<any>({ children: [], pendingSubmissions: [], pendingRedemptions: [] });
   const [activeTab, setActiveTab] = useState<"pending" | "children" | "settings">("pending");
   const [ledgerChild, setLedgerChild] = useState<{ id: string; display_name: string } | null>(null);
@@ -43,7 +44,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [cartoonReportGenerating, setCartoonReportGenerating] = useState<"" | "weekly" | "monthly">("");
   const [cartoonReportResult, setCartoonReportResult] = useState<(CartoonReportResponse & { title: string }) | null>(null);
   const [aiConfigLoaded, setAiConfigLoaded] = useState(false);
-  const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "", operatorLabel: me.role === "child" ? "" : me.operatorLabel || "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const resetTapCount = useRef(0);
@@ -127,13 +128,14 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     loadLockRef.current = true;
     let hasError = false;
     try {
-      const [childRows, categoryRows, taskRows, rewardRows, achievementRows, feedbackRows, dash, aiRows] = await Promise.all([
+      const [childRows, categoryRows, taskRows, rewardRows, achievementRows, feedbackRows, delegateRows, dash, aiRows] = await Promise.all([
         api<Child[]>("/children").catch(() => { hasError = true; return [] as Child[]; }),
         api<Category[]>("/task-categories").catch(() => { hasError = true; return [] as Category[]; }),
         api<Task[]>("/tasks").catch(() => { hasError = true; return [] as Task[]; }),
         api<Reward[]>("/rewards").catch(() => { hasError = true; return [] as Reward[]; }),
         api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
         api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; }),
+        me.role === "parent" ? api<ParentDelegate[]>("/parent/delegates").catch(() => []) : Promise.resolve([] as ParentDelegate[]),
         api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; }),
         api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ ...EMPTY_AI_DRAFT, updatedAt: "" }))
       ]);
@@ -143,6 +145,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       setRewards(rewardRows);
       setAchievements(achievementRows);
       setFeedbackTemplates(feedbackRows);
+      setDelegates(delegateRows);
       setDashboard(dash);
       storeSavedAiConfig(aiRows as ParentAiServiceStoredConfig);
       if (hasError) setError("部分数据加载失败，可点击重试");
@@ -174,6 +177,33 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     if (activeTab !== "settings" || !aiConfigLoaded || aiDraftInitializedRef.current || aiDraftDirtyRef.current) return;
     syncAiDraft(savedAiConfig);
   }, [activeTab, aiConfigLoaded, savedAiConfig.baseUrl, savedAiConfig.model, savedAiConfig.prompt, savedAiConfig.hasKey, savedAiConfig.imageBaseUrl, savedAiConfig.imageModel, savedAiConfig.imagePrompt, savedAiConfig.hasImageKey]);
+  useEffect(() => {
+    if (activeTab !== "settings") return;
+    const frame = window.requestAnimationFrame(() => {
+      document.querySelectorAll<HTMLElement>(".settings-surface > .setting-group").forEach((section, index) => {
+        const title = section.querySelector<HTMLElement>(":scope > .panel-title");
+        if (!title || title.querySelector(".settings-collapse-toggle")) return;
+        section.classList.add("is-collapsed");
+        title.classList.add("collapsible-title");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "icon settings-collapse-toggle";
+        button.setAttribute("aria-label", "展开设置区域");
+        button.setAttribute("title", "展开设置区域");
+        button.textContent = "⌄";
+        button.addEventListener("click", () => {
+          const collapsed = section.classList.toggle("is-collapsed");
+          section.classList.toggle("is-open", !collapsed);
+          button.textContent = collapsed ? "⌄" : "⌃";
+          button.setAttribute("aria-label", collapsed ? "展开设置区域" : "收起设置区域");
+          button.setAttribute("title", collapsed ? "展开设置区域" : "收起设置区域");
+        });
+        title.appendChild(button);
+        title.dataset.sectionIndex = String(index);
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, tasks.length, rewards.length, achievements.length, feedbackTemplates.length, children.length]);
   useEffect(() => {
     if (ledgerChild) void loadLedger(ledgerChild);
   }, [dashboard, ledgerChild?.id]);
@@ -287,11 +317,12 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         method: "PATCH",
         body: JSON.stringify({
           currentPassword: profileForm.currentPassword,
-          newPassword: profileForm.newPassword
+          newPassword: profileForm.newPassword,
+          operatorLabel: profileForm.operatorLabel
         })
       });
-      setProfileForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
-    }, "密码已更新");
+      setProfileForm((current) => ({ ...current, currentPassword: "", newPassword: "", confirmPassword: "" }));
+    }, profileForm.newPassword ? "密码和称谓已更新" : "称谓已更新");
   }
 
   async function applyFeedback(data: { childId: string; templateId: string }) {
@@ -309,18 +340,30 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     window.open(`/api/children/${encodeURIComponent(child.id)}/report?period=${period}`, "_blank", "noopener,noreferrer");
   }
 
-  async function generateCartoonReport(child: Child, period: "weekly" | "monthly") {
+  async function pollCartoonReport(job: CartoonReportResponse, title: string) {
+    if (!job.id || job.status === "completed" || job.status === "failed") {
+      setCartoonReportResult({ ...job, title });
+      return;
+    }
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 3000));
+      const next = await api<CartoonReportResponse>(`/parent/ai-service/cartoon-report/${job.id}`);
+      setCartoonReportResult({ ...next, title });
+      if (next.status === "completed" || next.status === "failed") return;
+    }
+  }
+
+  async function generateCartoonReport(child: Child, period: "weekly" | "monthly", retry = false) {
     setCartoonReportGenerating(period);
     setError("");
     try {
       const result = await api<CartoonReportResponse>("/parent/ai-service/cartoon-report", {
         method: "POST",
-        body: JSON.stringify({ childId: child.id, period })
+        body: JSON.stringify({ childId: child.id, period, retry })
       });
-      setCartoonReportResult({
-        ...result,
-        title: `${child.display_name} ${period === "monthly" ? "上月月报" : "上周周报"}卡通报告`
-      });
+      const title = `${child.display_name} ${period === "monthly" ? "上月月报" : "上周周报"}卡通报告`;
+      setCartoonReportResult({ ...result, title });
+      await pollCartoonReport(result, title);
     } catch (err) {
       setError(err instanceof Error ? err.message : "卡通报告生成失败");
     } finally {
@@ -359,6 +402,19 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     );
     setFeedbackChild(null);
     setFeedbackRows([]);
+  }
+
+  async function createDelegate(data: Record<string, unknown>) {
+    await run(() => api("/parent/delegates", { method: "POST", body: JSON.stringify(data) }), "协同管理账号已创建");
+  }
+
+  async function updateDelegate(delegate: ParentDelegate, data: Record<string, unknown>) {
+    await run(() => api(`/parent/delegates/${delegate.id}`, { method: "PATCH", body: JSON.stringify(data) }), "协同管理账号已更新");
+  }
+
+  async function deleteDelegate(delegate: ParentDelegate) {
+    if (!window.confirm(`确认停用协同管理账号“${delegate.display_name}”？`)) return;
+    await run(() => api(`/parent/delegates/${delegate.id}`, { method: "DELETE" }), "协同管理账号已停用");
   }
 
   const aiDraftApiKeyValue = draftAiApiKey.trim();
@@ -431,7 +487,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       )}
 
       {activeTab === "settings" && (
-        <>
+        <div className="settings-surface">
           <section className="setting-group">
             <div className="panel-title"><Star /><h2>任务配置</h2></div>
             <div className="grid two">
@@ -461,19 +517,30 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             <FeedbackOverview items={feedbackTemplates} onUpdate={(item, data) => update(`/feedback-templates/${item.id}`, data, "条款已更新")} onDelete={(item) => remove(`/feedback-templates/${item.id}`, "条款已删除", `确认删除${item.kind === "praise" ? "表扬" : "批评"}条款「${item.title}」？历史积分记录会保留。`)} />
           </section>
           <ConfigPortPanel onImported={load} />
+          {me.role === "parent" && (
+            <DelegateManager
+              delegates={delegates}
+              onCreate={(data) => void createDelegate(data)}
+              onUpdate={(delegate, data) => void updateDelegate(delegate, data)}
+              onDelete={(delegate) => void deleteDelegate(delegate)}
+            />
+          )}
           <section className="panel setting-group">
             <div className="panel-title"><KeyRound /><h2>修改密码</h2></div>
             <form className="stack compact" onSubmit={updateProfile}>
+              <Field label="操作者称谓">
+                <input value={profileForm.operatorLabel} onChange={(e) => setProfileForm({ ...profileForm, operatorLabel: e.target.value })} placeholder={me.displayName} />
+              </Field>
               <Field label="当前密码">
-                <input value={profileForm.currentPassword} onChange={(e) => setProfileForm({ ...profileForm, currentPassword: e.target.value })} type="password" autoComplete="current-password" required />
+                <input value={profileForm.currentPassword} onChange={(e) => setProfileForm({ ...profileForm, currentPassword: e.target.value })} type="password" autoComplete="current-password" />
               </Field>
               <Field label="新密码">
-                <input value={profileForm.newPassword} onChange={(e) => setProfileForm({ ...profileForm, newPassword: e.target.value })} type="password" autoComplete="new-password" required />
+                <input value={profileForm.newPassword} onChange={(e) => setProfileForm({ ...profileForm, newPassword: e.target.value })} type="password" autoComplete="new-password" />
               </Field>
               <Field label="确认新密码">
-                <input value={profileForm.confirmPassword} onChange={(e) => setProfileForm({ ...profileForm, confirmPassword: e.target.value })} type="password" autoComplete="new-password" required />
+                <input value={profileForm.confirmPassword} onChange={(e) => setProfileForm({ ...profileForm, confirmPassword: e.target.value })} type="password" autoComplete="new-password" />
               </Field>
-              <button className="primary"><KeyRound size={18} />保存密码</button>
+              <button className="primary"><KeyRound size={18} />保存账号设置</button>
             </form>
           </section>
           <section className="panel setting-group">
@@ -654,7 +721,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               </div>
             </div>
           </section>
-        </>
+        </div>
       )}
       {ledgerChild && <LedgerModal title={`${ledgerChild.display_name} 的积分清单`} rows={ledger} onClose={() => setLedgerChild(null)} />}
       {refundChild && (
@@ -686,6 +753,10 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       {cartoonReportResult && (
         <CartoonReportDialog
           result={cartoonReportResult}
+          onRetry={(result) => {
+            const child = children.find((item) => item.id === result.childId);
+            if (child && result.period) void generateCartoonReport(child, result.period, true);
+          }}
           onClose={() => setCartoonReportResult(null)}
         />
       )}
@@ -839,7 +910,7 @@ export function LedgerList({ rows }: { rows: LedgerRow[] }) {
         <article className="row" key={row.id}>
           <div>
             <strong className={row.amount >= 0 ? "positive" : "negative"}>{row.amount >= 0 ? "+" : ""}{row.amount}</strong>
-            <span>{row.sourceLabel || row.note || formatSource(row.source_type)} · {row.localCreatedAt || formatTime(row.created_at)}</span>
+            <span>{[row.sourceLabel || row.note || formatSource(row.source_type), row.actorLabel ? `操作者：${row.actorLabel}` : "", row.localCreatedAt || formatTime(row.created_at)].filter(Boolean).join(" · ")}</span>
           </div>
           <span>{row.sourceTypeLabel || formatSource(row.source_type)}</span>
         </article>
@@ -973,7 +1044,8 @@ export function ReportDialog({ child, onPrint, onReport, onCartoonReport, genera
   );
 }
 
-export function CartoonReportDialog({ result, onClose }: { result: CartoonReportResponse & { title: string }; onClose: () => void }) {
+export function CartoonReportDialog({ result, onRetry, onClose }: { result: CartoonReportResponse & { title: string }; onRetry: (result: CartoonReportResponse & { title: string }) => void; onClose: () => void }) {
+  const working = result.status === "pending" || result.status === "processing" || (!result.status && !result.imageUrl);
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <section className="panel refund-modal cartoon-report-modal">
@@ -982,11 +1054,16 @@ export function CartoonReportDialog({ result, onClose }: { result: CartoonReport
           <h2>{result.title}</h2>
           <button type="button" className="secondary" onClick={onClose}>关闭</button>
         </div>
-        <img className="cartoon-report-image" src={result.imageUrl} alt={result.title} />
+        {working && <div className="info">卡通报告正在生成，完成后会自动显示。</div>}
+        {result.status === "failed" && <div className="error">{result.lastError || "卡通报告生成失败，请稍后重试"}</div>}
+        {result.imageUrl && <img className="cartoon-report-image" src={result.imageUrl} alt={result.title} />}
         <div className="actions">
-          <a className="primary download-link" href={result.imageUrl} download={result.filename}>
-            <Download size={18} />下载图片
-          </a>
+          {result.imageUrl && (
+            <a className="primary download-link" href={result.imageUrl} download={result.filename}>
+              <Download size={18} />下载图片
+            </a>
+          )}
+          {result.status === "failed" && <button type="button" className="primary" onClick={() => onRetry(result)}><Sparkles size={18} />重试生成</button>}
           <button type="button" className="secondary" onClick={onClose}>完成</button>
         </div>
       </section>
@@ -1224,6 +1301,107 @@ export function EditFeedbackForm({ item, onSave, onCancel }: { item: FeedbackTem
   );
 }
 
+export function DelegateManager({ delegates, onCreate, onUpdate, onDelete }: { delegates: ParentDelegate[]; onCreate: (data: Record<string, unknown>) => void; onUpdate: (delegate: ParentDelegate, data: Record<string, unknown>) => void; onDelete: (delegate: ParentDelegate) => void }) {
+  const [form, setForm] = useState({ username: "", displayName: "", operatorLabel: "", password: "" });
+  const [editId, setEditId] = useState("");
+  const [edit, setEdit] = useState({ displayName: "", operatorLabel: "", password: "", status: "active" });
+  function resetForm() {
+    setForm({ username: "", displayName: "", operatorLabel: "", password: "" });
+  }
+  return (
+    <section className="panel setting-group">
+      <div className="panel-title"><Users /><h2>协同管理账号</h2></div>
+      <form className="stack compact" onSubmit={(event) => {
+        event.preventDefault();
+        onCreate({
+          username: form.username,
+          displayName: form.displayName || form.username,
+          operatorLabel: form.operatorLabel || form.displayName || form.username,
+          password: form.password || "123456"
+        });
+        resetForm();
+      }}>
+        <div className="grid two compact-fields">
+          <Field label="账号">
+            <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
+          </Field>
+          <Field label="显示名">
+            <input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} placeholder="例如：爸爸" />
+          </Field>
+        </div>
+        <div className="grid two compact-fields">
+          <Field label="操作者称谓">
+            <input value={form.operatorLabel} onChange={(e) => setForm({ ...form, operatorLabel: e.target.value })} placeholder="例如：妈妈" />
+          </Field>
+          <Field label="初始密码">
+            <input value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} type="password" placeholder="默认 123456" autoComplete="new-password" />
+          </Field>
+        </div>
+        <button className="primary"><Plus size={18} />新增协同账号</button>
+      </form>
+      <div className="list">
+        {delegates.length ? delegates.map((delegate) => {
+          const editing = editId === delegate.id;
+          return (
+            <article className="row delegate-row" key={delegate.id}>
+              {editing ? (
+                <form className="stack compact delegate-edit" onSubmit={(event) => {
+                  event.preventDefault();
+                  onUpdate(delegate, {
+                    displayName: edit.displayName,
+                    operatorLabel: edit.operatorLabel,
+                    password: edit.password || undefined,
+                    status: edit.status
+                  });
+                  setEditId("");
+                }}>
+                  <div className="grid two compact-fields">
+                    <Field label="显示名">
+                      <input value={edit.displayName} onChange={(e) => setEdit({ ...edit, displayName: e.target.value })} />
+                    </Field>
+                    <Field label="称谓">
+                      <input value={edit.operatorLabel} onChange={(e) => setEdit({ ...edit, operatorLabel: e.target.value })} />
+                    </Field>
+                  </div>
+                  <div className="grid two compact-fields">
+                    <Field label="状态">
+                      <select value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>
+                        <option value="active">启用</option>
+                        <option value="disabled">停用</option>
+                      </select>
+                    </Field>
+                    <Field label="重置密码">
+                      <input value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} type="password" placeholder="留空不修改" autoComplete="new-password" />
+                    </Field>
+                  </div>
+                  <div className="actions">
+                    <button className="primary"><Check size={18} />保存</button>
+                    <button type="button" className="secondary" onClick={() => setEditId("")}>取消</button>
+                  </div>
+                </form>
+              ) : (
+                <>
+                  <div>
+                    <strong>{delegate.display_name}</strong>
+                    <span>{delegate.username} · {delegate.operator_label || delegate.display_name} · {delegate.status === "active" ? "启用" : "停用"}</span>
+                  </div>
+                  <div className="actions">
+                    <button type="button" className="secondary" onClick={() => {
+                      setEditId(delegate.id);
+                      setEdit({ displayName: delegate.display_name, operatorLabel: delegate.operator_label || delegate.display_name, password: "", status: delegate.status });
+                    }}><Edit3 size={16} />编辑</button>
+                    <button type="button" className="danger" onClick={() => onDelete(delegate)}><Trash2 size={16} />停用</button>
+                  </div>
+                </>
+              )}
+            </article>
+          );
+        }) : <Empty text="暂无协同管理账号" />}
+      </div>
+    </section>
+  );
+}
+
 export function ConfigPortPanel({ onImported }: { onImported: () => Promise<void> }) {
   const [summary, setSummary] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1247,8 +1425,12 @@ export function ConfigPortPanel({ onImported }: { onImported: () => Promise<void
     try {
       const raw = await file.text();
       const data = JSON.parse(raw);
-      const stats = await api<Record<string, { created: number; skipped: number }>>("/config/import", { method: "POST", body: JSON.stringify(data) });
-      setSummary(Object.entries(stats).map(([key, value]) => `${key}: 新增 ${value.created}，跳过 ${value.skipped}`).join("；"));
+      const stats = await api<Record<string, { created: number; skipped: number } | number>>("/config/import", { method: "POST", body: JSON.stringify(data) });
+      const lines = Object.entries(stats)
+        .filter(([, value]) => typeof value === "object")
+        .map(([key, value]) => `${key}: 新增 ${(value as any).created}，跳过 ${(value as any).skipped}`);
+      if (Number((stats as any).ignoredAssignments || 0) > 0) lines.push(`忽略不存在孩子指派 ${(stats as any).ignoredAssignments} 个`);
+      setSummary(lines.join("；"));
       await onImported();
     } catch (err) {
       setError(err instanceof SyntaxError ? "配置文件格式不正确，请检查 JSON 格式" : err instanceof Error ? err.message : "导入失败");

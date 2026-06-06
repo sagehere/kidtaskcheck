@@ -12,7 +12,7 @@ function LedgerList({ rows }: { rows: LedgerRow[] }) {
         <article className="row" key={row.id}>
           <div>
             <strong className={row.amount >= 0 ? "positive" : "negative"}>{row.amount >= 0 ? "+" : ""}{row.amount}</strong>
-            <span>{row.sourceLabel || row.note || formatSource(row.source_type)} · {row.localCreatedAt || formatTime(row.created_at)}</span>
+            <span>{[row.sourceLabel || row.note || formatSource(row.source_type), row.actorLabel ? `操作者：${row.actorLabel}` : "", row.localCreatedAt || formatTime(row.created_at)].filter(Boolean).join(" · ")}</span>
           </div>
           <span>{row.sourceTypeLabel || formatSource(row.source_type)}</span>
         </article>
@@ -46,6 +46,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [warehouse, setWarehouse] = useState<WarehouseItem[]>([]);
   const [summary, setSummary] = useState<ChildDashboardSummary>({ balance: 0, aiGreeting: "", aiRefreshPending: false, child: null });
   const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [achievementTipId, setAchievementTipId] = useState("");
   const [, setTick] = useState(0);
   const loadSummaryLockRef = useRef(false);
   const loadDashLockRef = useRef(false);
@@ -284,10 +285,12 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         <div className="panel-title"><Award /><h2>成就墙</h2></div>
         <div className="cards scroll-list">
           {dash.achievements.length ? dash.achievements.map((item: any) => (
-            <article className="achievement" key={item.id}>
+            <article className="achievement achievement-title-only" key={item.id}>
+              <button type="button" className="achievement-trigger" onClick={() => setAchievementTipId((current) => current === item.id ? "" : item.id)}>
               {icon(item.icon_type, item.icon_value, item.title)}
               <strong>{item.title}</strong>
-              <span>{item.description || "已解锁"}</span>
+              </button>
+              {achievementTipId === item.id && <span className="achievement-tooltip">{item.description || "已解锁"}</span>}
             </article>
           )) : <Empty text="完成任务后会解锁称号" />}
         </div>

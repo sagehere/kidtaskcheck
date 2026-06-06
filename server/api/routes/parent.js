@@ -1,29 +1,102 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema } from "../utils.js";
-import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, generateCartoonReportImage, previousCompletedReportRange, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels } from "../ai/index.js";
+﻿import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit } from "../utils.js";
+import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs } from "../ai/index.js";
 
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
         const a = requireRole(actor, ["parent"]);
         const input = await body(request);
-        const currentPassword = String(input.currentPassword || "");
-        if (!currentPassword)
-            return fail("BAD_REQUEST", "请输入当前密码");
         const parent = await env.DB.prepare("SELECT * FROM users WHERE id=? AND role='parent' AND status='active' AND deleted_at IS NULL").bind(a.id).first();
         if (!parent)
             return fail("NOT_FOUND", "家长账号不存在", 404);
-        if (!(await verifyPassword(currentPassword, parent.password_hash)))
-            return fail("BAD_CREDENTIALS", "当前密码不正确", 401);
+        const operatorLabel = input.operatorLabel !== undefined ? String(input.operatorLabel || "").trim().slice(0, 50) : parent.operator_label || "";
         const newPassword = String(input.newPassword || "");
-        if (!newPassword)
-            return fail("BAD_REQUEST", "请输入新密码");
-        const passwordHash = await hashPassword(newPassword);
-        await env.DB.prepare("UPDATE users SET password_hash=?, updated_at=? WHERE id=? AND role='parent'")
-            .bind(passwordHash, nowIso(), a.id).run();
+        if (newPassword) {
+            const currentPassword = String(input.currentPassword || "");
+            if (!currentPassword)
+                return fail("BAD_REQUEST", "请输入当前密码");
+            if (!(await verifyPassword(currentPassword, parent.password_hash)))
+                return fail("BAD_CREDENTIALS", "当前密码不正确", 401);
+            const passwordHash = await hashPassword(newPassword);
+            await env.DB.prepare("UPDATE users SET password_hash=?, operator_label=?, updated_at=? WHERE id=? AND role='parent'")
+                .bind(passwordHash, operatorLabel, nowIso(), a.id).run();
+            return ok(true);
+        }
+        await env.DB.prepare("UPDATE users SET operator_label=?, updated_at=? WHERE id=? AND role='parent'")
+            .bind(operatorLabel, nowIso(), a.id).run();
+        return ok(true);
+    }
+    if (path === "/parent/delegates" && method === "GET") {
+        const a = requireRole(actor, ["parent"]);
+        await ensureParentDelegatesSchema(env);
+        return ok((await env.DB.prepare("SELECT id, username, display_name, operator_label, status, created_at, updated_at FROM parent_delegates WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC")
+            .bind(a.id)
+            .all()).results);
+    }
+    if (path === "/parent/delegates" && method === "POST") {
+        const a = requireRole(actor, ["parent"]);
+        await ensureParentDelegatesSchema(env);
+        const input = await body(request);
+        const username = String(input.username || "").trim();
+        const displayName = String(input.displayName || input.display_name || username).trim();
+        const password = String(input.password || "123456");
+        const operatorLabel = String(input.operatorLabel || input.operator_label || displayName).trim().slice(0, 50);
+        const err = validateInput(username, INPUT_RULES.username, "账号") || validateInput(displayName, INPUT_RULES.displayName, "显示名");
+        if (err) return fail("BAD_REQUEST", err, 400);
+        if (await usernameExists(env, username))
+            return fail("USERNAME_EXISTS", "账号已存在，请换一个用户名", 409);
+        await env.DB.prepare("INSERT INTO parent_delegates (id, parent_id, username, password_hash, display_name, operator_label, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)")
+            .bind(id(), a.id, username, await hashPassword(password), displayName || username, operatorLabel, nowIso(), nowIso())
+            .run();
+        return ok(true);
+    }
+    const delegatePatch = path.match(/^\/parent\/delegates\/([^/]+)$/);
+    if (delegatePatch && method === "PATCH") {
+        const a = requireRole(actor, ["parent"]);
+        await ensureParentDelegatesSchema(env);
+        const input = await body(request);
+        const delegate = await env.DB.prepare("SELECT * FROM parent_delegates WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(delegatePatch[1], a.id).first();
+        if (!delegate)
+            return fail("NOT_FOUND", "协同管理账号不存在", 404);
+        const updates = [];
+        const params = [];
+        if (input.displayName !== undefined || input.display_name !== undefined) {
+            const displayName = String(input.displayName ?? input.display_name ?? "").trim();
+            const err = validateInput(displayName, INPUT_RULES.displayName, "显示名");
+            if (err) return fail("BAD_REQUEST", err, 400);
+            updates.push("display_name=?");
+            params.push(displayName || delegate.username);
+        }
+        if (input.operatorLabel !== undefined || input.operator_label !== undefined) {
+            updates.push("operator_label=?");
+            params.push(String(input.operatorLabel ?? input.operator_label ?? "").trim().slice(0, 50));
+        }
+        if (input.status !== undefined) {
+            const statusErr = validateEnum(input.status, ["active", "disabled"], "状态");
+            if (statusErr) return fail("BAD_REQUEST", statusErr, 400);
+            updates.push("status=?");
+            params.push(input.status);
+        }
+        if (input.password) {
+            updates.push("password_hash=?");
+            params.push(await hashPassword(input.password));
+        }
+        if (!updates.length)
+            return ok(true);
+        params.push(nowIso(), delegatePatch[1], a.id);
+        await env.DB.prepare(`UPDATE parent_delegates SET ${updates.join(", ")}, updated_at=? WHERE id=? AND parent_id=?`).bind(...params).run();
+        return ok(true);
+    }
+    if (delegatePatch && method === "DELETE") {
+        const a = requireRole(actor, ["parent"]);
+        await ensureParentDelegatesSchema(env);
+        await env.DB.prepare("UPDATE parent_delegates SET status='disabled', deleted_at=?, updated_at=? WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(nowIso(), nowIso(), delegatePatch[1], a.id)
+            .run();
         return ok(true);
     }
     if (path === "/parent/ai-service" && method === "GET") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const config = await getParentAiServiceConfig(env, a.id);
         return ok({
             baseUrl: config.baseUrl,
@@ -44,7 +117,7 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
         });
     }
     if (path === "/parent/ai-service" && method === "PATCH") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const current = await getParentAiServiceConfig(env, a.id);
         const nextBaseUrl = input.baseUrl !== undefined ? String(input.baseUrl).trim().replace(/\/+$/, "") : current.baseUrl;
@@ -85,7 +158,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
         return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, reportPrompt: nextReportPrompt, monthlyPrompt: nextMonthlyPrompt, imageBaseUrl: nextImageBaseUrl, imageModel: nextImageModel, imagePrompt: nextImagePrompt, imageSize: nextImageSize, imageQuality: nextImageQuality, imageFormat: nextImageFormat, imageN: nextImageN, hasKey: !!nextApiKey, hasImageKey: !!nextImageApiKey, updatedAt });
     }
     if (path === "/parent/ai-service/models" && method === "POST") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const current = await getParentAiServiceConfig(env, a.id);
         const baseUrl = String(input.baseUrl || current.baseUrl || "").replace(/\/+$/, "");
@@ -131,7 +204,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
         }
     }
     if (path === "/parent/ai-service/test" && method === "POST") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const current = await getParentAiServiceConfig(env, a.id);
         const baseUrl = String(input.baseUrl || current.baseUrl || "").replace(/\/+$/, "");
@@ -154,7 +227,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
         }
     }
     if (path === "/parent/ai-service/preview" && method === "POST") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const type = String(input.type || "");
         if (!["greeting", "weeklyReport", "monthlyReport"].includes(type))
@@ -181,7 +254,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
         return ok({ text });
     }
     if (path === "/parent/ai-service/cartoon-report" && method === "POST") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const period = String(input.period || "") === "monthly" ? "monthly" : String(input.period || "") === "weekly" ? "weekly" : "";
         if (!period)
@@ -201,20 +274,26 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             return fail("BAD_REQUEST", imageUrlErr, 400);
         const offset = await timezoneOffsetMinutes(env);
         const range = previousCompletedReportRange(period, nowIso(), offset);
-        try {
-            const result = await generateCartoonReportImage(env, child, period, range);
-            return ok(result);
-        } catch (error) {
-            const code = error?.code || error?.message || "";
-            if (String(code).includes("CONFIG") || String(code).includes("config") || String(code).includes("ai_image_config"))
-                return fail("BAD_REQUEST", "请先完整保存卡通报告绘图配置", 400);
-            if (String(code).includes("TIMEOUT") || String(code).includes("NETWORK") || String(code).includes("SERVICE") || String(code).includes("RATE"))
-                return fail("AI_SERVICE_ERROR", "卡通报告生成失败，请稍后重试", 502);
-            return fail("AI_SERVICE_ERROR", "AI 未返回可用图片", 502);
-        }
+        const job = await enqueueCartoonReportJob(env, {
+            parentId: a.id,
+            childId: child.id,
+            periodType: period,
+            periodKey: range.label,
+            resetFailed: !!input.retry
+        });
+        ctx?.waitUntil?.(processCartoonReportJobs(env, { maxJobs: 1 }));
+        return ok(publicCartoonJob(job));
+    }
+    const cartoonReportJob = path.match(/^\/parent\/ai-service\/cartoon-report\/([^/]+)$/);
+    if (cartoonReportJob && method === "GET") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const job = await loadCartoonReportJob(env, a.id, cartoonReportJob[1]);
+        if (!job)
+            return fail("NOT_FOUND", "卡通报告任务不存在", 404);
+        return ok(publicCartoonJob(job));
     }
     if (path === "/children") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         if (method === "GET")
             return ok((await env.DB.prepare("SELECT id, username, display_name, status, ai_enabled, gender, birth_date FROM children WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC").bind(a.id).all()).results);
         const input = await body(request);
@@ -232,7 +311,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
     }
     const childPatch = path.match(/^\/children\/([^/]+)$/);
     if (childPatch && method === "PATCH") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const child = await env.DB.prepare("SELECT id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(childPatch[1], a.id).first();
         if (!child)
@@ -280,7 +359,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
         return ok(true);
     }
     if (childPatch && method === "DELETE") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         await env.DB.prepare("UPDATE children SET deleted_at=?, status='disabled', updated_at=? WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(nowIso(), nowIso(), childPatch[1], a.id)
             .run();
@@ -288,7 +367,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
     }
     const childExport = path.match(/^\/children\/([^/]+)\/export-print$/);
     if (childExport && method === "GET") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const child = await env.DB.prepare("SELECT id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(childExport[1], a.id)
             .first();
@@ -312,7 +391,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
     }
     const childReport = path.match(/^\/children\/([^/]+)\/report$/);
     if (childReport && method === "GET") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const child = await env.DB.prepare("SELECT id, display_name, ai_enabled, gender, birth_date, parent_id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(childReport[1], a.id)
             .first();
@@ -383,7 +462,7 @@ ORDER BY ca.unlocked_at DESC`).bind(child.id, a.id, range.start, range.end).all(
     }
     const childWarehouse = path.match(/^\/children\/([^/]+)\/warehouse$/);
     if (childWarehouse && method === "GET") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const child = await env.DB.prepare("SELECT id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(childWarehouse[1], a.id).first();
         if (!child)
             return fail("NOT_FOUND", "孩子账号不存在", 404);
@@ -394,7 +473,7 @@ ORDER BY rr.requested_at DESC`).bind(child.id, a.id).all()).results);
     }
     const feedbackEvent = path.match(/^\/children\/([^/]+)\/feedback-events$/);
     if (feedbackEvent && method === "GET") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const child = await env.DB.prepare("SELECT id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(feedbackEvent[1], a.id)
             .first();
@@ -413,7 +492,8 @@ ORDER BY pl.created_at DESC`)
         return ok(rows.map((row) => ({ ...row, localCreatedAt: localTimeText(row.created_at, offset) })));
     }
     if (feedbackEvent && method === "POST") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const audit = actorAudit(a);
         const input = await body(request);
         const child = await env.DB.prepare("SELECT id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(feedbackEvent[1], a.id)
@@ -430,15 +510,16 @@ ORDER BY pl.created_at DESC`)
         const amount = template.kind === "praise" ? points : -points;
         const label = template.kind === "praise" ? "表扬" : "批评";
         const note = template.description ? `${template.title}：${template.description}` : template.title;
-        await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)")
-            .bind(ledgerId, child.id, a.id, amount, template.kind, template.id, note)
+        await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)")
+            .bind(ledgerId, child.id, a.id, amount, template.kind, template.id, note, audit.type, audit.id, audit.label)
             .run();
         await recalcAchievements(env, a.id, child.id);
         await notify(env, {
             recipientType: "child",
             recipientId: child.id,
-            actorType: "user",
-            actorId: a.id,
+            actorType: audit.type,
+            actorId: audit.id || a.id,
+            actorLabel: audit.label,
             title: `收到一条${label}`,
             body: `${note}，${amount >= 0 ? "增加" : "扣除"} ${points} 积分。`,
             eventType: template.kind,
@@ -449,7 +530,7 @@ ORDER BY pl.created_at DESC`)
         return ok(true);
     }
     if (path === "/feedback-templates") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         if (method === "GET")
             return ok((await env.DB.prepare("SELECT * FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(a.id).all()).results);
         const input = await body(request);
@@ -463,7 +544,7 @@ ORDER BY pl.created_at DESC`)
     }
     const feedbackPatch = path.match(/^\/feedback-templates\/([^/]+)$/);
     if (feedbackPatch && method === "PATCH") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const kind = input.kind === "criticism" ? "criticism" : "praise";
         const found = await env.DB.prepare("SELECT id FROM feedback_templates WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(feedbackPatch[1], a.id).first();
@@ -475,7 +556,7 @@ ORDER BY pl.created_at DESC`)
         return ok(true);
     }
     if (feedbackPatch && method === "DELETE") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const found = await env.DB.prepare("SELECT id FROM feedback_templates WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(feedbackPatch[1], a.id).first();
         if (!found)
             return fail("NOT_FOUND", "表扬或批评条款不存在", 404);
@@ -485,7 +566,7 @@ ORDER BY pl.created_at DESC`)
         return ok(true);
     }
     if (path === "/task-categories") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         if (method === "GET") {
             return ok((await env.DB.prepare("SELECT * FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL)) OR owner_id=?) ORDER BY is_system DESC, created_at DESC").bind(a.id, a.id).all()).results);
         }
@@ -499,7 +580,7 @@ ORDER BY pl.created_at DESC`)
     }
     const categoryPatch = path.match(/^\/task-categories\/([^/]+)$/);
     if (categoryPatch && method === "PATCH") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const category = await env.DB.prepare("SELECT * FROM task_categories WHERE id=? AND is_active=1 AND (owner_id=? OR is_system=1)")
             .bind(categoryPatch[1], a.id)
@@ -524,7 +605,7 @@ ORDER BY pl.created_at DESC`)
         return ok(true);
     }
     if (categoryPatch && method === "DELETE") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const category = await env.DB.prepare("SELECT * FROM task_categories WHERE id=? AND is_active=1 AND (owner_id=? OR is_system=1)")
             .bind(categoryPatch[1], a.id)
             .first();
@@ -564,7 +645,7 @@ ORDER BY pl.created_at DESC`)
         return ok(true);
     }
     if (path === "/tasks") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         if (method === "GET")
             return ok(await listWithAssignees(env, "tasks", a.id));
         const input = await body(request);
@@ -585,7 +666,7 @@ ORDER BY pl.created_at DESC`)
     }
     const taskPatch = path.match(/^\/tasks\/([^/]+)$/);
     if (taskPatch && method === "PATCH") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const task = await env.DB.prepare("SELECT id FROM tasks WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(taskPatch[1], a.id)
@@ -605,7 +686,7 @@ ORDER BY pl.created_at DESC`)
         return ok(true);
     }
     if (taskPatch && method === "DELETE") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const task = await env.DB.prepare("SELECT id FROM tasks WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(taskPatch[1], a.id)
             .first();
@@ -617,7 +698,7 @@ ORDER BY pl.created_at DESC`)
         return ok(true);
     }
     if (path === "/rewards") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         if (method === "GET")
             return ok(await listWithAssignees(env, "rewards", a.id));
         const input = await body(request);
@@ -649,7 +730,7 @@ ORDER BY pl.created_at DESC`)
     }
     const rewardPatch = path.match(/^\/rewards\/([^/]+)$/);
     if (rewardPatch && method === "PATCH") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         await ensureRewardOnceSchema(env);
         const reward = await env.DB.prepare("SELECT id FROM rewards WHERE id=? AND parent_id=? AND deleted_at IS NULL")
@@ -674,7 +755,7 @@ ORDER BY pl.created_at DESC`)
         return ok(true);
     }
     if (rewardPatch && method === "DELETE") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         await ensureRewardOnceSchema(env);
         const reward = await env.DB.prepare("SELECT id FROM rewards WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(rewardPatch[1], a.id)
@@ -687,7 +768,7 @@ ORDER BY pl.created_at DESC`)
         return ok(true);
     }
     if (path === "/achievements") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         if (method === "GET")
             return ok((await env.DB.prepare("SELECT * FROM achievements WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC").bind(a.id).all()).results);
         const input = await body(request);
@@ -706,7 +787,7 @@ ORDER BY pl.created_at DESC`)
     }
     const achievementPatch = path.match(/^\/achievements\/([^/]+)$/);
     if (achievementPatch && method === "PATCH") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const achievement = await env.DB.prepare("SELECT id FROM achievements WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(achievementPatch[1], a.id)
@@ -725,7 +806,7 @@ WHERE id=?`)
         return ok(true);
     }
     if (achievementPatch && method === "DELETE") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
         const result = await deleteAchievementWithExclusiveReward(env, a.id, achievementPatch[1]);
         if (!result)
             return fail("NOT_FOUND", "成就称号不存在", 404);
@@ -733,7 +814,8 @@ WHERE id=?`)
     }
     const review = path.match(/^\/task-submissions\/([^/]+)\/review$/);
     if (review && method === "PATCH") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const audit = actorAudit(a);
         const input = await body(request);
         const sub = await env.DB.prepare("SELECT s.*, t.point_type, t.points FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.id=? AND s.parent_id=? AND s.status='pending'")
             .bind(review[1], a.id)
@@ -748,8 +830,8 @@ WHERE id=?`)
         }
         const stmts = [env.DB.prepare("UPDATE task_submissions SET status=?, reviewed_at=?, review_note=? WHERE id=?").bind(status, nowIso(), input.note || "", sub.id)];
         if (status === "approved") {
-            stmts.push(env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note) VALUES (?, ?, ?, ?, 'task', ?, ?, ?)")
-                .bind(id(), sub.child_id, a.id, signedPoints(sub.point_type, Number(sub.points)), sub.id, sub.period_key, "任务审核通过"));
+            stmts.push(env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)")
+                .bind(id(), sub.child_id, a.id, signedPoints(sub.point_type, Number(sub.points)), sub.id, sub.period_key, "任务审核通过", audit.type, audit.id, audit.label));
         }
         stmts.push(env.DB.prepare("UPDATE notifications SET read_at=? WHERE recipient_type='user' AND recipient_id=? AND related_type='task_submission' AND related_id=? AND read_at IS NULL")
             .bind(nowIso(), a.id, sub.id));
@@ -760,8 +842,9 @@ WHERE id=?`)
         await notify(env, {
             recipientType: "child",
             recipientId: sub.child_id,
-            actorType: "user",
-            actorId: a.id,
+            actorType: audit.type,
+            actorId: audit.id || a.id,
+            actorLabel: audit.label,
             title: status === "approved" ? "任务审核通过" : "任务被驳回",
             body: status === "approved" ? "家长已通过你的任务，积分已结算。" : input.note || "家长驳回了这次任务提交。",
             eventType: status === "approved" ? "task_approved" : "task_rejected",
@@ -772,7 +855,8 @@ WHERE id=?`)
     }
     const redemptionAction = path.match(/^\/reward-redemptions\/([^/]+)\/(redeem|cancel)$/);
     if (redemptionAction && method === "PATCH") {
-        const a = requireRole(actor, ["parent"]);
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const audit = actorAudit(a);
         const redemption = await env.DB.prepare("SELECT rr.*, r.cost_points, r.redeem_weekdays FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id WHERE rr.id=? AND rr.parent_id=? AND rr.status='pending'")
             .bind(redemptionAction[1], a.id)
             .first();
@@ -791,16 +875,17 @@ WHERE id=?`)
             const cancelLedgerId = id();
             await env.DB.batch([
                 env.DB.prepare("UPDATE reward_redemptions SET status='cancelled', cancelled_at=? WHERE id=?").bind(nowIso(), redemption.id),
-                env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note) VALUES (?, ?, ?, ?, 'reward_cancel', ?, ?, ?)")
-                    .bind(cancelLedgerId, redemption.child_id, a.id, Number(redemption.cost_points), redemption.id, redemption.period_key, "取消兑换退回")
+                env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'reward_cancel', ?, ?, ?, ?, ?, ?)")
+                    .bind(cancelLedgerId, redemption.child_id, a.id, Number(redemption.cost_points), redemption.id, redemption.period_key, "取消兑换退回", audit.type, audit.id, audit.label)
             ]);
             await recalcAchievements(env, a.id, redemption.child_id);
         }
         await notify(env, {
             recipientType: "child",
             recipientId: redemption.child_id,
-            actorType: "user",
-            actorId: a.id,
+            actorType: audit.type,
+            actorId: audit.id || a.id,
+            actorLabel: audit.label,
             title: redemptionAction[2] === "redeem" ? "奖励已核销" : "奖励兑换已取消",
             body: redemptionAction[2] === "redeem" ? "家长已核销你的奖励兑换。" : "家长取消了奖励兑换，积分已退回。",
             eventType: redemptionAction[2] === "redeem" ? "reward_redeemed" : "reward_cancelled",

@@ -146,7 +146,30 @@ export async function ensureNotificationsSchema(env) {
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`).run();
     await ensureColumn(env, "notifications", "requires_ack", "requires_ack INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "notifications", "actor_label_snapshot", "actor_label_snapshot TEXT NOT NULL DEFAULT ''");
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_type, recipient_id, read_at, created_at)").run();
+}
+export async function ensureParentDelegatesSchema(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS parent_delegates (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  operator_label TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+  deleted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`).run();
+    await ensureColumn(env, "users", "operator_label", "operator_label TEXT NOT NULL DEFAULT ''");
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_parent_delegates_parent ON parent_delegates(parent_id, status, deleted_at)").run();
+}
+export async function ensureOperatorAuditSchema(env) {
+    await ensureColumn(env, "point_ledger", "actor_type", "actor_type TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "point_ledger", "actor_id", "actor_id TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "point_ledger", "actor_label_snapshot", "actor_label_snapshot TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "notifications", "actor_label_snapshot", "actor_label_snapshot TEXT NOT NULL DEFAULT ''");
 }
 export async function ensureSystemSettings(env) {
     await env.DB.prepare("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('timezone_offset_minutes', ?)").bind(String(DEFAULT_TIMEZONE_OFFSET_MINUTES)).run();
@@ -161,6 +184,8 @@ export async function ensureSystemSettings(env) {
   generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (child_id, previous_week_key, config_hash)
 )`).run();
+    await ensureParentDelegatesSchema(env);
+    await ensureOperatorAuditSchema(env);
     await ensureParentAiServiceSettings(env);
 }
 export async function ensureParentAiServiceSettings(env) {
@@ -574,10 +599,31 @@ export async function actorFromRequest(request, env) {
             ? { type: "child", id: child.id, role: "child", parentId: child.parent_id, parent_id: child.parent_id, username: child.username, displayName: child.display_name }
             : null;
     }
-    const user = await env.DB.prepare("SELECT id, role, username, display_name FROM users WHERE id=? AND status='active' AND deleted_at IS NULL")
+    if (session.actor_type === "user" && String(session.actor_id || "").startsWith("delegate:")) {
+        await ensureParentDelegatesSchema(env);
+        const delegateId = String(session.actor_id).slice("delegate:".length);
+        const delegate = await env.DB.prepare(`SELECT d.id, d.parent_id, d.username, d.display_name, d.operator_label, u.display_name parent_display_name
+FROM parent_delegates d
+JOIN users u ON u.id=d.parent_id
+WHERE d.id=? AND d.status='active' AND d.deleted_at IS NULL AND u.status='active' AND u.deleted_at IS NULL`)
+            .bind(delegateId)
+            .first();
+        return delegate ? {
+            type: "user",
+            id: delegate.parent_id,
+            delegateId: delegate.id,
+            role: "parent_delegate",
+            parentId: delegate.parent_id,
+            parent_id: delegate.parent_id,
+            username: delegate.username,
+            displayName: delegate.display_name,
+            operatorLabel: delegate.operator_label || delegate.display_name || delegate.parent_display_name
+        } : null;
+    }
+    const user = await env.DB.prepare("SELECT id, role, username, display_name, operator_label FROM users WHERE id=? AND status='active' AND deleted_at IS NULL")
         .bind(session.actor_id)
         .first();
-    return user ? { type: "user", id: user.id, role: user.role, username: user.username, displayName: user.display_name } : null;
+    return user ? { type: "user", id: user.id, role: user.role, username: user.username, displayName: user.display_name, operatorLabel: user.operator_label || user.display_name } : null;
 }
 export function requireRole(actor, roles) {
     if (!actor)
@@ -585,6 +631,23 @@ export function requireRole(actor, roles) {
     if (!roles.includes(actor.role))
         throw fail("FORBIDDEN", "没有权限执行此操作", 403);
     return actor;
+}
+export function parentOwnerId(actor) {
+    return actor?.role === "parent_delegate" ? actor.parentId || actor.parent_id || actor.id : actor?.id;
+}
+export function actorAudit(actor) {
+    if (!actor)
+        return { type: "system", id: "", label: "system" };
+    if (actor.role === "parent_delegate") {
+        return { type: "user", id: `delegate:${actor.delegateId || ""}`, label: actor.operatorLabel || actor.displayName || "协同管理" };
+    }
+    if (actor.role === "parent") {
+        return { type: "user", id: actor.id, label: actor.operatorLabel || actor.displayName || "家长" };
+    }
+    if (actor.role === "child") {
+        return { type: "child", id: actor.id, label: actor.displayName || "孩子" };
+    }
+    return { type: actor.type || "user", id: actor.id || "", label: actor.displayName || actor.username || "操作者" };
 }
 export async function childIdsForParent(env, parentId) {
     const rows = await env.DB.prepare("SELECT id FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(parentId).all();
@@ -598,7 +661,11 @@ export async function usernameExists(env, username, ignore) {
     if (user && ignore !== `user:${user.id}`)
         return true;
     const child = await env.DB.prepare("SELECT id FROM children WHERE username=? AND deleted_at IS NULL").bind(normalized).first();
-    return !!(child && ignore !== `child:${child.id}`);
+    if (child && ignore !== `child:${child.id}`)
+        return true;
+    await ensureParentDelegatesSchema(env);
+    const delegate = await env.DB.prepare("SELECT id FROM parent_delegates WHERE username=? AND deleted_at IS NULL").bind(normalized).first();
+    return !!(delegate && ignore !== `delegate:${delegate.id}`);
 }
 export async function validateChildIds(env, parentId, childIds) {
     if (!childIds || !childIds.length) return;
@@ -900,9 +967,7 @@ export async function listConfig(env, parentId) {
     };
 }
 export function importedActive(item) {
-    if (item.is_active === undefined && item.isActive === undefined)
-        return 0;
-    return item.is_active === 0 || item.isActive === false ? 0 : 1;
+    return 0;
 }
 export async function insertTaskFromConfig(env, parentId, item, categoryMap, childMap) {
     const title = String(item.title || "").trim();
@@ -919,8 +984,9 @@ export async function insertTaskFromConfig(env, parentId, item, categoryMap, chi
     await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?)")
         .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), importedActive(item))
         .run();
-    await replaceAssignees(env, parentId, "task_assignees", "task_id", taskId, (item.assignee_names || []).map((name) => childMap.get(name)).filter(Boolean));
-    return true;
+    const requestedAssignees = item.assignee_names || item.assigneeNames || [];
+    await replaceAssignees(env, parentId, "task_assignees", "task_id", taskId, requestedAssignees.map((name) => childMap.get(name)).filter(Boolean));
+    return { created: true, ignoredAssignments: requestedAssignees.filter((name) => !childMap.get(name)).length };
 }
 export async function importConfig(env, parentId, input) {
     await ensureFeedbackSchema(env);
@@ -931,6 +997,7 @@ export async function importConfig(env, parentId, input) {
         achievements: { created: 0, skipped: 0 },
         feedbackTemplates: { created: 0, skipped: 0 }
     };
+    stats.ignoredAssignments = 0;
     const children = (await env.DB.prepare("SELECT id, display_name FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(parentId).all()).results;
     const childMap = new Map(children.map((child) => [child.display_name, child.id]));
     const categoryRows = (await env.DB.prepare("SELECT id, name FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL)) OR owner_id=?)").bind(parentId, parentId).all()).results;
@@ -950,7 +1017,9 @@ export async function importConfig(env, parentId, input) {
         stats.categories.created += 1;
     }
     for (const item of input.tasks || []) {
-        if (await insertTaskFromConfig(env, parentId, item, categoryMap, childMap))
+        const result = await insertTaskFromConfig(env, parentId, item, categoryMap, childMap);
+        stats.ignoredAssignments += Number(result?.ignoredAssignments || 0);
+        if (result?.created)
             stats.tasks.created += 1;
         else
             stats.tasks.skipped += 1;
@@ -966,7 +1035,9 @@ export async function importConfig(env, parentId, input) {
         await env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, stock, limit_period, limit_count, redeem_weekdays, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(rewardId, parentId, title, item.description || "", Number(item.cost_points ?? item.costPoints ?? 0), item.stock ?? null, item.limit_period || item.limitPeriod || "daily", (item.limit_period || item.limitPeriod) === "once" ? 1 : item.limit_count ?? item.limitCount ?? 1, weekdayJson(item.redeemWeekdays || item.redeem_weekdays), item.icon_type || "emoji", item.icon_value || "🎁", importedActive(item))
             .run();
-        await replaceAssignees(env, parentId, "reward_assignees", "reward_id", rewardId, (item.assignee_names || []).map((name) => childMap.get(name)).filter(Boolean));
+        const requestedAssignees = item.assignee_names || item.assigneeNames || [];
+        stats.ignoredAssignments += requestedAssignees.filter((name) => !childMap.get(name)).length;
+        await replaceAssignees(env, parentId, "reward_assignees", "reward_id", rewardId, requestedAssignees.map((name) => childMap.get(name)).filter(Boolean));
         await replaceRewardPrerequisites(env, parentId, rewardId, item.prerequisites || []);
         if (item.required_achievement_title || item.requiredAchievementTitle)
             pendingRewardRequirements.push({ rewardId, achievementTitle: item.required_achievement_title || item.requiredAchievementTitle });
@@ -1067,8 +1138,9 @@ export async function childLatestTaskStatuses(env, childId, itemPeriods) {
     return { latest, rejected };
 }
 export async function notify(env, input) {
-    await env.DB.prepare("INSERT INTO notifications (id, recipient_type, recipient_id, actor_type, actor_id, title, body, event_type, related_type, related_id, requires_ack, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(id(), input.recipientType, input.recipientId, input.actorType, input.actorId || null, input.title, input.body || "", input.eventType, input.relatedType || null, input.relatedId || null, input.requiresAck ? 1 : 0, nowIso())
+    await ensureOperatorAuditSchema(env);
+    await env.DB.prepare("INSERT INTO notifications (id, recipient_type, recipient_id, actor_type, actor_id, actor_label_snapshot, title, body, event_type, related_type, related_id, requires_ack, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(id(), input.recipientType, input.recipientId, input.actorType, input.actorId || null, input.actorLabel || input.actorLabelSnapshot || "", input.title, input.body || "", input.eventType, input.relatedType || null, input.relatedId || null, input.requiresAck ? 1 : 0, nowIso())
         .run();
 }
 export function notificationRecipient(actor) {
@@ -1131,7 +1203,7 @@ export async function notificationSource(env, item) {
     return { sourceTypeLabel: fallback, sourceLabel: fallback };
 }
 export async function withNotificationSources(env, rows) {
-    return Promise.all(rows.map(async (item) => ({ ...item, ...(await notificationSource(env, item)) })));
+    return Promise.all(rows.map(async (item) => ({ ...item, actorLabel: item.actor_label_snapshot || "", ...(await notificationSource(env, item)) })));
 }
 export async function ledgerSource(env, row) {
     if (row.source_type === "task") {
@@ -1166,7 +1238,7 @@ export async function ledgerSource(env, row) {
     return { sourceTypeLabel: fallback, sourceLabel: fallback };
 }
 export async function withLedgerSources(env, rows, offset) {
-    return Promise.all(rows.map(async (row) => ({ ...row, localCreatedAt: localTimeText(row.created_at, offset), ...(await ledgerSource(env, row)) })));
+    return Promise.all(rows.map(async (row) => ({ ...row, actorLabel: row.actor_label_snapshot || "", localCreatedAt: localTimeText(row.created_at, offset), ...(await ledgerSource(env, row)) })));
 }
 export function sessionCookie(value, env, request) {
     const proto = request?.headers?.get("x-forwarded-proto")

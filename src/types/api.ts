@@ -1,5 +1,5 @@
 export type Me =
-  | { type: "user"; role: "admin" | "parent"; id: string; displayName: string; username: string }
+  | { type: "user"; role: "admin" | "parent" | "parent_delegate"; id: string; displayName: string; username: string; operatorLabel?: string; delegateId?: string; parentId?: string }
   | { type: "child"; role: "child"; id: string; parentId: string; displayName: string; username: string }
   | null;
 
@@ -9,8 +9,9 @@ export type Category = { id: string; name: string; icon_type: string; icon_value
 export type Task = Record<string, any> & { assignees?: string[] };
 export type Reward = Record<string, any> & { assignees?: string[] };
 export type FeedbackTemplate = Record<string, any> & { id: string; kind: "praise" | "criticism"; title: string; description: string; points: number; icon_type: string; icon_value: string; is_active: number };
-export type Notification = { id: string; title: string; body: string; event_type?: string; related_type?: string | null; related_id?: string | null; requires_ack?: number; read_at: string | null; created_at: string; sourceLabel?: string; sourceTypeLabel?: string };
-export type LedgerRow = { id: string; amount: number; source_type: string; sourceLabel?: string; sourceTypeLabel?: string; note: string; created_at: string; localCreatedAt?: string; period_key?: string | null };
+export type ParentDelegate = { id: string; username: string; display_name: string; operator_label?: string; status: string; created_at?: string; updated_at?: string };
+export type Notification = { id: string; title: string; body: string; event_type?: string; related_type?: string | null; related_id?: string | null; requires_ack?: number; read_at: string | null; created_at: string; sourceLabel?: string; sourceTypeLabel?: string; actorLabel?: string };
+export type LedgerRow = { id: string; amount: number; source_type: string; sourceLabel?: string; sourceTypeLabel?: string; actorLabel?: string; note: string; created_at: string; localCreatedAt?: string; period_key?: string | null };
 export type WarehouseItem = Record<string, any> & { id: string; title: string; status: "pending" | "redeemed" | "cancelled"; redeemed_at?: string | null };
 export type FeedbackEvent = Record<string, any> & {
   id: string;
@@ -75,7 +76,7 @@ export type AiServiceConfig = {
   updatedAt?: string;
 };
 export type ParentAiServiceConfig = AiServiceConfig;
-export type CartoonReportResponse = { imageUrl: string; format: string; filename: string; promptPreview?: string };
+export type CartoonReportResponse = { id?: string; childId?: string; period?: "weekly" | "monthly"; periodKey?: string; status?: "pending" | "processing" | "completed" | "failed"; retryCount?: number; lastError?: string; imageUrl?: string; format: string; filename: string; promptPreview?: string; createdAt?: string; updatedAt?: string; completedAt?: string };
 export const REFRESH_INTERVAL_MS = 12000;
 export const DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
 export const WEEKDAY_OPTIONS = [

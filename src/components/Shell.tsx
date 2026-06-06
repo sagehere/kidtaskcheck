@@ -128,16 +128,16 @@ export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullabl
                         <div>
                           <strong>{item.title}</strong>
                           <span>{item.body}</span>
-                          <small className="source-line">{formatNotificationSource(item)}</small>
+                          <small className="source-line">{[formatNotificationSource(item), item.actorLabel ? `操作者：${item.actorLabel}` : ""].filter(Boolean).join(" · ")}</small>
                           <small>{formatTime(item.created_at)}</small>
                         </div>
-                        {me.role === "parent" && item.related_type === "task_submission" && (
+                        {(me.role === "parent" || me.role === "parent_delegate") && item.related_type === "task_submission" && (
                           <div className="actions">
                             <button className="icon good" title="通过" aria-label="通过" disabled={isBusy} onClick={() => quickAction(item, "approve")}><Check size={16} /></button>
                             <button className="icon danger" title="驳回" aria-label="驳回" disabled={isBusy} onClick={() => quickAction(item, "reject")}><Trash2 size={16} /></button>
                           </div>
                         )}
-                        {me.role === "parent" && item.related_type === "reward_redemption" && item.event_type === "reward_requested" && (
+                        {(me.role === "parent" || me.role === "parent_delegate") && item.related_type === "reward_redemption" && item.event_type === "reward_requested" && (
                           <div className="actions">
                             <button className="icon good" title="核销" aria-label="核销" disabled={isBusy} onClick={() => quickAction(item, "redeem")}><BadgeCheck size={16} /></button>
                             <button className="icon danger" title="取消" aria-label="取消奖励" disabled={isBusy} onClick={() => quickAction(item, "cancel")}><Trash2 size={16} /></button>

@@ -1,4 +1,4 @@
-import { json, ok, fail, body, cookie, id, nowIso, checkLoginRateLimit, verifyPassword, hashPassword, actorFromRequest, sessionCookie } from "../utils.js";
+import { json, ok, fail, body, cookie, id, nowIso, checkLoginRateLimit, verifyPassword, hashPassword, actorFromRequest, sessionCookie, ensureParentDelegatesSchema } from "../utils.js";
 
 export async function handleAuthRoutes(path, method, request, env, actor) {
     if (path === "/auth/me" && method === "GET")
@@ -15,7 +15,9 @@ export async function handleAuthRoutes(path, method, request, env, actor) {
         checkLoginRateLimit(`${clientIp}:${String(input.username || "")}`);
         const user = await env.DB.prepare("SELECT * FROM users WHERE username=? AND status='active' AND deleted_at IS NULL").bind(input.username).first();
         const child = user ? null : await env.DB.prepare("SELECT * FROM children WHERE username=? AND status='active' AND deleted_at IS NULL").bind(input.username).first();
-        const account = user || child;
+        await ensureParentDelegatesSchema(env);
+        const delegate = user || child ? null : await env.DB.prepare("SELECT * FROM parent_delegates WHERE username=? AND status='active' AND deleted_at IS NULL").bind(input.username).first();
+        const account = user || child || delegate;
         if (!account)
             return fail("BAD_CREDENTIALS", "账号或密码错误", 401);
         // Reject default admin password for admin accounts (unless ALLOW_DEFAULT_ADMIN_PASSWORD=1)
@@ -42,10 +44,12 @@ export async function handleAuthRoutes(path, method, request, env, actor) {
             return fail("BAD_CREDENTIALS", "账号或密码错误", 401);
         const token = id();
         const expires = new Date(Date.now() + 7 * 86400000).toISOString();
+        const actorType = child ? "child" : "user";
+        const actorId = delegate ? `delegate:${account.id}` : account.id;
         await env.DB.prepare("INSERT INTO sessions (token, actor_type, actor_id, expires_at) VALUES (?, ?, ?, ?)")
-            .bind(token, user ? "user" : "child", account.id, expires)
+            .bind(token, actorType, actorId, expires)
             .run();
-        return json({ data: { role: user ? user.role : "child", displayName: account.display_name } }, { headers: { "set-cookie": sessionCookie(token, env, request) } });
+        return json({ data: { role: user ? user.role : child ? "child" : "parent_delegate", displayName: account.display_name, operatorLabel: account.operator_label || account.display_name } }, { headers: { "set-cookie": sessionCookie(token, env, request) } });
     }
     return null;
 }

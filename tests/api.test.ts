@@ -4,8 +4,9 @@ import { handleAuthRoutes } from "../server/api/routes/auth.js";
 import { handleAdminRoutes } from "../server/api/routes/admin.js";
 import { handleChildRoutes } from "../server/api/routes/child.js";
 import { handleParentRoutes } from "../server/api/routes/parent.js";
+import { handleSharedRoutes } from "../server/api/routes/shared.js";
 import { ensureAdmin, actorFromRequest, loginAttempts, sessionCookie, validateHttpsUrl, isPrivateUrl, id, hashPassword } from "../server/api/utils.js";
-import { truncateAiOutput, aiReportConfigHash, processAiGenerationQueue, runScheduledAiRefresh } from "../server/api/ai/index.js";
+import { truncateAiOutput, aiReportConfigHash, processAiGenerationQueue, runScheduledAiRefresh, processCartoonReportJobs } from "../server/api/ai/index.js";
 import { api } from "../src/api/client";
 import { reportWindowRange } from "../src/lib/domain";
 
@@ -106,6 +107,79 @@ describe("Real Child Session Integration", () => {
     const subReq = makeRequest("POST", "/task-submissions", { taskId });
     const subRes = await safe(handleChildRoutes, norm(new URL(subReq.url).pathname), "POST", subReq, env, actor);
     expect(subRes!.status).toBe(200);
+  });
+});
+
+describe("Parent delegate accounts", () => {
+  let env: any;
+  let pid: string;
+  let cid: string;
+  let tid: string;
+
+  beforeEach(async () => {
+    env = resetTestEnv();
+    await ensureAdmin(env);
+    loginAttempts.clear();
+    pid = id();
+    env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name, operator_label) VALUES (?, 'parent-a', ?, 'parent', 'Parent A', '妈妈')")
+      .bind(pid, await hashPassword("pw"))
+      .run();
+    cid = id();
+    env.DB.prepare("INSERT INTO children (id, parent_id, username, password_hash, display_name, status) VALUES (?, ?, 'childa', ?, 'Child A', 'active')")
+      .bind(cid, pid, await hashPassword("cpw"))
+      .run();
+    env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value) VALUES ('delegate-cat', ?, 'Cat', 'emoji', '⭐')").bind(pid).run();
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, points, period, limit_count, point_type, enabled_weekdays) VALUES (?, ?, 'delegate-cat', 'Read', 5, 'daily', 5, 'earn', '[1,2,3,4,5,6,0]')").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+  });
+
+  it("logs in a delegate, lets it review tasks, and records operator labels", async () => {
+    const parentActor = { type: "user", role: "parent", id: pid, displayName: "Parent A", operatorLabel: "妈妈" };
+    const createDelegate = await safe(handleParentRoutes, "/parent/delegates", "POST", makeRequest("POST", "/parent/delegates", { username: "dad", password: "dpw", displayName: "Dad", operatorLabel: "爸爸" }), env, parentActor);
+    expect(createDelegate!.status).toBe(200);
+    const duplicateChild = await safe(handleParentRoutes, "/parent/delegates", "POST", makeRequest("POST", "/parent/delegates", { username: "childa", password: "x", displayName: "Dup" }), env, parentActor);
+    expect(duplicateChild!.status).toBe(409);
+
+    const cookie = await login(env, "dad", "dpw");
+    const delegateActor = await actorFromRequest(makeRequest("GET", "/auth/me", undefined, `session=${cookie}`), env);
+    expect(delegateActor!.role).toBe("parent_delegate");
+    expect(delegateActor!.id).toBe(pid);
+    expect((delegateActor as any).operatorLabel).toBe("爸爸");
+
+    const blocked = await safe(handleParentRoutes, "/parent/delegates", "GET", makeRequest("GET", "/parent/delegates"), env, delegateActor);
+    expect(blocked!.status).toBe(403);
+
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, parentId: pid, displayName: "Child A" };
+    await safe(handleChildRoutes, "/task-submissions", "POST", makeRequest("POST", "/task-submissions", { taskId: tid }), env, childActor);
+    const sub = env.DB.prepare("SELECT id FROM task_submissions WHERE child_id=?").bind(cid).first() as any;
+    const reviewed = await safe(handleParentRoutes, `/task-submissions/${sub.id}/review`, "PATCH", makeRequest("PATCH", `/task-submissions/${sub.id}/review`, { approved: true, note: "" }), env, delegateActor);
+    expect(reviewed!.status).toBe(200);
+
+    const ledger = env.DB.prepare("SELECT actor_label_snapshot FROM point_ledger WHERE source_type='task' AND source_id=?").bind(sub.id).first() as any;
+    expect(ledger.actor_label_snapshot).toBe("爸爸");
+    const notifications = await safe(handleSharedRoutes, "/notifications", "GET", makeRequest("GET", "/notifications"), env, childActor, new URL("http://localhost/api/notifications"));
+    const body = await notifications!.json();
+    expect(body.data.items.some((item: any) => item.actorLabel === "爸爸")).toBe(true);
+  });
+
+  it("imports config as disabled and ignores missing child assignments", async () => {
+    const parentActor = { type: "user", role: "parent", id: pid, displayName: "Parent A", operatorLabel: "妈妈" };
+    const payload = {
+      tasks: [{ title: "Imported Task", category_name: "Cat", period: "daily", points: 2, assignee_names: ["Child A", "Missing"], is_active: 1 }],
+      rewards: [{ title: "Imported Reward", cost_points: 3, assignee_names: ["Missing"], is_active: 1 }],
+      achievements: [{ title: "Imported Achievement", threshold: 1, metric: "tasks_completed", is_active: 1 }],
+      feedbackTemplates: [{ kind: "praise", title: "Imported Praise", points: 1, is_active: 1 }]
+    };
+    const imported = await safe(handleSharedRoutes, "/config/import", "POST", makeRequest("POST", "/config/import", payload), env, parentActor, new URL("http://localhost/api/config/import"));
+    expect(imported!.status).toBe(200);
+    const stats = await imported!.json();
+    expect(stats.data.ignoredAssignments).toBe(2);
+    expect((env.DB.prepare("SELECT is_active FROM tasks WHERE title='Imported Task'").first() as any).is_active).toBe(0);
+    expect((env.DB.prepare("SELECT is_active FROM rewards WHERE title='Imported Reward'").first() as any).is_active).toBe(0);
+    expect((env.DB.prepare("SELECT is_active FROM feedback_templates WHERE title='Imported Praise'").first() as any).is_active).toBe(0);
+    const assignees = env.DB.prepare("SELECT COUNT(*) v FROM task_assignees ta JOIN tasks t ON t.id=ta.task_id WHERE t.title='Imported Task'").first() as any;
+    expect(Number(assignees.v)).toBe(1);
   });
 });
 
@@ -352,9 +426,15 @@ describe("Parent AI Service Validation", () => {
     const r = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "weekly" }), env, actor);
     expect(r!.status).toBe(200);
     const data = await r!.json();
-    expect(data.data.imageUrl).toBe("https://cdn.example.com/report.jpeg");
-    expect(data.data.format).toBe("jpeg");
-    expect(data.data.filename).toContain("weekly-cartoon-report.jpeg");
+    expect(data.data.status).toBe("pending");
+    expect(data.data.imageUrl).toBe("");
+    const processed = await processCartoonReportJobs(env, { maxJobs: 1 } as any);
+    expect(processed.completed).toBe(1);
+    const getRes = await safe(handleParentRoutes, `/parent/ai-service/cartoon-report/${data.data.id}`, "GET", makeRequest("GET", `/parent/ai-service/cartoon-report/${data.data.id}`), env, actor);
+    const completed = await getRes!.json();
+    expect(completed.data.imageUrl).toBe("https://cdn.example.com/report.jpeg");
+    expect(completed.data.format).toBe("jpeg");
+    expect(completed.data.filename).toContain("weekly-cartoon-report.jpeg");
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(env.DB.prepare("SELECT COUNT(*) as count FROM ai_report_commentaries").first().count).toBe(0);
   });
@@ -376,10 +456,14 @@ describe("Parent AI Service Validation", () => {
     vi.stubGlobal("fetch", fetchMock);
     const urls: string[] = [];
     for (let i = 0; i < 3; i++) {
-      const r = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "monthly" }), env, actor);
+      const r = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "monthly", retry: true }), env, actor);
       expect(r!.status).toBe(200);
       const data = await r!.json();
-      urls.push(data.data.imageUrl);
+      await processCartoonReportJobs(env, { maxJobs: 1 } as any);
+      const getRes = await safe(handleParentRoutes, `/parent/ai-service/cartoon-report/${data.data.id}`, "GET", makeRequest("GET", `/parent/ai-service/cartoon-report/${data.data.id}`), env, actor);
+      const completed = await getRes!.json();
+      urls.push(completed.data.imageUrl);
+      env.DB.prepare("UPDATE ai_cartoon_report_jobs SET status='failed' WHERE id=?").bind(data.data.id).run();
     }
     expect(urls).toEqual([
       "https://cdn.example.com/a.jpeg",

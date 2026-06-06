@@ -1,6 +1,7 @@
 import { nowIso, timezoneOffsetMinutes } from "../utils.js";
 import { previousCompletedReportRange } from "./orchestrator.js";
 import { enqueueScheduledAiJobs, processAiGenerationQueue } from "./queue.js";
+import { processCartoonReportJobs } from "./cartoon-queue.js";
 
 const MINUTE_MS = 60000;
 
@@ -70,7 +71,8 @@ export async function runScheduledAiRefresh(env, scheduledAt = new Date()) {
     const children = await activeAiChildren(env);
     if (parts.hour !== 0) {
         const queue = await processAiGenerationQueue(env, { offset });
-        return { skipped: true, reason: "outside_midnight_window", jobs: [], queue };
+        const cartoonQueue = await processCartoonReportJobs(env);
+        return { skipped: true, reason: "outside_midnight_window", jobs: [], queue, cartoonQueue };
     }
 
     const jobs = [];
@@ -99,5 +101,6 @@ export async function runScheduledAiRefresh(env, scheduledAt = new Date()) {
     }
 
     const queue = await processAiGenerationQueue(env, { offset, ranges: queueRanges });
-    return { skipped: jobs.length === 0, reason: jobs.length ? "" : "no_due_jobs", jobs, queue };
+    const cartoonQueue = await processCartoonReportJobs(env);
+    return { skipped: jobs.length === 0, reason: jobs.length ? "" : "no_due_jobs", jobs, queue, cartoonQueue };
 }

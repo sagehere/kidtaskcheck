@@ -27,3 +27,8 @@ export {
 export {
     ensureAiGenerationQueue, enqueueScheduledAiJobs, processAiGenerationQueue,
 } from "./queue.js";
+
+export {
+    ensureAiCartoonReportJobs, enqueueCartoonReportJob, loadCartoonReportJob,
+    publicCartoonJob, processCartoonReportJobs,
+} from "./cartoon-queue.js";

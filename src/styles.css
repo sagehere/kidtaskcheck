@@ -62,6 +62,7 @@ button:disabled {
 
 .settings-surface > .setting-group {
   position: relative;
+  margin-top: 0;
 }
 
 .settings-surface > .setting-group.is-collapsed > :not(.panel-title) {
@@ -77,8 +78,9 @@ button:disabled {
   flex: 0 0 auto;
   width: 34px;
   height: 34px;
-  font-size: 20px;
+  font-size: 16px;
   line-height: 1;
+  color: #157f6f;
 }
 
 .delegate-row {

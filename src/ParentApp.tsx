@@ -190,11 +190,11 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         button.className = "icon settings-collapse-toggle";
         button.setAttribute("aria-label", "展开设置区域");
         button.setAttribute("title", "展开设置区域");
-        button.textContent = "⌄";
+        button.textContent = "▼";
         button.addEventListener("click", () => {
           const collapsed = section.classList.toggle("is-collapsed");
           section.classList.toggle("is-open", !collapsed);
-          button.textContent = collapsed ? "⌄" : "⌃";
+          button.textContent = collapsed ? "▼" : "▲";
           button.setAttribute("aria-label", collapsed ? "展开设置区域" : "收起设置区域");
           button.setAttribute("title", collapsed ? "展开设置区域" : "收起设置区域");
         });
@@ -488,7 +488,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
 
       {activeTab === "settings" && (
         <div className="settings-surface">
-          <section className="setting-group">
+          <section className="panel setting-group">
             <div className="panel-title"><Star /><h2>任务配置</h2></div>
             <div className="grid two">
               <CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} />
@@ -501,17 +501,17 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             </div>
             <Overview title="现有任务" items={tasks} kind="task" children={children} categories={categories} onUpdate={(item, data) => update(`/tasks/${item.id}`, data, "任务已更新")} onDelete={(item) => remove(`/tasks/${item.id}`, "任务已删除", `确认删除任务「${item.title}」？历史记录会保留。`)} />
           </section>
-          <section className="setting-group">
+          <section className="panel setting-group">
             <div className="panel-title"><Gift /><h2>奖励配置</h2></div>
               <CreateReward children={children} tasks={tasks} achievements={achievements} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
             <Overview title="现有奖励" items={rewards} kind="reward" children={children} tasks={tasks} achievements={achievements} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} onDelete={(item) => remove(`/rewards/${item.id}`, "奖励已删除", `确认删除奖励「${item.title}」？历史兑换记录会保留。`)} />
           </section>
-          <section className="setting-group">
+          <section className="panel setting-group">
             <div className="panel-title"><Award /><h2>成就称号</h2></div>
             <CreateAchievement tasks={tasks} categories={categories} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
             <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
           </section>
-          <section className="setting-group">
+          <section className="panel setting-group">
             <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
             <CreateFeedbackTemplate onCreate={(data) => create("/feedback-templates", data, "条款已创建")} />
             <FeedbackOverview items={feedbackTemplates} onUpdate={(item, data) => update(`/feedback-templates/${item.id}`, data, "条款已更新")} onDelete={(item) => remove(`/feedback-templates/${item.id}`, "条款已删除", `确认删除${item.kind === "praise" ? "表扬" : "批评"}条款「${item.title}」？历史积分记录会保留。`)} />

@@ -17,16 +17,17 @@ The image is built by GitHub Actions on every push to `main`.
 
 Edit the included `docker-compose.yml` before deploying:
 
-- Replace `change-this-before-production` with a strong admin password.
-- Replace `https://taskcheck.example.com` with your real HTTPS domain.
-- Keep the app bound to `127.0.0.1:3000` when using Nginx Proxy Manager.
+- Replace `change-me-admin-password` with a strong admin password.
+- Replace `https://your-domain.com` with your real HTTPS domain.
+- Keep the published host port aligned with your reverse proxy. The included compose maps host port `100` to container port `3000`.
+- Keep the healthcheck pointed at `http://127.0.0.1:3000/healthz`. Healthchecks run inside the container, so they must use the container port, not the published host port.
 
 ## First Start
 
 ```bash
 mkdir -p data
 docker compose pull
-docker compose up -d
+docker compose up -d --force-recreate app
 ```
 
 ## Nginx Proxy Manager
@@ -46,7 +47,25 @@ Create a Proxy Host:
 
 ```bash
 docker compose pull
-docker compose up -d
+docker compose up -d --force-recreate app
+```
+
+Use `--force-recreate` after changing `healthcheck`, `ports`, or other container-level settings. Docker stores the healthcheck on the container, so a plain restart can leave the old probe running.
+
+## Healthcheck
+
+The app exposes `GET /healthz` and returns `{"ok":true}` when the Node server is reachable.
+
+Verify the running container uses the expected probe:
+
+```bash
+docker inspect --format '{{json .Config.Healthcheck.Test}}' "$(docker compose ps -q app)"
+```
+
+The output should include `http://127.0.0.1:3000/healthz`. If it points at the published host port, such as `127.0.0.1:100`, recreate the container:
+
+```bash
+docker compose up -d --force-recreate app
 ```
 
 ## Logs

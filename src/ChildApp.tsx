@@ -289,8 +289,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         <button className="metric large clickable" onClick={() => void openLedger()}>
           <Star />
           <strong>{summary.balance || dash.balance}</strong>
-          <span>可用积分</span>
-          {(summary.frozenPoints || dash.frozenPoints || 0) > 0 && <span className="frozen-tag">预扣冻结 {summary.frozenPoints || dash.frozenPoints}</span>}
+          <span>积分</span>
+          {(summary.frozenPoints || dash.frozenPoints || 0) > 0 && <span className="frozen-tag">含 {summary.frozenPoints || dash.frozenPoints} 积分冻结中</span>}
         </button>
       </section>
       <FeedbackToast message={message} error={error} onDismiss={() => { setMessage(""); setError(""); }} />

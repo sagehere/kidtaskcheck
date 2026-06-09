@@ -170,4 +170,31 @@ describe("Task 33: Points Ledger", () => {
     expect(settled.freeze_status).toBe("settled");
     expect(settled.settled_at).toBeTruthy();
   });
+
+  it("balance returns available points excluding frozen amount", async () => {
+    const parentActor = { type: "user", role: "parent", id: pid, displayName: "TP" };
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+
+    const templateId = id();
+    env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours) VALUES (?, ?, 'criticism', 'Clean desk', '', 80, 'emoji', '!', 1, 1, '整理书桌', 60, 24)")
+      .bind(templateId, pid)
+      .run();
+
+    const feedbackReq = makeRequest("POST", `/children/${cid}/feedback-events`, { templateId });
+    const feedbackRes = await safe(handleParentRoutes, norm(new URL(feedbackReq.url).pathname), "POST", feedbackReq, env, parentActor);
+    expect(feedbackRes!.status).toBe(200);
+
+    const childDashReq = makeRequest("GET", "/dashboard/child");
+    const childDashRes = await safe(handleChildRoutes, norm(new URL(childDashReq.url).pathname), "GET", childDashReq, env, childActor, new URL(childDashReq.url));
+    const childDash = await childDashRes!.json();
+    expect(childDash.data.balance).toBe(20);
+    expect(childDash.data.frozenPoints).toBe(80);
+
+    const parentDashReq = makeRequest("GET", "/dashboard/parent");
+    const parentDashRes = await safe(handleSharedRoutes, norm(new URL(parentDashReq.url).pathname), "GET", parentDashReq, env, parentActor, new URL(parentDashReq.url));
+    const parentDash = await parentDashRes!.json();
+    expect(parentDash.data.children[0].balance).toBe(20);
+    expect(parentDash.data.children[0].frozenPoints).toBe(80);
+  });
 });

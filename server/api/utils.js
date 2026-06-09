@@ -900,6 +900,11 @@ export function countRowsInWindow(rows, dateKey, achievement, offset, now) {
     return rows.filter((row) => inAchievementWindow(row[dateKey], windowType, now, offset, achievement.window_start, achievement.window_end)).length;
 }
 export async function balance(env, childId) {
+    const frozen = await frozenPointsForChild(env, childId);
+    if (frozen > 0) {
+        const row = await env.DB.prepare(`SELECT MAX(0, COALESCE(SUM(amount), 0) - ?) as balance FROM point_ledger WHERE child_id=?`).bind(frozen, childId).first();
+        return Number(row?.balance || 0);
+    }
     const row = await env.DB.prepare("SELECT COALESCE(SUM(amount), 0) balance FROM point_ledger WHERE child_id=?").bind(childId).first();
     return Number(row?.balance || 0);
 }
@@ -907,10 +912,15 @@ export async function balancesForChildren(env, childIds) {
     if (!childIds.length)
         return new Map();
     const placeholders = childIds.map(() => "?").join(",");
+    const frozenMap = await frozenPointsForChildren(env, childIds);
     const rows = (await env.DB.prepare(`SELECT child_id, COALESCE(SUM(amount), 0) balance FROM point_ledger WHERE child_id IN (${placeholders}) GROUP BY child_id`)
         .bind(...childIds)
         .all()).results;
-    return new Map(rows.map((row) => [row.child_id, Number(row.balance || 0)]));
+    return new Map(rows.map((row) => {
+        const frozen = frozenMap.get(row.child_id) || 0;
+        const raw = Number(row.balance || 0);
+        return [row.child_id, frozen > 0 ? Math.max(0, raw - frozen) : raw];
+    }));
 }
 export async function frozenPointsForChild(env, childId) {
     const row = await env.DB.prepare("SELECT COALESCE(SUM(frozen_amount), 0) frozen FROM point_ledger WHERE child_id=? AND freeze_status='frozen' AND revoked_at IS NULL AND remedied_at IS NULL").bind(childId).first();

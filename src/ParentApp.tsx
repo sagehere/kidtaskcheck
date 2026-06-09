@@ -545,8 +545,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               <button className="child-tile clickable" key={child.id} onClick={() => void loadLedger(child)}>
                 <span>{child.display_name}</span>
                 <strong>{child.balance || 0}</strong>
-                <small>可用积分</small>
-                {(child.frozenPoints || 0) > 0 && <small className="frozen-tag">预扣冻结 {child.frozenPoints}</small>}
+                <small>积分</small>
+                {(child.frozenPoints || 0) > 0 && <small className="frozen-tag">含 {child.frozenPoints} 积分冻结中</small>}
               </button>
             ))}
           </div>

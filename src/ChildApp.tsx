@@ -193,9 +193,9 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
       });
       setDash(dashData);
       await loadWarehouse();
-      if (hasError) setError("閮ㄥ垎鏁版嵁鍔犺浇澶辫触锛屽彲鐐瑰嚮閲嶈瘯");
+      if (hasError) setError("部分数据加载失败，可点击重试");
     } catch (err) {
-      setError("鍔犺浇鏁版嵁澶辫触锛屽彲鐐瑰嚮閲嶈瘯");
+      setError("加载数据失败，可点击重试");
     } finally {
       loadDashLockRef.current = false;
     }

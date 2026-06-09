@@ -1,4 +1,4 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, DEFAULT_WEEKDAYS, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints, weekdayInTimezone } from "../../src/lib/domain.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints } from "../../src/lib/domain.js";
 export const json = (data, init) => new Response(JSON.stringify(data), {
     ...init,
     headers: { "content-type": "application/json; charset=utf-8", ...(init?.headers || {}) }
@@ -10,17 +10,25 @@ export const id = () => crypto.randomUUID();
 export const PBKDF2_ITERATIONS = 100000;
 export const DAY_MS = 86400000;
 export let bootstrapPromise = null;
-export const loginAttempts = new Map();
 export const LOGIN_MAX_ATTEMPTS = 5;
 export const LOGIN_WINDOW_MS = 60000;
-export function checkLoginRateLimit(key) {
+export async function ensureLoginAttemptsSchema(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS login_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        attempt_key TEXT NOT NULL,
+        attempted_at INTEGER NOT NULL,
+        UNIQUE(attempt_key, attempted_at)
+    )`).run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_login_attempts_key_time ON login_attempts(attempt_key, attempted_at)").run();
+}
+export async function checkLoginRateLimit(env, key) {
+    await ensureLoginAttemptsSchema(env);
     const now = Date.now();
     const windowStart = now - LOGIN_WINDOW_MS;
-    const attempts = loginAttempts.get(key) || [];
-    const recent = attempts.filter((t) => t > windowStart);
-    if (recent.length >= LOGIN_MAX_ATTEMPTS) throw fail("RATE_LIMITED", "登录尝试过于频繁，请稍后再试", 429);
-    recent.push(now);
-    loginAttempts.set(key, recent);
+    const row = await env.DB.prepare("SELECT COUNT(*) as cnt FROM login_attempts WHERE attempt_key=? AND attempted_at>?").bind(key, windowStart).first();
+    if (Number(row?.cnt || 0) >= LOGIN_MAX_ATTEMPTS) throw fail("RATE_LIMITED", "登录尝试过于频繁，请稍后再试", 429);
+    await env.DB.prepare("INSERT INTO login_attempts (attempt_key, attempted_at) VALUES (?, ?)").bind(key, now).run();
+    await env.DB.prepare("DELETE FROM login_attempts WHERE attempted_at<?").bind(windowStart).run();
 }
 export const INPUT_RULES = {
     title: { max: 200, required: true },
@@ -572,18 +580,31 @@ export async function maybeRunMaintenance(env) {
         throw error;
     }
 }
+let bootstrapLock = false;
 export async function bootstrap(env) {
-    if (!bootstrapPromise) {
-        bootstrapPromise = (async () => {
-            await ensureSystemSettings(env);
-            await ensureSystemErrorLogs(env);
-            await ensureAdmin(env);
-            await maybeRunMaintenance(env);
-        })().catch((error) => {
-            bootstrapPromise = null;
-            throw error;
-        });
+    if (bootstrapPromise) {
+        await bootstrapPromise;
+        return;
     }
+    if (bootstrapLock) {
+        while (bootstrapLock && !bootstrapPromise) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        if (bootstrapPromise) await bootstrapPromise;
+        return;
+    }
+    bootstrapLock = true;
+    bootstrapPromise = (async () => {
+        await ensureSystemSettings(env);
+        await ensureSystemErrorLogs(env);
+        await ensureAdmin(env);
+        await maybeRunMaintenance(env);
+    })().catch((error) => {
+        bootstrapPromise = null;
+        throw error;
+    }).finally(() => {
+        bootstrapLock = false;
+    });
     await bootstrapPromise;
 }
 export async function ensureRewardOnceSchema(env) {
@@ -947,80 +968,86 @@ WHERE s.child_id=? AND s.status='approved'`).bind(childId).all()).results;
     const positiveLedger = (await env.DB.prepare("SELECT amount, created_at FROM point_ledger WHERE child_id=? AND amount > 0").bind(childId).all()).results;
     const feedbackLedger = (await env.DB.prepare("SELECT source_type, created_at FROM point_ledger WHERE child_id=? AND source_type IN ('praise', 'criticism') AND revoked_at IS NULL").bind(childId).all()).results;
     const redemptions = (await env.DB.prepare("SELECT requested_at FROM reward_redemptions WHERE child_id=? AND status IN ('pending','redeemed')").bind(childId).all()).results;
-    for (const achievement of achievements.results) {
-        const normalized = {
-            ...achievement,
-            rule_type: achievement.rule_type || achievement.metric || "tasks_completed",
-            window_type: achievement.window_type || "all_time"
-        };
-        let value = 0;
-        if (normalized.rule_type === "balance") {
-            value = current;
-        }
-        else if (normalized.rule_type === "streak_days") {
-            value = consecutiveDayStreak(approvedTasks.map((row) => row.submitted_at), offset);
-        }
-        else if (normalized.rule_type === "same_task_streak") {
-            const taskIds = normalized.target_task_id ? [normalized.target_task_id] : [...new Set(approvedTasks.map((row) => row.task_id))];
-            value = Math.max(0, ...taskIds.map((taskId) => consecutiveSameTaskStreak(approvedTasks.filter((row) => row.task_id === taskId).map((row) => row.submitted_at), offset)));
-        }
-        else if (normalized.rule_type === "specific_task_completed") {
-            const rows = normalized.target_task_id ? approvedTasks.filter((row) => row.task_id === normalized.target_task_id) : approvedTasks;
-            value = countRowsInWindow(rows, "submitted_at", normalized, offset, now);
-        }
-        else if (normalized.rule_type === "category_tasks") {
-            const rows = approvedTasks.filter((row) => !normalized.target_category_id || row.category_id === normalized.target_category_id);
-            value = countRowsInWindow(rows, "submitted_at", normalized, offset, now);
-        }
-        else if (normalized.rule_type === "category_streak") {
-            const rows = approvedTasks.filter((row) => !normalized.target_category_id || row.category_id === normalized.target_category_id);
-            value = consecutiveDayStreak(rows.map((row) => row.submitted_at), offset);
-        }
-        else if (normalized.rule_type === "praise_count") {
-            value = countRowsInWindow(feedbackLedger.filter((row) => row.source_type === "praise"), "created_at", normalized, offset, now);
-        }
-        else if (normalized.rule_type === "praise_streak") {
-            value = consecutiveDayStreak(feedbackLedger.filter((row) => row.source_type === "praise").map((row) => row.created_at), offset);
-        }
-        else if (normalized.rule_type === "no_criticism_days") {
-            value = daysWithoutEvents(feedbackLedger.filter((row) => row.source_type === "criticism").map((row) => row.created_at), now, offset, Math.max(1, Number(normalized.threshold)));
-        }
-        else if (normalized.rule_type === "no_criticism_window") {
-            const count = countRowsInWindow(feedbackLedger.filter((row) => row.source_type === "criticism"), "created_at", normalized, offset, now);
-            value = count === 0 ? 1 : 0;
-        }
-        else if (normalized.rule_type === "total_earned") {
-            value = positiveLedger
-                .filter((row) => inAchievementWindow(row.created_at, normalized.window_type, now, offset, normalized.window_start, normalized.window_end))
-                .reduce((sum, row) => sum + Number(row.amount || 0), 0);
-        }
-        else if (normalized.rule_type === "redemptions") {
-            value = countRowsInWindow(redemptions, "requested_at", normalized, offset, now);
-        }
-        else {
-            value = countRowsInWindow(approvedTasks, "submitted_at", normalized, offset, now);
-        }
-        if (value >= Number(normalized.threshold)) {
-            const already = await env.DB.prepare("SELECT 1 FROM child_achievements WHERE child_id=? AND achievement_id=?")
-                .bind(childId, achievement.id)
-                .first();
-            await env.DB.prepare("INSERT OR IGNORE INTO child_achievements (child_id, achievement_id, unlocked_at) VALUES (?, ?, ?)")
-                .bind(childId, achievement.id, nowIso())
-                .run();
-            if (!already && achievement.unlock_reward_id) {
-                await notify(env, {
-                    recipientType: "child",
-                    recipientId: childId,
-                    actorType: "system",
-                    actorId: null,
-                    title: "奖励资格已解锁",
-                    body: "你解锁了新的奖励兑换资格。",
-                    eventType: "achievement_reward",
-                    relatedType: "reward",
-                    relatedId: achievement.unlock_reward_id
-                });
+    const notifications = [];
+    await env.DB.transaction(async () => {
+        for (const achievement of achievements.results) {
+            const normalized = {
+                ...achievement,
+                rule_type: achievement.rule_type || achievement.metric || "tasks_completed",
+                window_type: achievement.window_type || "all_time"
+            };
+            let value = 0;
+            if (normalized.rule_type === "balance") {
+                value = current;
+            }
+            else if (normalized.rule_type === "streak_days") {
+                value = consecutiveDayStreak(approvedTasks.map((row) => row.submitted_at), offset);
+            }
+            else if (normalized.rule_type === "same_task_streak") {
+                const taskIds = normalized.target_task_id ? [normalized.target_task_id] : [...new Set(approvedTasks.map((row) => row.task_id))];
+                value = Math.max(0, ...taskIds.map((taskId) => consecutiveSameTaskStreak(approvedTasks.filter((row) => row.task_id === taskId).map((row) => row.submitted_at), offset)));
+            }
+            else if (normalized.rule_type === "specific_task_completed") {
+                const rows = normalized.target_task_id ? approvedTasks.filter((row) => row.task_id === normalized.target_task_id) : approvedTasks;
+                value = countRowsInWindow(rows, "submitted_at", normalized, offset, now);
+            }
+            else if (normalized.rule_type === "category_tasks") {
+                const rows = approvedTasks.filter((row) => !normalized.target_category_id || row.category_id === normalized.target_category_id);
+                value = countRowsInWindow(rows, "submitted_at", normalized, offset, now);
+            }
+            else if (normalized.rule_type === "category_streak") {
+                const rows = approvedTasks.filter((row) => !normalized.target_category_id || row.category_id === normalized.target_category_id);
+                value = consecutiveDayStreak(rows.map((row) => row.submitted_at), offset);
+            }
+            else if (normalized.rule_type === "praise_count") {
+                value = countRowsInWindow(feedbackLedger.filter((row) => row.source_type === "praise"), "created_at", normalized, offset, now);
+            }
+            else if (normalized.rule_type === "praise_streak") {
+                value = consecutiveDayStreak(feedbackLedger.filter((row) => row.source_type === "praise").map((row) => row.created_at), offset);
+            }
+            else if (normalized.rule_type === "no_criticism_days") {
+                value = daysWithoutEvents(feedbackLedger.filter((row) => row.source_type === "criticism").map((row) => row.created_at), now, offset, Math.max(1, Number(normalized.threshold)));
+            }
+            else if (normalized.rule_type === "no_criticism_window") {
+                const count = countRowsInWindow(feedbackLedger.filter((row) => row.source_type === "criticism"), "created_at", normalized, offset, now);
+                value = count === 0 ? 1 : 0;
+            }
+            else if (normalized.rule_type === "total_earned") {
+                value = positiveLedger
+                    .filter((row) => inAchievementWindow(row.created_at, normalized.window_type, now, offset, normalized.window_start, normalized.window_end))
+                    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+            }
+            else if (normalized.rule_type === "redemptions") {
+                value = countRowsInWindow(redemptions, "requested_at", normalized, offset, now);
+            }
+            else {
+                value = countRowsInWindow(approvedTasks, "submitted_at", normalized, offset, now);
+            }
+            if (value >= Number(normalized.threshold)) {
+                const already = await env.DB.prepare("SELECT 1 FROM child_achievements WHERE child_id=? AND achievement_id=?")
+                    .bind(childId, achievement.id)
+                    .first();
+                await env.DB.prepare("INSERT OR IGNORE INTO child_achievements (child_id, achievement_id, unlocked_at) VALUES (?, ?, ?)")
+                    .bind(childId, achievement.id, nowIso())
+                    .run();
+                if (!already && achievement.unlock_reward_id) {
+                    notifications.push({
+                        recipientType: "child",
+                        recipientId: childId,
+                        actorType: "system",
+                        actorId: null,
+                        title: "奖励资格已解锁",
+                        body: "你解锁了新的奖励兑换资格。",
+                        eventType: "achievement_reward",
+                        relatedType: "reward",
+                        relatedId: achievement.unlock_reward_id
+                    });
+                }
             }
         }
+    });
+    for (const notification of notifications) {
+        await notify(env, notification);
     }
 }
 export async function listWithAssignees(env, kind, parentId) {
@@ -1059,6 +1086,7 @@ export async function listConfig(env, parentId) {
         feedbackTemplates: feedbackTemplates.results
     };
 }
+// Imported items default to disabled (is_active=0) for safety review
 export function importedActive(item) {
     return 0;
 }

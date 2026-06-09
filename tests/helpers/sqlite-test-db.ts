@@ -70,6 +70,18 @@ export class SqliteTestDb {
     }
   }
 
+  async transaction(fn: () => Promise<any>) {
+    this.db.exec("BEGIN");
+    try {
+      const result = await fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
   close() {
     this.db.close();
   }

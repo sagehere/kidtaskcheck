@@ -12,7 +12,7 @@ export async function handleAuthRoutes(path, method, request, env, actor) {
     if (path === "/auth/login" && method === "POST") {
         const input = await body(request);
         const clientIp = request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-        checkLoginRateLimit(`${clientIp}:${String(input.username || "")}`);
+        await checkLoginRateLimit(env, `${clientIp}:${String(input.username || "")}`);
         const user = await env.DB.prepare("SELECT * FROM users WHERE username=? AND status='active' AND deleted_at IS NULL").bind(input.username).first();
         const child = user ? null : await env.DB.prepare("SELECT * FROM children WHERE username=? AND status='active' AND deleted_at IS NULL").bind(input.username).first();
         await ensureParentDelegatesSchema(env);

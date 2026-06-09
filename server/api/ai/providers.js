@@ -94,50 +94,60 @@ export async function callParentAiService(env, prompt, config, options = {}) {
     const maxTokens = options?.maxTokens ?? 300;
     const noTruncate = !!options?.noTruncate;
     const throwOnError = !!options?.throwOnError;
+    const maxEmptyRetries = options?.maxEmptyRetries ?? 3;
     if (!baseUrl || !apiKey || !model)
         return "";
     if (isPrivateUrl(baseUrl))
         return "";
     const providerName = options?.provider || detectProvider(baseUrl);
     const provider = providerOrOpenAI(providerName);
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), AI_FETCH_TIMEOUT_MS);
-        const endpoint = `${baseUrl.replace(/\/+$/, "")}${provider.chatEndpoint}`;
-        const resp = await fetch(endpoint, {
-            method: "POST",
-            headers: provider.chatHeaders(apiKey),
-            body: provider.buildChatBody(model, [{ role: "user", content: prompt }], maxTokens),
-            signal: controller.signal,
-            redirect: "manual",
-        });
-        clearTimeout(timeoutId);
-        if (resp.status === 0 || resp.type === "opaqueredirect") return "";
-        if (!resp.ok) {
+    for (let attempt = 0; attempt <= maxEmptyRetries; attempt++) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), AI_FETCH_TIMEOUT_MS);
+            const endpoint = `${baseUrl.replace(/\/+$/, "")}${provider.chatEndpoint}`;
+            const resp = await fetch(endpoint, {
+                method: "POST",
+                headers: provider.chatHeaders(apiKey),
+                body: provider.buildChatBody(model, [{ role: "user", content: prompt }], maxTokens),
+                signal: controller.signal,
+                redirect: "manual",
+            });
+            clearTimeout(timeoutId);
+            if (resp.status === 0 || resp.type === "opaqueredirect") return "";
+            if (!resp.ok) {
+                if (throwOnError) {
+                    throw new AiProviderError(`AI service request failed with ${resp.status}`, {
+                        status: resp.status,
+                        code: resp.status === 429 ? "AI_RATE_LIMITED" : "AI_SERVICE_ERROR",
+                        retryable: resp.status === 429 || resp.status >= 500
+                    });
+                }
+                return "";
+            }
+            const data = await resp.json();
+            const text = stripAiThinking(provider.parseChatResponse(data));
+            const cleaned = text.replace(/\s+/g, " ").trim().replace(/，+/g, "，").replace(/。+/g, "。");
+            const result = noTruncate ? cleaned : truncateAiOutput(cleaned);
+            if (result)
+                return result;
+            if (attempt < maxEmptyRetries)
+                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            else
+                return "";
+        }
+        catch (error) {
             if (throwOnError) {
-                throw new AiProviderError(`AI service request failed with ${resp.status}`, {
-                    status: resp.status,
-                    code: resp.status === 429 ? "AI_RATE_LIMITED" : "AI_SERVICE_ERROR",
-                    retryable: resp.status === 429 || resp.status >= 500
+                if (error instanceof AiProviderError) throw error;
+                throw new AiProviderError(error?.name === "AbortError" ? "AI service request timed out" : "AI service request failed", {
+                    code: error?.name === "AbortError" ? "AI_TIMEOUT" : "AI_NETWORK_ERROR",
+                    retryable: true
                 });
             }
             return "";
         }
-        const data = await resp.json();
-        const text = stripAiThinking(provider.parseChatResponse(data));
-        const cleaned = text.replace(/\s+/g, " ").trim().replace(/，+/g, "，").replace(/。+/g, "。");
-        return noTruncate ? cleaned : truncateAiOutput(cleaned);
     }
-    catch (error) {
-        if (throwOnError) {
-            if (error instanceof AiProviderError) throw error;
-            throw new AiProviderError(error?.name === "AbortError" ? "AI service request timed out" : "AI service request failed", {
-                code: error?.name === "AbortError" ? "AI_TIMEOUT" : "AI_NETWORK_ERROR",
-                retryable: true
-            });
-        }
-        return "";
-    }
+    return "";
 }
 
 export async function callParentAiServiceForReport(env, prompt, config) {

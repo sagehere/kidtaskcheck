@@ -585,13 +585,16 @@ VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         const input = await body(request);
         if (method === "POST") {
             const kind = input.kind === "criticism" ? "criticism" : "praise";
+            const title = String(input.title || "").trim();
+            const err = validateInput(title, INPUT_RULES.title, "标题") || validateInput(input.points, INPUT_RULES.points, "积分");
+            if (err) return fail("BAD_REQUEST", err, 400);
             const isRemediable = kind === "criticism" && input.isRemediable ? 1 : 0;
             const remedyPoints = Math.max(0, Math.min(Number(input.points || 0), Number(input.remedyPoints || 0)));
             const remedyDeadlineHours = Math.max(1, Number(input.remedyDeadlineHours || 24));
             await env.DB.prepare(`INSERT INTO feedback_templates
 (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-                .bind(id(), a.id, kind, input.title, input.description || "", Number(input.points || 0), input.iconType || "emoji", input.iconValue || (kind === "praise" ? "✨" : "⚠️"), input.isActive === false ? 0 : 1, isRemediable, isRemediable ? String(input.remedyCondition || "").trim() : "", isRemediable ? remedyPoints : 0, isRemediable ? remedyDeadlineHours : 24)
+                .bind(id(), a.id, kind, title, input.description || "", Number(input.points || 0), input.iconType || "emoji", input.iconValue || (kind === "praise" ? "✨" : "⚠️"), input.isActive === false ? 0 : 1, isRemediable, isRemediable ? String(input.remedyCondition || "").trim() : "", isRemediable ? remedyPoints : 0, isRemediable ? remedyDeadlineHours : 24)
                 .run();
             return ok(true);
         }
@@ -601,6 +604,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         const kind = input.kind === "criticism" ? "criticism" : "praise";
+        const title = String(input.title || "").trim();
+        const err = validateInput(title, INPUT_RULES.title, "标题") || validateInput(input.points, INPUT_RULES.points, "积分");
+        if (err) return fail("BAD_REQUEST", err, 400);
         const found = await env.DB.prepare("SELECT id FROM feedback_templates WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(feedbackPatch[1], a.id).first();
         if (!found)
             return fail("NOT_FOUND", "表扬或批评条款不存在", 404);
@@ -608,7 +614,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         const remedyPoints = Math.max(0, Math.min(Number(input.points || 0), Number(input.remedyPoints || 0)));
         const remedyDeadlineHours = Math.max(1, Number(input.remedyDeadlineHours || 24));
         await env.DB.prepare("UPDATE feedback_templates SET kind=?, title=?, description=?, points=?, icon_type=?, icon_value=?, is_active=?, is_remediable=?, remedy_condition=?, remedy_points=?, remedy_deadline_hours=?, updated_at=? WHERE id=?")
-            .bind(kind, input.title, input.description || "", Number(input.points || 0), input.iconType || "emoji", input.iconValue || (kind === "praise" ? "✨" : "⚠️"), input.isActive === false ? 0 : 1, isRemediable, isRemediable ? String(input.remedyCondition || "").trim() : "", isRemediable ? remedyPoints : 0, isRemediable ? remedyDeadlineHours : 24, nowIso(), feedbackPatch[1])
+            .bind(kind, title, input.description || "", Number(input.points || 0), input.iconType || "emoji", input.iconValue || (kind === "praise" ? "✨" : "⚠️"), input.isActive === false ? 0 : 1, isRemediable, isRemediable ? String(input.remedyCondition || "").trim() : "", isRemediable ? remedyPoints : 0, isRemediable ? remedyDeadlineHours : 24, nowIso(), feedbackPatch[1])
             .run();
         return ok(true);
     }

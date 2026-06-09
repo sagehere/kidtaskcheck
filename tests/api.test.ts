@@ -5,7 +5,7 @@ import { handleAdminRoutes } from "../server/api/routes/admin.js";
 import { handleChildRoutes } from "../server/api/routes/child.js";
 import { handleParentRoutes } from "../server/api/routes/parent.js";
 import { handleSharedRoutes } from "../server/api/routes/shared.js";
-import { ensureAdmin, actorFromRequest, loginAttempts, sessionCookie, validateHttpsUrl, isPrivateUrl, id, hashPassword } from "../server/api/utils.js";
+import { ensureAdmin, actorFromRequest, sessionCookie, validateHttpsUrl, isPrivateUrl, id, hashPassword } from "../server/api/utils.js";
 import { truncateAiOutput, stripAiThinking, aiReportConfigHash, processAiGenerationQueue, runScheduledAiRefresh, processCartoonReportJobs, processPrintChecklistImageJobs } from "../server/api/ai/index.js";
 import { api } from "../src/api/client";
 import { reportWindowRange } from "../src/lib/domain";
@@ -23,10 +23,13 @@ async function login(env: any, u: string, p: string): Promise<string> {
   if (!r || r.status !== 200) throw new Error(`Login failed: ${r?.status}`);
   return (r.headers.get("set-cookie") || "").match(/session=([^;]+)/)?.[1] || "";
 }
+async function clearLoginAttempts(env: any) {
+  try { await env.DB.prepare("DELETE FROM login_attempts").run(); } catch {}
+}
 
 describe("Auth", () => {
   let env: any;
-  beforeEach(async () => { env = resetTestEnv(); await ensureAdmin(env); loginAttempts.clear(); });
+  beforeEach(async () => { env = resetTestEnv(); await ensureAdmin(env); await clearLoginAttempts(env); });
   it("rejects wrong password", async () => {
     const r = await safe(handleAuthRoutes, "/auth/login", "POST", makeRequest("POST", "/auth/login", { username: "admin", password: "x" }), env, null);
     expect(r!.status).toBe(401);
@@ -61,7 +64,7 @@ describe("Real Child Session Integration", () => {
   beforeEach(async () => {
     env = resetTestEnv();
     await ensureAdmin(env);
-    loginAttempts.clear();
+    await clearLoginAttempts(env);
     pid = id();
     const pw = await hashPassword("pw");
     env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, ?, ?, 'parent', 'P')").bind(pid, "p", pw).run();
@@ -119,7 +122,7 @@ describe("Parent delegate accounts", () => {
   beforeEach(async () => {
     env = resetTestEnv();
     await ensureAdmin(env);
-    loginAttempts.clear();
+    await clearLoginAttempts(env);
     pid = id();
     env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name, operator_label) VALUES (?, 'parent-a', ?, 'parent', 'Parent A', '妈妈')")
       .bind(pid, await hashPassword("pw"))
@@ -222,7 +225,7 @@ describe("Parent AI Service Validation", () => {
   let env: any;
   let parentId: string;
   beforeEach(async () => {
-    env = resetTestEnv(); await ensureAdmin(env); loginAttempts.clear();
+    env = resetTestEnv(); await ensureAdmin(env); await clearLoginAttempts(env);
     parentId = id();
     const pw = await hashPassword("parent-ai-pw");
     env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, ?, ?, 'parent', 'AI Parent')").bind(parentId, "parent-ai", pw).run();

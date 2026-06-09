@@ -83,6 +83,18 @@ export class SqliteDatabase {
     }
   }
 
+  async transaction(fn) {
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = await fn();
+      this.#db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   close() {
     this.#db.close();
   }

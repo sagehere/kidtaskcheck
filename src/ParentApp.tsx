@@ -1,9 +1,9 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import {
   Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
-  MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users
+  MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users, AlertTriangle
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ParentDelegate } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ParentDelegate, RemedyCriticismItem } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, formatSource, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -11,7 +11,7 @@ import { Shell } from "./components/Shell";
 import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, formatAchievementRule } from "./lib/appHelpers";
 
 type ParentAiServiceStoredConfig = Omit<ParentAiServiceConfig, "apiKey"> & { updatedAt?: string };
-const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, imageBaseUrl: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasImageKey: false };
+const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, imageBaseUrl: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", imageSize: "1248x1760", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasImageKey: false };
 
 export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [children, setChildren] = useState<Child[]>([]);
@@ -70,7 +70,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       imageModel: nextConfig.imageModel || "gpt-image-2",
       imagePrompt: nextConfig.imagePrompt || "",
       checklistImagePrompt: nextConfig.checklistImagePrompt || "",
-      imageSize: nextConfig.imageSize || "1024x1024",
+      imageSize: nextConfig.imageSize || "1248x1760",
       imageQuality: nextConfig.imageQuality || "low",
       imageFormat: nextConfig.imageFormat || "jpeg",
       imageN: nextConfig.imageN || 1,
@@ -479,12 +479,11 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     setFeedbackRows([]);
   }
 
-  async function remedyFeedback(id: string) {
+  async function confirmRemedy(id: string) {
     await run(
       () => api(`/feedback-events/${encodeURIComponent(id)}/remedy`, { method: "PATCH", body: JSON.stringify({}) }),
       "补救已确认，冻结积分已结算"
     );
-    if (feedbackChild) await openFeedbackRecall(feedbackChild);
   }
 
   async function createDelegate(data: Record<string, unknown>) {
@@ -546,7 +545,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               <button className="child-tile clickable" key={child.id} onClick={() => void loadLedger(child)}>
                 <span>{child.display_name}</span>
                 <strong>{child.balance || 0}</strong>
-                <small>当前积分</small>
+                <small>可用积分</small>
+                {(child.frozenPoints || 0) > 0 && <small className="frozen-tag">预扣冻结 {child.frozenPoints}</small>}
               </button>
             ))}
           </div>
@@ -555,7 +555,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             <RedemptionPanel items={dashboard.pendingRedemptions || []} onFinish={finishRedemption} />
           </div>
           <div className="grid two">
-            <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} />
+            <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} remedyItems={dashboard.remedyCriticisms || []} onRemedy={(id) => void confirmRemedy(id)} />
           </div>
         </>
       )}
@@ -746,7 +746,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                 </Field>
                 <div className="grid two compact-fields">
                   <Field label="尺寸">
-                    <select value={draftAiConfig.imageSize || "1024x1024"} onChange={(e) => updateAiDraft({ imageSize: e.target.value })}>
+                    <select value={draftAiConfig.imageSize || "1248x1760"} onChange={(e) => updateAiDraft({ imageSize: e.target.value })}>
+                      <option value="1248x1760">1248x1760</option>
                       <option value="1024x1024">1024x1024</option>
                       <option value="1536x1024">1536x1024</option>
                       <option value="1024x1536">1024x1536</option>
@@ -754,6 +755,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                       <option value="2048x1152">2048x1152</option>
                       <option value="3840x2160">3840x2160</option>
                       <option value="2160x3840">2160x3840</option>
+                      <option value="2416x3408">2416x3408</option>
                       <option value="auto">auto</option>
                     </select>
                   </Field>
@@ -826,7 +828,6 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           rows={feedbackRows}
           onClose={() => { setFeedbackChild(null); setFeedbackRows([]); }}
           onRecall={(ids) => void recallSelectedFeedback(ids)}
-          onRemedy={(id) => void remedyFeedback(id)}
         />
       )}
       {reportChild && (
@@ -967,7 +968,7 @@ export function RedemptionPanel({ items, onFinish }: { items: any[]; onFinish: (
   );
 }
 
-export function PraiseCriticismPanel({ children, templates, onSubmit }: { children: Child[]; templates: FeedbackTemplate[]; onSubmit: (data: { childId: string; templateId: string }) => void }) {
+export function PraiseCriticismPanel({ children, templates, onSubmit, remedyItems, onRemedy }: { children: Child[]; templates: FeedbackTemplate[]; onSubmit: (data: { childId: string; templateId: string }) => void; remedyItems?: RemedyCriticismItem[]; onRemedy?: (id: string) => void }) {
   const [data, setData] = useState({ childId: "", templateId: "" });
   const [kind, setKind] = useState<"praise" | "criticism">("praise");
   const childId = data.childId || children[0]?.id || "";
@@ -1014,6 +1015,23 @@ export function PraiseCriticismPanel({ children, templates, onSubmit }: { childr
         {!visibleTemplates.length && <Empty text={`暂无可用${kind === "praise" ? "表扬" : "批评"}条款`} />}
         <button className="primary" disabled={!templateId}><Plus size={18} />记录</button>
       </form>
+      {remedyItems && remedyItems.length > 0 && onRemedy && (
+        <div className="remedy-list">
+          <h3><AlertTriangle size={16} />待确认补救</h3>
+          {remedyItems.map((item) => (
+            <article className="row remedy-item" key={item.id}>
+              <div>
+                <strong>{item.childName} · {item.title}</strong>
+                <span>{item.remedyCondition || "请按家长要求完成补救"} · 预扣冻结 {item.frozenAmount} 积分 · 可挽回 {item.remedyPoints} 积分</span>
+                <small>截止：{item.localRemedyDeadlineAt}</small>
+              </div>
+              <button type="button" className="secondary" onClick={() => onRemedy(item.id)}>
+                <Check size={16} />确认补救
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -1024,7 +1042,7 @@ export function LedgerList({ rows }: { rows: LedgerRow[] }) {
       {rows.length ? rows.map((row) => (
         <article className="row" key={row.id}>
           <div>
-            <strong className={row.freeze_status === "frozen" ? "negative" : row.amount >= 0 ? "positive" : "negative"}>{row.freeze_status === "frozen" ? `冻结${row.frozen_amount || 0}` : `${row.amount >= 0 ? "+" : ""}${row.amount}`}</strong>
+            <strong className={row.freeze_status === "frozen" ? "negative" : row.amount >= 0 ? "positive" : "negative"}>{row.freeze_status === "frozen" ? `预扣冻结${row.frozen_amount || 0}` : `${row.amount >= 0 ? "+" : ""}${row.amount}`}</strong>
             <span>{[row.sourceLabel || row.note || formatSource(row.source_type), row.actorLabel ? `操作者：${row.actorLabel}` : "", row.localCreatedAt || formatTime(row.created_at)].filter(Boolean).join(" · ")}</span>
             {row.remedy_condition && <small>补救：{row.remedy_condition}{row.remedy_points ? ` · 可挽回 ${row.remedy_points} 分` : ""}{row.localRemedyDeadlineAt ? ` · 截止 ${row.localRemedyDeadlineAt}` : ""}</small>}
           </div>
@@ -1087,7 +1105,7 @@ export function RefundRewardDialog({ child, rows, onRefund, onClose }: { child: 
   );
 }
 
-export function FeedbackRecallDialog({ child, rows, onRecall, onRemedy, onClose }: { child: Child; rows: FeedbackEvent[]; onRecall: (ids: string[]) => void; onRemedy: (id: string) => void; onClose: () => void }) {
+export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child: Child; rows: FeedbackEvent[]; onRecall: (ids: string[]) => void; onClose: () => void }) {
   const [selected, setSelected] = useState<string[]>([]);
   const total = rows.filter((item) => selected.includes(item.id)).reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
   function toggle(id: string, checked: boolean) {
@@ -1108,13 +1126,8 @@ export function FeedbackRecallDialog({ child, rows, onRecall, onRemedy, onClose 
               <input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => toggle(item.id, event.target.checked)} />
               <div>
                 <strong>{item.sourceLabel || ((item.source_type === "praise" ? "表扬" : "批评") + " · " + (item.template_title || item.note || "反馈"))}</strong>
-                <span>{item.localCreatedAt || formatTime(item.created_at)} · {item.freeze_status === "frozen" ? `冻结${item.frozen_amount || 0}` : `${item.amount >= 0 ? "+" : ""}${item.amount}`} 积分{item.remedy_condition ? ` · 补救：${item.remedy_condition}` : ""}</span>
+                <span>{item.localCreatedAt || formatTime(item.created_at)} · {item.freeze_status === "frozen" ? `预扣冻结${item.frozen_amount || 0}` : `${item.amount >= 0 ? "+" : ""}${item.amount}`} 积分{item.remedy_condition ? ` · 补救：${item.remedy_condition}` : ""}</span>
               </div>
-              {item.freeze_status === "frozen" && (
-                <button type="button" className="secondary" onClick={(event) => { event.preventDefault(); onRemedy(item.id); }}>
-                  <Check size={16} />确认补救
-                </button>
-              )}
             </label>
           )) : <Empty text="近 7 天没有可撤回的表扬或批评" />}
         </div>

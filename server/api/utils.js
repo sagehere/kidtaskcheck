@@ -202,7 +202,7 @@ export async function ensureParentAiServiceSettings(env) {
   image_api_key TEXT NOT NULL DEFAULT '',
   image_model TEXT NOT NULL DEFAULT 'gpt-image-2',
   image_prompt TEXT NOT NULL DEFAULT '',
-  image_size TEXT NOT NULL DEFAULT '1024x1024',
+  image_size TEXT NOT NULL DEFAULT '1248x1760',
   image_quality TEXT NOT NULL DEFAULT 'low',
   image_format TEXT NOT NULL DEFAULT 'jpeg',
   image_n INTEGER NOT NULL DEFAULT 1,
@@ -214,7 +214,7 @@ export async function ensureParentAiServiceSettings(env) {
     await ensureColumn(env, "parent_ai_service_settings", "image_api_key", "image_api_key TEXT NOT NULL DEFAULT ''");
     await ensureColumn(env, "parent_ai_service_settings", "image_model", "image_model TEXT NOT NULL DEFAULT 'gpt-image-2'");
     await ensureColumn(env, "parent_ai_service_settings", "image_prompt", "image_prompt TEXT NOT NULL DEFAULT ''");
-    await ensureColumn(env, "parent_ai_service_settings", "image_size", "image_size TEXT NOT NULL DEFAULT '1024x1024'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_size", "image_size TEXT NOT NULL DEFAULT '1248x1760'");
     await ensureColumn(env, "parent_ai_service_settings", "image_quality", "image_quality TEXT NOT NULL DEFAULT 'low'");
     await ensureColumn(env, "parent_ai_service_settings", "image_format", "image_format TEXT NOT NULL DEFAULT 'jpeg'");
     await ensureColumn(env, "parent_ai_service_settings", "image_n", "image_n INTEGER NOT NULL DEFAULT 1");
@@ -911,6 +911,19 @@ export async function balancesForChildren(env, childIds) {
         .bind(...childIds)
         .all()).results;
     return new Map(rows.map((row) => [row.child_id, Number(row.balance || 0)]));
+}
+export async function frozenPointsForChild(env, childId) {
+    const row = await env.DB.prepare("SELECT COALESCE(SUM(frozen_amount), 0) frozen FROM point_ledger WHERE child_id=? AND freeze_status='frozen' AND revoked_at IS NULL AND remedied_at IS NULL").bind(childId).first();
+    return Number(row?.frozen || 0);
+}
+export async function frozenPointsForChildren(env, childIds) {
+    if (!childIds.length)
+        return new Map();
+    const placeholders = childIds.map(() => "?").join(",");
+    const rows = (await env.DB.prepare(`SELECT child_id, COALESCE(SUM(frozen_amount), 0) frozen FROM point_ledger WHERE child_id IN (${placeholders}) AND freeze_status='frozen' AND revoked_at IS NULL AND remedied_at IS NULL GROUP BY child_id`)
+        .bind(...childIds)
+        .all()).results;
+    return new Map(rows.map((row) => [row.child_id, Number(row.frozen || 0)]));
 }
 export async function recalcAchievements(env, parentId, childId) {
     const achievements = await env.DB.prepare("SELECT * FROM achievements WHERE parent_id=? AND is_active=1 AND deleted_at IS NULL").bind(parentId).all();

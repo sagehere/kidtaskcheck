@@ -1,5 +1,5 @@
-﻿import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS } from "../utils.js";
-import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes } from "../utils.js";
+﻿import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS } from "../utils.js";
+import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes, activeRemedyCriticisms } from "../utils.js";
 
 export async function handleSharedRoutes(path, method, request, env, actor, url) {
     if (path === "/notifications" && method === "GET") {
@@ -259,10 +259,23 @@ WHERE id=? AND freeze_status='frozen'`)
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         await settleExpiredCriticismFreezes(env);
         const children = (await env.DB.prepare("SELECT id, display_name FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(a.id).all()).results;
-        const balances = await balancesForChildren(env, children.map((child) => child.id));
-        const childCards = children.map((child) => ({ ...child, balance: balances.get(child.id) || 0 }));
+        const childIds = children.map((child) => child.id);
+        const [balances, frozenMap] = await Promise.all([
+            balancesForChildren(env, childIds),
+            frozenPointsForChildren(env, childIds)
+        ]);
+        const offset = await timezoneOffsetMinutes(env);
+        const allRemedy = [];
+        for (const child of children) {
+            const items = await activeRemedyCriticisms(env, child.id, offset);
+            for (const item of items) {
+                allRemedy.push({ ...item, childId: child.id, childName: child.display_name });
+            }
+        }
+        const childCards = children.map((child) => ({ ...child, balance: balances.get(child.id) || 0, frozenPoints: frozenMap.get(child.id) || 0 }));
         return ok({
             children: childCards,
+            remedyCriticisms: allRemedy,
             pendingSubmissions: (await env.DB.prepare("SELECT s.*, t.title, c.display_name child_name FROM task_submissions s JOIN tasks t ON t.id=s.task_id JOIN children c ON c.id=s.child_id WHERE s.parent_id=? AND s.status='pending' ORDER BY s.submitted_at").bind(a.id).all()).results,
             pendingRedemptions: (await env.DB.prepare("SELECT rr.*, r.title, r.redeem_weekdays, c.display_name child_name FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id JOIN children c ON c.id=rr.child_id WHERE rr.parent_id=? AND rr.status='pending' ORDER BY rr.requested_at").bind(a.id).all()).results
         });

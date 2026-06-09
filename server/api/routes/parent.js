@@ -130,7 +130,7 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
         const nextImageModel = input.imageModel !== undefined ? String(input.imageModel).trim() : (current.imageModel || "gpt-image-2");
         const nextImagePrompt = input.imagePrompt !== undefined ? String(input.imagePrompt).trim() : (current.imagePrompt || "");
         const nextChecklistImagePrompt = input.checklistImagePrompt !== undefined ? String(input.checklistImagePrompt).trim() : (current.checklistImagePrompt || "");
-        const nextImageSize = input.imageSize !== undefined ? String(input.imageSize).trim() : (current.imageSize || "1024x1024");
+        const nextImageSize = input.imageSize !== undefined ? String(input.imageSize).trim() : (current.imageSize || "1248x1760");
         const nextImageQuality = input.imageQuality !== undefined ? String(input.imageQuality).trim() : (current.imageQuality || "low");
         const nextImageFormat = input.imageFormat !== undefined ? String(input.imageFormat).trim() : (current.imageFormat || "jpeg");
         const rawImageN = input.imageN !== undefined ? Number(input.imageN) : Number(current.imageN || 1);

@@ -3,7 +3,7 @@ export type Me =
   | { type: "child"; role: "child"; id: string; parentId: string; displayName: string; username: string }
   | null;
 
-export type Child = { id: string; username: string; display_name: string; status: string; balance?: number; ai_enabled?: number; gender?: string; birth_date?: string | null };
+export type Child = { id: string; username: string; display_name: string; status: string; balance?: number; frozenPoints?: number; ai_enabled?: number; gender?: string; birth_date?: string | null };
 export type Gallery = { id: string; name: string; url: string; usage: string };
 export type Category = { id: string; name: string; icon_type: string; icon_value: string; is_system: number };
 export type Task = Record<string, any> & { assignees?: string[] };
@@ -51,7 +51,23 @@ export type SystemErrorLog = {
   metadata?: Record<string, unknown> | null;
   created_at: string;
 };
-export type ChildDashboardSummary = { balance: number; aiGreeting: string; aiRefreshPending: boolean; child: Child | null };
+export type ChildDashboardSummary = { balance: number; frozenPoints: number; aiGreeting: string; aiRefreshPending: boolean; child: Child | null };
+
+export type RemedyCriticismItem = {
+  id: string;
+  childId: string;
+  childName: string;
+  title: string;
+  note: string;
+  frozenAmount: number;
+  remedyPoints: number;
+  remedyCondition: string;
+  remedyDeadlineAt: string;
+  localRemedyDeadlineAt: string;
+  remainingMs: number;
+  createdAt: string;
+  localCreatedAt: string;
+};
 
 export type EmojiSource = {
   name: string;

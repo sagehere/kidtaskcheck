@@ -114,11 +114,20 @@ describe("Task 33: Points Ledger", () => {
     const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
     expect(Number(balance.b)).toBe(0);
 
-    const dashboardReq = makeRequest("GET", "/dashboard/child");
-    const dashboardRes = await safe(handleChildRoutes, norm(new URL(dashboardReq.url).pathname), "GET", dashboardReq, env, childActor, new URL(dashboardReq.url));
-    const dashboard = await dashboardRes!.json();
-    expect(dashboard.data.remedyCriticisms).toHaveLength(1);
-    expect(dashboard.data.remedyCriticisms[0].remedyCondition).toBe("整理书桌");
+    const childDashReq = makeRequest("GET", "/dashboard/child");
+    const childDashRes = await safe(handleChildRoutes, norm(new URL(childDashReq.url).pathname), "GET", childDashReq, env, childActor, new URL(childDashReq.url));
+    const childDash = await childDashRes!.json();
+    expect(childDash.data.balance).toBe(0);
+    expect(childDash.data.frozenPoints).toBe(10);
+    expect(childDash.data.remedyCriticisms).toHaveLength(1);
+    expect(childDash.data.remedyCriticisms[0].remedyCondition).toBe("整理书桌");
+
+    const parentDashReq = makeRequest("GET", "/dashboard/parent");
+    const parentDashRes = await safe(handleSharedRoutes, norm(new URL(parentDashReq.url).pathname), "GET", parentDashReq, env, parentActor, new URL(parentDashReq.url));
+    const parentDash = await parentDashRes!.json();
+    expect(parentDash.data.children[0].frozenPoints).toBe(10);
+    expect(parentDash.data.remedyCriticisms).toHaveLength(1);
+    expect(parentDash.data.remedyCriticisms[0].childId).toBe(cid);
 
     const remedyReq = makeRequest("PATCH", `/feedback-events/${frozen.id}/remedy`, {});
     const remedyRes = await safe(handleSharedRoutes, norm(new URL(remedyReq.url).pathname), "PATCH", remedyReq, env, parentActor);
@@ -129,6 +138,13 @@ describe("Task 33: Points Ledger", () => {
     expect(remedied.freeze_status).toBe("remedied");
     expect(remedied.remedied_at).toBeTruthy();
     expect(remedied.settled_at).toBeTruthy();
+
+    const afterRemedyDashReq = makeRequest("GET", "/dashboard/child");
+    const afterRemedyDashRes = await safe(handleChildRoutes, norm(new URL(afterRemedyDashReq.url).pathname), "GET", afterRemedyDashReq, env, childActor, new URL(afterRemedyDashReq.url));
+    const afterRemedyDash = await afterRemedyDashRes!.json();
+    expect(afterRemedyDash.data.balance).toBe(-4);
+    expect(afterRemedyDash.data.frozenPoints).toBe(0);
+    expect(afterRemedyDash.data.remedyCriticisms).toHaveLength(0);
   });
 
   it("expired remediable criticism settles as a real deduction and leaves child remedy cards", async () => {

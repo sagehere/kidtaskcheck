@@ -53,7 +53,7 @@ export async function getParentAiServiceConfig(env, parentId) {
             imageApiKey: row?.image_api_key || "",
             imageModel: row?.image_model || "gpt-image-2",
             imagePrompt: row?.image_prompt || "",
-            imageSize: row?.image_size || "1024x1024",
+            imageSize: row?.image_size || "1248x1760",
             imageQuality: row?.image_quality || "low",
             imageFormat: row?.image_format || "jpeg",
             imageN: Number(row?.image_n || 1),
@@ -64,7 +64,7 @@ export async function getParentAiServiceConfig(env, parentId) {
         };
     }
     catch {
-        return { baseUrl: "", apiKey: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", imageBaseUrl: "", imageApiKey: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasKey: false, hasImageKey: false, updatedAt: "" };
+        return { baseUrl: "", apiKey: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", imageBaseUrl: "", imageApiKey: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", imageSize: "1248x1760", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasKey: false, hasImageKey: false, updatedAt: "" };
     }
 }
 
@@ -101,7 +101,7 @@ export async function ensureParentAiServiceSettings(env) {
   image_api_key TEXT NOT NULL DEFAULT '',
   image_model TEXT NOT NULL DEFAULT 'gpt-image-2',
   image_prompt TEXT NOT NULL DEFAULT '',
-  image_size TEXT NOT NULL DEFAULT '1024x1024',
+  image_size TEXT NOT NULL DEFAULT '1248x1760',
   image_quality TEXT NOT NULL DEFAULT 'low',
   image_format TEXT NOT NULL DEFAULT 'jpeg',
   image_n INTEGER NOT NULL DEFAULT 1,
@@ -113,7 +113,7 @@ export async function ensureParentAiServiceSettings(env) {
     await ensureColumn(env, "parent_ai_service_settings", "image_api_key", "image_api_key TEXT NOT NULL DEFAULT ''");
     await ensureColumn(env, "parent_ai_service_settings", "image_model", "image_model TEXT NOT NULL DEFAULT 'gpt-image-2'");
     await ensureColumn(env, "parent_ai_service_settings", "image_prompt", "image_prompt TEXT NOT NULL DEFAULT ''");
-    await ensureColumn(env, "parent_ai_service_settings", "image_size", "image_size TEXT NOT NULL DEFAULT '1024x1024'");
+    await ensureColumn(env, "parent_ai_service_settings", "image_size", "image_size TEXT NOT NULL DEFAULT '1248x1760'");
     await ensureColumn(env, "parent_ai_service_settings", "image_quality", "image_quality TEXT NOT NULL DEFAULT 'low'");
     await ensureColumn(env, "parent_ai_service_settings", "image_format", "image_format TEXT NOT NULL DEFAULT 'jpeg'");
     await ensureColumn(env, "parent_ai_service_settings", "image_n", "image_n INTEGER NOT NULL DEFAULT 1");

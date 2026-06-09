@@ -191,7 +191,7 @@ export async function callParentImageService(env, prompt, config) {
                 model,
                 prompt,
                 n: config?.imageN || 1,
-                size: config?.imageSize || "1024x1024",
+                size: config?.imageSize || "1248x1760",
                 quality: config?.imageQuality || "low",
                 format
             }),

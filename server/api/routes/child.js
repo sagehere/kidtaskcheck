@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -136,6 +136,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
         const snapshot = await loadAiGreetingSnapshot(env, childRow, offset);
         return ok({
             balance: await balance(env, a.id),
+            frozenPoints: await frozenPointsForChild(env, a.id),
             aiGreeting: snapshot.greeting,
             aiRefreshPending: snapshot.aiRefreshPending,
             child: a
@@ -210,6 +211,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
         return ok({
             child: a,
             balance: await balance(env, a.id),
+            frozenPoints: await frozenPointsForChild(env, a.id),
             pinnedTaskId: visiblePinnedTaskId,
             pinnedRewardId: visiblePinnedRewardId,
             tasks: taskRows,

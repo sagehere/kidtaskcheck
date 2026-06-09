@@ -11,7 +11,7 @@ function LedgerList({ rows }: { rows: LedgerRow[] }) {
       {rows.length ? rows.map((row) => (
         <article className="row" key={row.id}>
           <div>
-            <strong className={row.freeze_status === "frozen" ? "negative" : row.amount >= 0 ? "positive" : "negative"}>{row.freeze_status === "frozen" ? `冻结${row.frozen_amount || 0}` : `${row.amount >= 0 ? "+" : ""}${row.amount}`}</strong>
+            <strong className={row.freeze_status === "frozen" ? "negative" : row.amount >= 0 ? "positive" : "negative"}>{row.freeze_status === "frozen" ? `预扣冻结${row.frozen_amount || 0}` : `${row.amount >= 0 ? "+" : ""}${row.amount}`}</strong>
             <span>{[row.sourceLabel || row.note || formatSource(row.source_type), row.actorLabel ? `操作者：${row.actorLabel}` : "", row.localCreatedAt || formatTime(row.created_at)].filter(Boolean).join(" · ")}</span>
           </div>
           <span>{row.sourceTypeLabel || formatSource(row.source_type)}</span>
@@ -44,7 +44,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [activeTab, setActiveTab] = useState<"tasks" | "rewards" | "warehouse">("tasks");
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [warehouse, setWarehouse] = useState<WarehouseItem[]>([]);
-  const [summary, setSummary] = useState<ChildDashboardSummary>({ balance: 0, aiGreeting: "", aiRefreshPending: false, child: null });
+  const [summary, setSummary] = useState<ChildDashboardSummary>({ balance: 0, frozenPoints: 0, aiGreeting: "", aiRefreshPending: false, child: null });
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [achievementTipId, setAchievementTipId] = useState("");
   const [tick, setTick] = useState(0);
@@ -169,7 +169,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     if (loadSummaryLockRef.current) return;
     loadSummaryLockRef.current = true;
     try {
-      const data = await api<ChildDashboardSummary>("/dashboard/child-summary").catch(() => ({ balance: 0, aiGreeting: "", aiRefreshPending: false, child: null }));
+      const data = await api<ChildDashboardSummary>("/dashboard/child-summary").catch(() => ({ balance: 0, frozenPoints: 0, aiGreeting: "", aiRefreshPending: false, child: null }));
       setSummary(data);
       setDash((current: any) => ({
         ...current,
@@ -289,7 +289,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         <button className="metric large clickable" onClick={() => void openLedger()}>
           <Star />
           <strong>{summary.balance || dash.balance}</strong>
-          <span>当前积分</span>
+          <span>可用积分</span>
+          {(summary.frozenPoints || dash.frozenPoints || 0) > 0 && <span className="frozen-tag">预扣冻结 {summary.frozenPoints || dash.frozenPoints}</span>}
         </button>
       </section>
       <FeedbackToast message={message} error={error} onDismiss={() => { setMessage(""); setError(""); }} />
@@ -334,7 +335,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                 <article className="row remedy-card" key={item.id}>
                   <div>
                     <strong>{item.title}</strong>
-                    <span>{item.remedyCondition || "请按家长要求完成补救"} · 冻结 {item.frozenAmount || 0} 积分 · 可挽回 {item.remedyPoints || 0} 积分</span>
+                    <span>{item.remedyCondition || "请按家长要求完成补救"} · 预扣冻结 {item.frozenAmount || 0} 积分 · 可挽回 {item.remedyPoints || 0} 积分</span>
                     <small>截止：{item.localRemedyDeadlineAt || formatTime(item.remedyDeadlineAt)}</small>
                   </div>
                   <span className="negative">{formatCountdown(deadlineMs)}</span>

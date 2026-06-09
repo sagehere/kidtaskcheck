@@ -187,6 +187,7 @@ export async function ensureSystemSettings(env) {
     await ensureParentDelegatesSchema(env);
     await ensureOperatorAuditSchema(env);
     await ensureParentAiServiceSettings(env);
+    await ensureCriticismRemedySchema(env);
 }
 export async function ensureParentAiServiceSettings(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS parent_ai_service_settings (
@@ -217,6 +218,7 @@ export async function ensureParentAiServiceSettings(env) {
     await ensureColumn(env, "parent_ai_service_settings", "image_quality", "image_quality TEXT NOT NULL DEFAULT 'low'");
     await ensureColumn(env, "parent_ai_service_settings", "image_format", "image_format TEXT NOT NULL DEFAULT 'jpeg'");
     await ensureColumn(env, "parent_ai_service_settings", "image_n", "image_n INTEGER NOT NULL DEFAULT 1");
+    await ensureColumn(env, "parent_ai_service_settings", "checklist_image_prompt", "checklist_image_prompt TEXT NOT NULL DEFAULT ''");
 }
 export async function timezoneOffsetMinutes(env) {
     const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key='timezone_offset_minutes'").first();
@@ -305,7 +307,24 @@ export async function ensureFeedbackSchema(env) {
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`).run();
+    await ensureColumn(env, "feedback_templates", "is_remediable", "is_remediable INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "feedback_templates", "remedy_condition", "remedy_condition TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "feedback_templates", "remedy_points", "remedy_points INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "feedback_templates", "remedy_deadline_hours", "remedy_deadline_hours INTEGER NOT NULL DEFAULT 24");
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_feedback_templates_parent ON feedback_templates(parent_id, kind, is_active, deleted_at)").run();
+}
+export async function ensureCriticismRemedySchema(env) {
+    await ensureFeedbackSchema(env);
+    await ensureColumn(env, "point_ledger", "effective_amount", "effective_amount INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "point_ledger", "frozen_amount", "frozen_amount INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "point_ledger", "freeze_status", "freeze_status TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "point_ledger", "remedy_condition", "remedy_condition TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "point_ledger", "remedy_points", "remedy_points INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "point_ledger", "remedy_deadline_at", "remedy_deadline_at TEXT");
+    await ensureColumn(env, "point_ledger", "remedied_at", "remedied_at TEXT");
+    await ensureColumn(env, "point_ledger", "settled_at", "settled_at TEXT");
+    await env.DB.prepare("UPDATE point_ledger SET effective_amount=amount WHERE effective_amount=0 AND amount<>0").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_point_ledger_freeze ON point_ledger(freeze_status, remedy_deadline_at)").run();
 }
 export async function ensureCategorySchema(env) {
     const columns = (await env.DB.prepare("PRAGMA table_info(task_categories)").all()).results.map((row) => row.name);
@@ -367,6 +386,7 @@ export async function ensureRetentionSchema(env) {
     await ensureColumn(env, "point_ledger", "revoked_at", "revoked_at TEXT");
     await ensureColumn(env, "point_ledger", "revoke_ledger_id", "revoke_ledger_id TEXT REFERENCES point_ledger(id)");
     await ensureColumn(env, "point_ledger", "retention_until", "retention_until TEXT");
+    await ensureCriticismRemedySchema(env);
     await ensureColumn(env, "reward_redemptions", "refunded_at", "refunded_at TEXT");
     await ensureColumn(env, "reward_redemptions", "retention_until", "retention_until TEXT");
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS activity_archives (
@@ -401,6 +421,55 @@ export async function updateSetting(env, key, value) {
     await env.DB.prepare("INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at")
         .bind(key, String(value), nowIso())
         .run();
+}
+export async function settleExpiredCriticismFreezes(env, at = nowIso()) {
+    await ensureCriticismRemedySchema(env);
+    const rows = (await env.DB.prepare(`SELECT id, child_id, parent_id, frozen_amount
+FROM point_ledger
+WHERE source_type='criticism'
+  AND freeze_status='frozen'
+  AND revoked_at IS NULL
+  AND remedied_at IS NULL
+  AND remedy_deadline_at IS NOT NULL
+  AND remedy_deadline_at<=?`).bind(at).all()).results;
+    if (!rows.length) return { settled: 0 };
+    for (const row of rows) {
+        const amount = -Math.abs(Number(row.frozen_amount || 0));
+        await env.DB.prepare(`UPDATE point_ledger
+SET amount=?, effective_amount=?, freeze_status='settled', settled_at=?
+WHERE id=? AND freeze_status='frozen' AND revoked_at IS NULL`)
+            .bind(amount, amount, at, row.id)
+            .run();
+        await recalcAchievements(env, row.parent_id, row.child_id);
+    }
+    return { settled: rows.length };
+}
+export async function activeRemedyCriticisms(env, childId, offset, at = nowIso()) {
+    await settleExpiredCriticismFreezes(env, at);
+    const rows = (await env.DB.prepare(`SELECT pl.*, ft.title template_title
+FROM point_ledger pl
+LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
+WHERE pl.child_id=?
+  AND pl.source_type='criticism'
+  AND pl.freeze_status='frozen'
+  AND pl.revoked_at IS NULL
+  AND pl.remedied_at IS NULL
+  AND pl.remedy_deadline_at>?
+ORDER BY pl.remedy_deadline_at ASC`).bind(childId, at).all()).results;
+    const nowMs = Date.parse(at);
+    return rows.map((row) => ({
+        id: row.id,
+        title: row.template_title || row.note || "批评补救",
+        note: row.note || "",
+        frozenAmount: Number(row.frozen_amount || 0),
+        remedyCondition: row.remedy_condition || "",
+        remedyPoints: Number(row.remedy_points || 0),
+        remedyDeadlineAt: row.remedy_deadline_at,
+        localRemedyDeadlineAt: localTimeText(row.remedy_deadline_at, offset),
+        remainingMs: Math.max(0, Date.parse(row.remedy_deadline_at) - nowMs),
+        createdAt: row.created_at,
+        localCreatedAt: localTimeText(row.created_at, offset)
+    }));
 }
 export async function cleanupShortRetention(env, cutoffIso) {
     const refunded = (await env.DB.prepare("SELECT id FROM reward_redemptions WHERE refunded_at IS NOT NULL AND retention_until IS NOT NULL AND retention_until<=?").bind(cutoffIso).all()).results.map((row) => row.id);
@@ -487,6 +556,7 @@ export async function maybeRunMaintenance(env) {
     const shortCutoff = new Date(Date.now() - shortDays * DAY_MS).toISOString();
     try {
         await cleanupShortRetention(env, shortCutoff);
+        await settleExpiredCriticismFreezes(env, now);
         const offset = await timezoneOffsetMinutes(env);
         await archiveOldActivity(env, detailCutoff, offset);
         await hardDeleteSoftDeleted(env, detailCutoff);
@@ -990,6 +1060,7 @@ export async function insertTaskFromConfig(env, parentId, item, categoryMap, chi
 }
 export async function importConfig(env, parentId, input) {
     await ensureFeedbackSchema(env);
+    await ensureCriticismRemedySchema(env);
     const stats = {
         categories: { created: 0, skipped: 0 },
         tasks: { created: 0, skipped: 0 },
@@ -1083,8 +1154,12 @@ WHERE parent_id=? AND title=? AND rule_type=? AND threshold=? AND window_type=?
             stats.feedbackTemplates.skipped += 1;
             continue;
         }
-        await env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(id(), parentId, kind, title, item.description || "", Number(item.points || 0), item.icon_type || "emoji", item.icon_value || (kind === "praise" ? "✨" : "⚠️"), importedActive(item))
+        const isRemediable = kind === "criticism" && Number(item.is_remediable ?? item.isRemediable ?? 0) === 1 ? 1 : 0;
+        const points = Math.max(0, Number(item.points || 0));
+        const remedyPoints = isRemediable ? Math.max(0, Math.min(points, Number(item.remedy_points ?? item.remedyPoints ?? 0))) : 0;
+        const remedyDeadlineHours = isRemediable ? Math.max(1, Number(item.remedy_deadline_hours ?? item.remedyDeadlineHours ?? 24)) : 24;
+        await env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(id(), parentId, kind, title, item.description || "", points, item.icon_type || "emoji", item.icon_value || (kind === "praise" ? "✨" : "⚠️"), importedActive(item), isRemediable, isRemediable ? String(item.remedy_condition ?? item.remedyCondition ?? "").trim() : "", remedyPoints, remedyDeadlineHours)
             .run();
         stats.feedbackTemplates.created += 1;
     }
@@ -1218,7 +1293,10 @@ export async function ledgerSource(env, row) {
     }
     if (row.source_type === "praise" || row.source_type === "criticism") {
         const found = await env.DB.prepare("SELECT title FROM feedback_templates WHERE id=?").bind(row.source_id).first();
-        const label = row.source_type === "praise" ? "表扬" : "批评";
+        let label = row.source_type === "praise" ? "表扬" : "批评";
+        if (row.source_type === "criticism" && row.freeze_status === "frozen") label = "批评冻结";
+        if (row.source_type === "criticism" && row.freeze_status === "remedied") label = "批评补救";
+        if (row.source_type === "criticism" && row.freeze_status === "settled") label = "批评结算";
         if (found?.title)
             return { sourceTypeLabel: label, sourceLabel: `${label}：${found.title}` };
         return { sourceTypeLabel: label, sourceLabel: label };
@@ -1238,7 +1316,13 @@ export async function ledgerSource(env, row) {
     return { sourceTypeLabel: fallback, sourceLabel: fallback };
 }
 export async function withLedgerSources(env, rows, offset) {
-    return Promise.all(rows.map(async (row) => ({ ...row, actorLabel: row.actor_label_snapshot || "", localCreatedAt: localTimeText(row.created_at, offset), ...(await ledgerSource(env, row)) })));
+    return Promise.all(rows.map(async (row) => ({
+        ...row,
+        actorLabel: row.actor_label_snapshot || "",
+        localCreatedAt: localTimeText(row.created_at, offset),
+        localRemedyDeadlineAt: row.remedy_deadline_at ? localTimeText(row.remedy_deadline_at, offset) : "",
+        ...(await ledgerSource(env, row))
+    })));
 }
 export function sessionCookie(value, env, request) {
     const proto = request?.headers?.get("x-forwarded-proto")

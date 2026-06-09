@@ -18,6 +18,15 @@ export function truncateAiOutput(text) {
     return text.length > AI_MAX_OUTPUT_LENGTH ? text.slice(0, AI_MAX_OUTPUT_LENGTH) + "…" : text;
 }
 
+export function stripAiThinking(text) {
+    if (!text) return "";
+    let value = String(text);
+    value = value.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "");
+    value = value.replace(/<think\b[^>]*>[\s\S]*$/gi, "");
+    value = value.replace(/<\/think>/gi, "");
+    return value;
+}
+
 export function detectProvider(baseUrl) {
     if (!baseUrl) return "openai";
     const url = baseUrl.toLowerCase();
@@ -115,7 +124,7 @@ export async function callParentAiService(env, prompt, config, options = {}) {
             return "";
         }
         const data = await resp.json();
-        const text = provider.parseChatResponse(data);
+        const text = stripAiThinking(provider.parseChatResponse(data));
         const cleaned = text.replace(/\s+/g, " ").trim().replace(/，+/g, "，").replace(/。+/g, "。");
         return noTruncate ? cleaned : truncateAiOutput(cleaned);
     }

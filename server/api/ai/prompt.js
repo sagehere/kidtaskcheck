@@ -48,6 +48,42 @@ WHERE ca.child_id=? AND ca.unlocked_at>=? AND ca.unlocked_at<?`)
     };
 }
 
+export async function previousDayReportSummary(env, childId, offset, input = nowIso()) {
+    const local = new Date(new Date(input).getTime() + offset * 60000);
+    const dayEnd = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - offset * 60000).toISOString();
+    const dayStart = new Date(new Date(dayEnd).getTime() - DAY_MS).toISOString();
+    const pkey = periodKey("daily", dayStart, offset);
+    const [taskRows, rewardRows, ledgerRows, feedbackRows, achievementRows] = await Promise.all([
+        env.DB.prepare(`SELECT s.*, t.title, t.points, t.point_type
+FROM task_submissions s JOIN tasks t ON t.id=s.task_id
+WHERE s.child_id=? AND s.submitted_at>=? AND s.submitted_at<?`)
+            .bind(childId, dayStart, dayEnd).all(),
+        env.DB.prepare(`SELECT rr.*, r.title, r.cost_points
+FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id
+WHERE rr.child_id=? AND rr.requested_at>=? AND rr.requested_at<?`)
+            .bind(childId, dayStart, dayEnd).all(),
+        env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND created_at>=? AND created_at<? ORDER BY created_at")
+            .bind(childId, dayStart, dayEnd).all(),
+        env.DB.prepare(`SELECT pl.*, ft.title template_title
+FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
+WHERE pl.child_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND pl.created_at>=? AND pl.created_at<?`)
+            .bind(childId, dayStart, dayEnd).all(),
+        env.DB.prepare(`SELECT a.title, ca.unlocked_at
+FROM child_achievements ca JOIN achievements a ON a.id=ca.achievement_id
+WHERE ca.child_id=? AND ca.unlocked_at>=? AND ca.unlocked_at<?`)
+            .bind(childId, dayStart, dayEnd).all(),
+    ]);
+    return {
+        pkey,
+        range: { start: dayStart, end: dayEnd, label: pkey },
+        tasks: taskRows.results,
+        rewards: rewardRows.results,
+        ledger: ledgerRows.results,
+        feedback: feedbackRows.results,
+        achievements: achievementRows.results,
+    };
+}
+
 export function buildAiPrompt(child, report, config, assignments) {
     if (!report) return "";
     const approved = report.tasks.filter((t) => t.status === "approved").length;
@@ -81,6 +117,38 @@ export function buildAiPrompt(child, report, config, assignments) {
         .replace("{gender}", genderLabel || "孩子")
         .replace("{age}", age !== null && Number.isFinite(age) ? String(age) : "未知");
     return `${userPrompt}\n\n孩子本周数据：\n${parts.join("\n")}`;
+}
+
+export function buildDailyGreetingPrompt(child, report, config, assignments) {
+    if (!report) return "";
+    const approved = report.tasks.filter((t) => t.status === "approved").length;
+    const rejected = report.tasks.filter((t) => t.status === "rejected").length;
+    const pending = report.tasks.filter((t) => t.status === "pending").length;
+    const taskNames = [...new Set(report.tasks.filter((t) => t.status === "approved").map((t) => t.title))];
+    const praiseCount = report.feedback.filter((f) => f.source_type === "praise").length;
+    const criticismCount = report.feedback.filter((f) => f.source_type === "criticism").length;
+    const frozenCriticismCount = report.feedback.filter((f) => f.source_type === "criticism" && f.freeze_status === "frozen").length;
+    const netPoints = report.ledger.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    const achievementTitles = report.achievements.map((a) => a.title);
+    const age = child.birth_date ? Math.floor((Date.now() - new Date(child.birth_date).getTime()) / 31557600000) : null;
+    const genderLabel = child.gender === "male" ? "男孩" : child.gender === "female" ? "女孩" : "";
+    const parts = [`孩子姓名：${child.display_name}`, `上一日期间：${report.range?.label || report.pkey || ""}`];
+    if (genderLabel) parts.push(`性别：${genderLabel}`);
+    if (age !== null && Number.isFinite(age)) parts.push(`年龄：${age}岁`);
+    parts.push(`任务：通过 ${approved} 项，待审核 ${pending} 项，未通过 ${rejected} 项。`);
+    if (taskNames.length) parts.push(`完成的任务：${taskNames.join("、")}。`);
+    parts.push(`表扬 ${praiseCount} 次，批评 ${criticismCount} 次，其中待补救批评 ${frozenCriticismCount} 次。`);
+    parts.push(`上一日积分变化：${netPoints > 0 ? "+" : ""}${netPoints}。`);
+    if (report.rewards.length) parts.push(`奖励记录：${report.rewards.map((r) => r.title).filter(Boolean).join("、")}。`);
+    if (achievementTitles.length) parts.push(`解锁成就：${achievementTitles.join("、")}。`);
+    const activeTasks = (assignments?.tasks || []).filter((t) => t.is_active).length;
+    const activeRewards = (assignments?.rewards || []).filter((r) => r.is_active).length;
+    parts.push(`当前有 ${activeTasks} 个活跃任务、${activeRewards} 个活跃奖励。`);
+    const userPrompt = (config?.prompt || "")
+        .replace("{child_name}", child.display_name)
+        .replace("{gender}", genderLabel || "孩子")
+        .replace("{age}", age !== null && Number.isFinite(age) ? String(age) : "未知");
+    return `${userPrompt}\n\n孩子上一日情况报表：\n${parts.join("\n")}`;
 }
 
 export function buildReportAiPrompt(child, reportData, config, periodType, offset) {

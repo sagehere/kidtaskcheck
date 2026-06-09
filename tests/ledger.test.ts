@@ -95,4 +95,63 @@ describe("Task 33: Points Ledger", () => {
     expect(recallNotification.sourceTypeLabel).toBe("表扬");
     expect(recallNotification.sourceLabel).toContain("Great job");
   });
+
+  it("remediable criticism freezes points until parent confirms remedy", async () => {
+    const parentActor = { type: "user", role: "parent", id: pid, displayName: "TP" };
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
+    const templateId = id();
+    env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours) VALUES (?, ?, 'criticism', 'Clean desk', '', 10, 'emoji', '!', 1, 1, '整理书桌', 6, 24)")
+      .bind(templateId, pid)
+      .run();
+
+    const feedbackReq = makeRequest("POST", `/children/${cid}/feedback-events`, { templateId });
+    const feedbackRes = await safe(handleParentRoutes, norm(new URL(feedbackReq.url).pathname), "POST", feedbackReq, env, parentActor);
+    expect(feedbackRes!.status).toBe(200);
+    const frozen = env.DB.prepare("SELECT id, amount, frozen_amount, freeze_status FROM point_ledger WHERE child_id=? AND source_type='criticism'").bind(cid).first() as any;
+    expect(Number(frozen.amount)).toBe(0);
+    expect(Number(frozen.frozen_amount)).toBe(10);
+    expect(frozen.freeze_status).toBe("frozen");
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(0);
+
+    const dashboardReq = makeRequest("GET", "/dashboard/child");
+    const dashboardRes = await safe(handleChildRoutes, norm(new URL(dashboardReq.url).pathname), "GET", dashboardReq, env, childActor, new URL(dashboardReq.url));
+    const dashboard = await dashboardRes!.json();
+    expect(dashboard.data.remedyCriticisms).toHaveLength(1);
+    expect(dashboard.data.remedyCriticisms[0].remedyCondition).toBe("整理书桌");
+
+    const remedyReq = makeRequest("PATCH", `/feedback-events/${frozen.id}/remedy`, {});
+    const remedyRes = await safe(handleSharedRoutes, norm(new URL(remedyReq.url).pathname), "PATCH", remedyReq, env, parentActor);
+    expect(remedyRes!.status).toBe(200);
+    const remedied = env.DB.prepare("SELECT amount, effective_amount, freeze_status, remedied_at, settled_at FROM point_ledger WHERE id=?").bind(frozen.id).first() as any;
+    expect(Number(remedied.amount)).toBe(-4);
+    expect(Number(remedied.effective_amount)).toBe(-4);
+    expect(remedied.freeze_status).toBe("remedied");
+    expect(remedied.remedied_at).toBeTruthy();
+    expect(remedied.settled_at).toBeTruthy();
+  });
+
+  it("expired remediable criticism settles as a real deduction and leaves child remedy cards", async () => {
+    const parentActor = { type: "user", role: "parent", id: pid, displayName: "TP" };
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
+    const templateId = id();
+    env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours) VALUES (?, ?, 'criticism', 'Late', '', 7, 'emoji', '!', 1, 1, '说明原因', 3, 1)")
+      .bind(templateId, pid)
+      .run();
+    const feedbackReq = makeRequest("POST", `/children/${cid}/feedback-events`, { templateId });
+    const feedbackRes = await safe(handleParentRoutes, norm(new URL(feedbackReq.url).pathname), "POST", feedbackReq, env, parentActor);
+    expect(feedbackRes!.status).toBe(200);
+    const frozen = env.DB.prepare("SELECT id FROM point_ledger WHERE child_id=? AND source_type='criticism'").bind(cid).first() as any;
+    env.DB.prepare("UPDATE point_ledger SET remedy_deadline_at='2000-01-01T00:00:00.000Z' WHERE id=?").bind(frozen.id).run();
+
+    const dashboardReq = makeRequest("GET", "/dashboard/child");
+    const dashboardRes = await safe(handleChildRoutes, norm(new URL(dashboardReq.url).pathname), "GET", dashboardReq, env, childActor, new URL(dashboardReq.url));
+    const dashboard = await dashboardRes!.json();
+    expect(dashboard.data.remedyCriticisms).toHaveLength(0);
+    const settled = env.DB.prepare("SELECT amount, effective_amount, freeze_status, settled_at FROM point_ledger WHERE id=?").bind(frozen.id).first() as any;
+    expect(Number(settled.amount)).toBe(-7);
+    expect(Number(settled.effective_amount)).toBe(-7);
+    expect(settled.freeze_status).toBe("settled");
+    expect(settled.settled_at).toBeTruthy();
+  });
 });

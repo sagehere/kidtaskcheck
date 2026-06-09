@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ParentDelegate } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ParentDelegate } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, formatSource, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -11,7 +11,7 @@ import { Shell } from "./components/Shell";
 import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, formatAchievementRule } from "./lib/appHelpers";
 
 type ParentAiServiceStoredConfig = Omit<ParentAiServiceConfig, "apiKey"> & { updatedAt?: string };
-const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, imageBaseUrl: "", imageModel: "gpt-image-2", imagePrompt: "", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasImageKey: false };
+const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, imageBaseUrl: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasImageKey: false };
 
 export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [children, setChildren] = useState<Child[]>([]);
@@ -43,6 +43,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [aiPreviewResult, setAiPreviewResult] = useState<{ title: string; text: string } | null>(null);
   const [cartoonReportGenerating, setCartoonReportGenerating] = useState<"" | "weekly" | "monthly">("");
   const [cartoonReportResult, setCartoonReportResult] = useState<(CartoonReportResponse & { title: string }) | null>(null);
+  const [checklistImageGenerating, setChecklistImageGenerating] = useState(false);
+  const [checklistImageResult, setChecklistImageResult] = useState<(ChecklistImageResponse & { title: string }) | null>(null);
   const [aiConfigLoaded, setAiConfigLoaded] = useState(false);
   const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "", operatorLabel: me.role === "child" ? "" : me.operatorLabel || "" });
   const [message, setMessage] = useState("");
@@ -54,6 +56,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const aiDraftInitializedRef = useRef(false);
   const aiDraftDirtyRef = useRef(false);
   const cartoonAbortRef = useRef<AbortController | null>(null);
+  const checklistImageAbortRef = useRef<AbortController | null>(null);
 
   function syncAiDraft(nextConfig: ParentAiServiceStoredConfig) {
     setDraftAiConfig({
@@ -66,6 +69,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       imageBaseUrl: nextConfig.imageBaseUrl || "",
       imageModel: nextConfig.imageModel || "gpt-image-2",
       imagePrompt: nextConfig.imagePrompt || "",
+      checklistImagePrompt: nextConfig.checklistImagePrompt || "",
       imageSize: nextConfig.imageSize || "1024x1024",
       imageQuality: nextConfig.imageQuality || "low",
       imageFormat: nextConfig.imageFormat || "jpeg",
@@ -177,7 +181,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   useEffect(() => {
     if (activeTab !== "settings" || !aiConfigLoaded || aiDraftInitializedRef.current || aiDraftDirtyRef.current) return;
     syncAiDraft(savedAiConfig);
-  }, [activeTab, aiConfigLoaded, savedAiConfig.baseUrl, savedAiConfig.model, savedAiConfig.prompt, savedAiConfig.hasKey, savedAiConfig.imageBaseUrl, savedAiConfig.imageModel, savedAiConfig.imagePrompt, savedAiConfig.hasImageKey]);
+  }, [activeTab, aiConfigLoaded, savedAiConfig.baseUrl, savedAiConfig.model, savedAiConfig.prompt, savedAiConfig.hasKey, savedAiConfig.imageBaseUrl, savedAiConfig.imageModel, savedAiConfig.imagePrompt, savedAiConfig.checklistImagePrompt, savedAiConfig.hasImageKey]);
   useEffect(() => {
     if (activeTab !== "settings") return;
     const frame = window.requestAnimationFrame(() => {
@@ -394,6 +398,54 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     }
   }
 
+  async function pollChecklistImage(job: ChecklistImageResponse, title: string, signal: AbortSignal): Promise<{ job: ChecklistImageResponse; aborted: boolean }> {
+    if (!job.id || job.status === "completed" || job.status === "failed") {
+      if (!signal.aborted) setChecklistImageResult({ ...job, title });
+      return { job, aborted: signal.aborted };
+    }
+    let last: ChecklistImageResponse = job;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      if (signal.aborted) return { job: last, aborted: true };
+      await new Promise<void>((resolve) => {
+        const timer = window.setTimeout(resolve, 3000);
+        signal.addEventListener("abort", () => { window.clearTimeout(timer); resolve(); }, { once: true });
+      });
+      if (signal.aborted) return { job: last, aborted: true };
+      const next = await api<ChecklistImageResponse>(`/children/${encodeURIComponent(String(job.childId || ""))}/print-checklist-image/${job.id}`);
+      last = next;
+      if (signal.aborted) return { job: next, aborted: true };
+      setChecklistImageResult({ ...next, title });
+      if (next.status === "completed" || next.status === "failed") return { job: next, aborted: false };
+    }
+    return { job: last, aborted: signal.aborted };
+  }
+
+  async function generateChecklistImage(child: Child, retry = false, force = false) {
+    checklistImageAbortRef.current?.abort();
+    const controller = new AbortController();
+    checklistImageAbortRef.current = controller;
+    setChecklistImageGenerating(true);
+    setError("");
+    const title = `${child.display_name} 打印清单绘图`;
+    try {
+      const result = await api<ChecklistImageResponse>(`/children/${encodeURIComponent(child.id)}/print-checklist-image`, {
+        method: "POST",
+        body: JSON.stringify({ retry, force })
+      });
+      setChecklistImageResult({ ...result, title });
+      const final = await pollChecklistImage(result, title, controller.signal);
+      if (final.aborted) return;
+      if (final.job.status === "failed") setError(`打印清单图片生成失败：${final.job.lastError || "未知错误"}`);
+    } catch (err) {
+      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "打印清单图片生成失败");
+    } finally {
+      if (checklistImageAbortRef.current === controller) {
+        checklistImageAbortRef.current = null;
+        setChecklistImageGenerating(false);
+      }
+    }
+  }
+
   async function refundChildReward(child: Child) {
     const rows = await api<WarehouseItem[]>(`/children/${encodeURIComponent(child.id)}/warehouse`).catch(() => []);
     setRefundRows(rows);
@@ -425,6 +477,14 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     );
     setFeedbackChild(null);
     setFeedbackRows([]);
+  }
+
+  async function remedyFeedback(id: string) {
+    await run(
+      () => api(`/feedback-events/${encodeURIComponent(id)}/remedy`, { method: "PATCH", body: JSON.stringify({}) }),
+      "补救已确认，冻结积分已结算"
+    );
+    if (feedbackChild) await openFeedbackRecall(feedbackChild);
   }
 
   async function createDelegate(data: Record<string, unknown>) {
@@ -589,6 +649,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                     imageApiKey: nextImageApiKey || undefined,
                     imageModel: draftAiConfig.imageModel,
                     imagePrompt: draftAiConfig.imagePrompt,
+                    checklistImagePrompt: draftAiConfig.checklistImagePrompt,
                     imageSize: draftAiConfig.imageSize,
                     imageQuality: draftAiConfig.imageQuality,
                     imageFormat: draftAiConfig.imageFormat,
@@ -605,6 +666,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                   imageBaseUrl: response.imageBaseUrl ?? draftAiConfig.imageBaseUrl,
                   imageModel: response.imageModel ?? draftAiConfig.imageModel,
                   imagePrompt: response.imagePrompt ?? draftAiConfig.imagePrompt,
+                  checklistImagePrompt: response.checklistImagePrompt ?? draftAiConfig.checklistImagePrompt,
                   imageSize: response.imageSize ?? draftAiConfig.imageSize,
                   imageQuality: response.imageQuality ?? draftAiConfig.imageQuality,
                   imageFormat: response.imageFormat ?? draftAiConfig.imageFormat,
@@ -678,6 +740,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                 </Field>
                 <Field label="绘图提示词">
                   <textarea value={draftAiConfig.imagePrompt || ""} onChange={(e) => updateAiDraft({ imagePrompt: e.target.value })} rows={4} placeholder="绘制一张儿童绘本风格的成长报告卡片，画面温暖明亮，突出孩子的努力和成就。" />
+                </Field>
+                <Field label="打印清单绘图提示词">
+                  <textarea value={draftAiConfig.checklistImagePrompt || ""} onChange={(e) => updateAiDraft({ checklistImagePrompt: e.target.value })} rows={4} placeholder="为孩子的打印清单绘制一张清晰、温暖、适合贴在墙上的任务奖励海报。" />
                 </Field>
                 <div className="grid two compact-fields">
                   <Field label="尺寸">
@@ -761,6 +826,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           rows={feedbackRows}
           onClose={() => { setFeedbackChild(null); setFeedbackRows([]); }}
           onRecall={(ids) => void recallSelectedFeedback(ids)}
+          onRemedy={(id) => void remedyFeedback(id)}
         />
       )}
       {reportChild && (
@@ -770,7 +836,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           onPrint={exportChildPrint}
           onReport={exportChildReport}
           onCartoonReport={(child, period) => void generateCartoonReport(child, period)}
+          onChecklistImage={(child) => void generateChecklistImage(child)}
           generating={cartoonReportGenerating}
+          checklistGenerating={checklistImageGenerating}
         />
       )}
       {cartoonReportResult && (
@@ -795,6 +863,23 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           title={aiPreviewResult.title}
           text={aiPreviewResult.text}
           onClose={() => setAiPreviewResult(null)}
+        />
+      )}
+      {checklistImageResult && (
+        <CartoonReportDialog
+          result={checklistImageResult}
+          onRetry={(result) => {
+            const child = children.find((item) => item.id === result.childId);
+            if (child) void generateChecklistImage(child, true, result.status === "completed");
+          }}
+          onRegenerate={(result) => {
+            const child = children.find((item) => item.id === result.childId);
+            if (child) void generateChecklistImage(child, false, true);
+          }}
+          onClose={() => {
+            checklistImageAbortRef.current?.abort();
+            setChecklistImageResult(null);
+          }}
         />
       )}
       {editChild && (
@@ -939,8 +1024,9 @@ export function LedgerList({ rows }: { rows: LedgerRow[] }) {
       {rows.length ? rows.map((row) => (
         <article className="row" key={row.id}>
           <div>
-            <strong className={row.amount >= 0 ? "positive" : "negative"}>{row.amount >= 0 ? "+" : ""}{row.amount}</strong>
+            <strong className={row.freeze_status === "frozen" ? "negative" : row.amount >= 0 ? "positive" : "negative"}>{row.freeze_status === "frozen" ? `冻结${row.frozen_amount || 0}` : `${row.amount >= 0 ? "+" : ""}${row.amount}`}</strong>
             <span>{[row.sourceLabel || row.note || formatSource(row.source_type), row.actorLabel ? `操作者：${row.actorLabel}` : "", row.localCreatedAt || formatTime(row.created_at)].filter(Boolean).join(" · ")}</span>
+            {row.remedy_condition && <small>补救：{row.remedy_condition}{row.remedy_points ? ` · 可挽回 ${row.remedy_points} 分` : ""}{row.localRemedyDeadlineAt ? ` · 截止 ${row.localRemedyDeadlineAt}` : ""}</small>}
           </div>
           <span>{row.sourceTypeLabel || formatSource(row.source_type)}</span>
         </article>
@@ -1001,7 +1087,7 @@ export function RefundRewardDialog({ child, rows, onRefund, onClose }: { child: 
   );
 }
 
-export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child: Child; rows: FeedbackEvent[]; onRecall: (ids: string[]) => void; onClose: () => void }) {
+export function FeedbackRecallDialog({ child, rows, onRecall, onRemedy, onClose }: { child: Child; rows: FeedbackEvent[]; onRecall: (ids: string[]) => void; onRemedy: (id: string) => void; onClose: () => void }) {
   const [selected, setSelected] = useState<string[]>([]);
   const total = rows.filter((item) => selected.includes(item.id)).reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
   function toggle(id: string, checked: boolean) {
@@ -1022,8 +1108,13 @@ export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child
               <input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => toggle(item.id, event.target.checked)} />
               <div>
                 <strong>{item.sourceLabel || ((item.source_type === "praise" ? "表扬" : "批评") + " · " + (item.template_title || item.note || "反馈"))}</strong>
-                <span>{item.localCreatedAt || formatTime(item.created_at)} · {item.amount >= 0 ? "+" : ""}{item.amount} 积分</span>
+                <span>{item.localCreatedAt || formatTime(item.created_at)} · {item.freeze_status === "frozen" ? `冻结${item.frozen_amount || 0}` : `${item.amount >= 0 ? "+" : ""}${item.amount}`} 积分{item.remedy_condition ? ` · 补救：${item.remedy_condition}` : ""}</span>
               </div>
+              {item.freeze_status === "frozen" && (
+                <button type="button" className="secondary" onClick={(event) => { event.preventDefault(); onRemedy(item.id); }}>
+                  <Check size={16} />确认补救
+                </button>
+              )}
             </label>
           )) : <Empty text="近 7 天没有可撤回的表扬或批评" />}
         </div>
@@ -1038,7 +1129,7 @@ export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child
   );
 }
 
-export function ReportDialog({ child, onPrint, onReport, onCartoonReport, generating, onClose }: { child: Child; onPrint: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onCartoonReport: (child: Child, period: "weekly" | "monthly") => void; generating: "" | "weekly" | "monthly"; onClose: () => void }) {
+export function ReportDialog({ child, onPrint, onReport, onCartoonReport, onChecklistImage, generating, checklistGenerating, onClose }: { child: Child; onPrint: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onCartoonReport: (child: Child, period: "weekly" | "monthly") => void; onChecklistImage: (child: Child) => void; generating: "" | "weekly" | "monthly"; checklistGenerating: boolean; onClose: () => void }) {
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <section className="panel refund-modal">
@@ -1051,6 +1142,9 @@ export function ReportDialog({ child, onPrint, onReport, onCartoonReport, genera
         <div className="report-actions">
           <button className="primary" onClick={() => { onPrint(child); onClose(); }}>
             <Printer size={18} />打印清单
+          </button>
+          <button className="secondary" disabled={checklistGenerating} onClick={() => onChecklistImage(child)}>
+            <Sparkles size={18} />{checklistGenerating ? "绘制中..." : "绘制打印清单"}
           </button>
           <div className="report-action-row">
             <button className="secondary" onClick={() => { onReport(child, "weekly"); onClose(); }}>
@@ -1269,17 +1363,31 @@ export function CreateReward({ children, tasks, achievements, onCreate }: { chil
 }
 
 export function CreateFeedbackTemplate({ onCreate }: { onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ kind: "praise", title: "", points: 5, iconValue: "✨", isActive: true });
+  const [data, setData] = useState({ kind: "praise", title: "", points: 5, iconValue: "✨", isActive: true, isRemediable: false, remedyCondition: "", remedyPoints: 0, remedyDeadlineHours: 24 });
   return (
     <FormPanel title="新条款" icon={<MessageSquare />} onSubmit={() => onCreate({ ...data, iconType: "emoji" })}>
       <Field label="类型">
-        <select value={data.kind} onChange={(e) => setData({ ...data, kind: e.target.value, iconValue: e.target.value === "praise" ? "✨" : "⚠️" })}>
+        <select value={data.kind} onChange={(e) => setData({ ...data, kind: e.target.value, iconValue: e.target.value === "praise" ? "✨" : "⚠️", isRemediable: e.target.value === "criticism" ? data.isRemediable : false })}>
           <option value="praise">表扬</option>
           <option value="criticism">批评</option>
         </select>
       </Field>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
+      {data.kind === "criticism" && (
+        <>
+          <Toggle label="可补救" checked={data.isRemediable} onChange={(isRemediable) => setData({ ...data, isRemediable })} />
+          {data.isRemediable && (
+            <>
+              <Field label="补救条件"><textarea value={data.remedyCondition} onChange={(e) => setData({ ...data, remedyCondition: e.target.value })} /></Field>
+              <div className="grid two compact-fields">
+                <Field label="挽回积分"><input type="number" min="0" max={data.points} value={data.remedyPoints} onChange={(e) => setData({ ...data, remedyPoints: Number(e.target.value) })} /></Field>
+                <Field label="补救时限（小时）"><input type="number" min="1" value={data.remedyDeadlineHours} onChange={(e) => setData({ ...data, remedyDeadlineHours: Number(e.target.value) })} /></Field>
+              </div>
+            </>
+          )}
+        </>
+      )}
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
     </FormPanel>
@@ -1299,7 +1407,7 @@ export function FeedbackOverview({ items, onUpdate, onDelete }: { items: Feedbac
               <div>
                 <strong>{item.title}</strong>
                 {item.description && <span>{item.description}</span>}
-                <small>{item.kind === "praise" ? "表扬" : "批评"} · {item.is_active ? "启用" : "停用"} · <span className={item.kind === "praise" ? "positive" : "negative"}>{item.kind === "praise" ? "+" : "-"}{item.points} 积分</span></small>
+                <small>{item.kind === "praise" ? "表扬" : "批评"} · {item.is_active ? "启用" : "停用"} · <span className={item.kind === "praise" ? "positive" : "negative"}>{item.kind === "praise" ? "+" : "-"}{item.points} 积分</span>{item.is_remediable ? ` · 可补救：${item.remedy_points || 0} 分 / ${item.remedy_deadline_hours || 24} 小时` : ""}</small>
               </div>
             </div>
             <div className="actions">
@@ -1319,12 +1427,26 @@ export function FeedbackOverview({ items, onUpdate, onDelete }: { items: Feedbac
 }
 
 export function EditFeedbackForm({ item, onSave, onCancel }: { item: FeedbackTemplate; onSave: (data: any) => any; onCancel: () => void }) {
-  const [data, setData] = useState({ kind: item.kind, title: item.title, points: item.points || 0, iconValue: item.icon_value || "✨", isActive: item.is_active !== 0 });
+  const [data, setData] = useState({ kind: item.kind, title: item.title, points: item.points || 0, iconValue: item.icon_value || "✨", isActive: item.is_active !== 0, isRemediable: item.is_remediable === 1, remedyCondition: item.remedy_condition || "", remedyPoints: item.remedy_points || 0, remedyDeadlineHours: item.remedy_deadline_hours || 24 });
   return (
     <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, iconType: "emoji" }); }}>
-      <Field label="类型"><select value={data.kind} onChange={(e) => setData({ ...data, kind: e.target.value as "praise" | "criticism" })}><option value="praise">表扬</option><option value="criticism">批评</option></select></Field>
+      <Field label="类型"><select value={data.kind} onChange={(e) => setData({ ...data, kind: e.target.value as "praise" | "criticism", isRemediable: e.target.value === "criticism" ? data.isRemediable : false })}><option value="praise">表扬</option><option value="criticism">批评</option></select></Field>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
+      {data.kind === "criticism" && (
+        <>
+          <Toggle label="可补救" checked={data.isRemediable} onChange={(isRemediable) => setData({ ...data, isRemediable })} />
+          {data.isRemediable && (
+            <>
+              <Field label="补救条件"><textarea value={data.remedyCondition} onChange={(e) => setData({ ...data, remedyCondition: e.target.value })} /></Field>
+              <div className="grid two compact-fields">
+                <Field label="挽回积分"><input type="number" min="0" max={data.points} value={data.remedyPoints} onChange={(e) => setData({ ...data, remedyPoints: Number(e.target.value) })} /></Field>
+                <Field label="补救时限（小时）"><input type="number" min="1" value={data.remedyDeadlineHours} onChange={(e) => setData({ ...data, remedyDeadlineHours: Number(e.target.value) })} /></Field>
+              </div>
+            </>
+          )}
+        </>
+      )}
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
       <div className="actions"><button className="primary">保存</button><button type="button" className="secondary" onClick={onCancel}>取消</button></div>

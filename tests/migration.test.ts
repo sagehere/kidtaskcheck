@@ -7,9 +7,9 @@ import { repairSqlite0002 } from "../scripts/sqlite-repair-0002.mjs";
 const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
 describe("Task 35: Migration Smoke Test", () => {
-  it("all 20 migration files apply sequentially on empty DB without errors", () => {
+  it("all 21 migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(20);
+    expect(files.length).toBe(21);
     const db = new SqliteTestDb();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
@@ -30,6 +30,7 @@ describe("Task 35: Migration Smoke Test", () => {
     expect(tableNames).toContain("feedback_templates");
     expect(tableNames).toContain("parent_delegates");
     expect(tableNames).toContain("ai_cartoon_report_jobs");
+    expect(tableNames).toContain("ai_print_checklist_image_jobs");
     expect(tableNames).toContain("task_categories");
     expect(tableNames).toContain("achievements");
     expect(tableNames).toContain("child_achievements");
@@ -50,6 +51,15 @@ describe("Task 35: Migration Smoke Test", () => {
     expect(aiColumnNames).toContain("image_base_url");
     expect(aiColumnNames).toContain("image_api_key");
     expect(aiColumnNames).toContain("image_model");
+    expect(aiColumnNames).toContain("checklist_image_prompt");
+    const feedbackColumns = db.prepare("PRAGMA table_info(feedback_templates)").all().results as any[];
+    const feedbackColumnNames = feedbackColumns.map((column: any) => column.name);
+    expect(feedbackColumnNames).toContain("is_remediable");
+    expect(feedbackColumnNames).toContain("remedy_condition");
+    const ledgerColumns = db.prepare("PRAGMA table_info(point_ledger)").all().results as any[];
+    const ledgerColumnNames = ledgerColumns.map((column: any) => column.name);
+    expect(ledgerColumnNames).toContain("freeze_status");
+    expect(ledgerColumnNames).toContain("effective_amount");
     db.close();
   });
 

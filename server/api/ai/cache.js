@@ -41,7 +41,7 @@ export function aiImageConfigHash(config) {
 export async function getParentAiServiceConfig(env, parentId) {
     try {
         await ensureParentAiServiceSettings(env);
-        const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, report_prompt, monthly_prompt, image_base_url, image_api_key, image_model, image_prompt, image_size, image_quality, image_format, image_n, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
+        const row = await env.DB.prepare("SELECT base_url, api_key, model, prompt, report_prompt, monthly_prompt, image_base_url, image_api_key, image_model, image_prompt, image_size, image_quality, image_format, image_n, checklist_image_prompt, updated_at FROM parent_ai_service_settings WHERE parent_id=?").bind(parentId).first();
         return {
             baseUrl: row?.base_url || "",
             apiKey: row?.api_key || "",
@@ -57,13 +57,14 @@ export async function getParentAiServiceConfig(env, parentId) {
             imageQuality: row?.image_quality || "low",
             imageFormat: row?.image_format || "jpeg",
             imageN: Number(row?.image_n || 1),
+            checklistImagePrompt: row?.checklist_image_prompt || "",
             hasKey: !!row?.api_key,
             hasImageKey: !!row?.image_api_key,
             updatedAt: row?.updated_at || "",
         };
     }
     catch {
-        return { baseUrl: "", apiKey: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", imageBaseUrl: "", imageApiKey: "", imageModel: "gpt-image-2", imagePrompt: "", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasKey: false, hasImageKey: false, updatedAt: "" };
+        return { baseUrl: "", apiKey: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", imageBaseUrl: "", imageApiKey: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasKey: false, hasImageKey: false, updatedAt: "" };
     }
 }
 
@@ -75,10 +76,9 @@ export async function loadAiGreetingSnapshot(env, child, offset) {
         return { greeting: "", aiRefreshPending: false };
     const configHash = aiConfigHash(config);
     const now = nowIso();
-    const range = reportWindowRange("weekly", now, offset);
-    const weekKey = periodKey("weekly", range.start, offset);
+    const dayKey = periodKey("daily", now, offset);
     const cached = await env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=? AND previous_week_key=? AND config_hash=?")
-        .bind(child.id, weekKey, configHash)
+        .bind(child.id, dayKey, configHash)
         .first();
     if (cached?.greeting)
         return { greeting: cached.greeting, aiRefreshPending: false };
@@ -117,6 +117,7 @@ export async function ensureParentAiServiceSettings(env) {
     await ensureColumn(env, "parent_ai_service_settings", "image_quality", "image_quality TEXT NOT NULL DEFAULT 'low'");
     await ensureColumn(env, "parent_ai_service_settings", "image_format", "image_format TEXT NOT NULL DEFAULT 'jpeg'");
     await ensureColumn(env, "parent_ai_service_settings", "image_n", "image_n INTEGER NOT NULL DEFAULT 1");
+    await ensureColumn(env, "parent_ai_service_settings", "checklist_image_prompt", "checklist_image_prompt TEXT NOT NULL DEFAULT ''");
 }
 
 export async function ensureAiReportCommentaries(env) {

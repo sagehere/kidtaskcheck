@@ -1,5 +1,5 @@
 import { id, nowIso, ensureColumn, logSystemError, timezoneOffsetMinutes } from "../utils.js";
-import { generateCartoonReportImage } from "./orchestrator.js";
+import { generateCartoonReportImage, generatePrintChecklistImage } from "./orchestrator.js";
 import { NonRetryableError } from "./orchestrator.js";
 import { AiProviderError } from "./providers.js";
 
@@ -218,6 +218,172 @@ export async function processCartoonReportJobs(env, { maxJobs = undefined, lockM
             stats.completed++;
         } catch (error) {
             const retrying = await failJob(env, job, errorInfo(error));
+            if (retrying) stats.retried++;
+            else stats.failed++;
+        }
+    }
+    return stats;
+}
+
+export async function ensureAiPrintChecklistImageJobs(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ai_print_checklist_image_jobs (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  child_id TEXT NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  job_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processing', 'completed', 'failed')),
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  max_retries INTEGER NOT NULL DEFAULT 3,
+  last_error TEXT,
+  error_code TEXT,
+  image_url TEXT,
+  format TEXT NOT NULL DEFAULT 'jpeg',
+  filename TEXT NOT NULL DEFAULT '',
+  prompt_preview TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  next_attempt_at TEXT,
+  locked_until TEXT,
+  UNIQUE(parent_id, child_id, job_key)
+)`).run();
+    await ensureColumn(env, "ai_print_checklist_image_jobs", "error_code", "error_code TEXT");
+    await ensureColumn(env, "ai_print_checklist_image_jobs", "next_attempt_at", "next_attempt_at TEXT");
+    await ensureColumn(env, "ai_print_checklist_image_jobs", "locked_until", "locked_until TEXT");
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_ai_print_checklist_jobs_ready ON ai_print_checklist_image_jobs(status, next_attempt_at, created_at)").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_ai_print_checklist_jobs_parent ON ai_print_checklist_image_jobs(parent_id, child_id, job_key)").run();
+}
+
+export function publicPrintChecklistJob(row) {
+    if (!row) return null;
+    return {
+        id: row.id,
+        childId: row.child_id,
+        status: row.status,
+        retryCount: Number(row.retry_count || 0),
+        lastError: row.last_error || "",
+        imageUrl: row.image_url || "",
+        format: row.format || "jpeg",
+        filename: row.filename || "",
+        promptPreview: row.prompt_preview || "",
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        completedAt: row.completed_at || ""
+    };
+}
+
+export async function enqueuePrintChecklistImageJob(env, { parentId, childId, resetFailed = false, force = false }) {
+    await ensureAiPrintChecklistImageJobs(env);
+    const now = nowIso();
+    const jobKey = "current";
+    const forceFlag = force ? 1 : 0;
+    const resetFlag = (force || resetFailed) ? 1 : 0;
+    const clearImage = force ? 1 : 0;
+    await env.DB.prepare(`INSERT INTO ai_print_checklist_image_jobs
+(id, parent_id, child_id, job_key, status, retry_count, max_retries, created_at, updated_at, next_attempt_at)
+VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+ON CONFLICT(parent_id, child_id, job_key) DO UPDATE SET
+  status=CASE WHEN ?=1 THEN 'pending' WHEN ai_print_checklist_image_jobs.status='failed' AND ?=1 THEN 'pending' ELSE ai_print_checklist_image_jobs.status END,
+  retry_count=CASE WHEN ?=1 THEN 0 WHEN ai_print_checklist_image_jobs.status='failed' AND ?=1 THEN 0 ELSE ai_print_checklist_image_jobs.retry_count END,
+  last_error=CASE WHEN ?=1 THEN NULL WHEN ai_print_checklist_image_jobs.status='failed' AND ?=1 THEN NULL ELSE ai_print_checklist_image_jobs.last_error END,
+  error_code=CASE WHEN ?=1 THEN NULL WHEN ai_print_checklist_image_jobs.status='failed' AND ?=1 THEN NULL ELSE ai_print_checklist_image_jobs.error_code END,
+  image_url=CASE WHEN ?=1 THEN NULL ELSE ai_print_checklist_image_jobs.image_url END,
+  format=CASE WHEN ?=1 THEN 'jpeg' ELSE ai_print_checklist_image_jobs.format END,
+  filename=CASE WHEN ?=1 THEN '' ELSE ai_print_checklist_image_jobs.filename END,
+  prompt_preview=CASE WHEN ?=1 THEN '' ELSE ai_print_checklist_image_jobs.prompt_preview END,
+  started_at=CASE WHEN ?=1 THEN NULL ELSE ai_print_checklist_image_jobs.started_at END,
+  completed_at=CASE WHEN ?=1 THEN NULL ELSE ai_print_checklist_image_jobs.completed_at END,
+  next_attempt_at=CASE WHEN ?=1 THEN excluded.next_attempt_at WHEN ai_print_checklist_image_jobs.status='failed' AND ?=1 THEN excluded.next_attempt_at ELSE ai_print_checklist_image_jobs.next_attempt_at END,
+  updated_at=excluded.updated_at`)
+        .bind(
+            id(), parentId, childId, jobKey, DEFAULT_MAX_RETRIES, now, now, now,
+            forceFlag, resetFlag,
+            forceFlag, resetFlag,
+            forceFlag, resetFlag,
+            forceFlag, resetFlag,
+            clearImage, clearImage, clearImage, clearImage, clearImage, clearImage,
+            forceFlag, resetFlag
+        )
+        .run();
+    return env.DB.prepare("SELECT * FROM ai_print_checklist_image_jobs WHERE parent_id=? AND child_id=? AND job_key=?")
+        .bind(parentId, childId, jobKey)
+        .first();
+}
+
+export async function loadPrintChecklistImageJob(env, parentId, jobId) {
+    await ensureAiPrintChecklistImageJobs(env);
+    return env.DB.prepare("SELECT * FROM ai_print_checklist_image_jobs WHERE id=? AND parent_id=?").bind(jobId, parentId).first();
+}
+
+async function reserveNextPrintChecklistJob(env, now, lockMs) {
+    await ensureAiPrintChecklistImageJobs(env);
+    await env.DB.prepare(`UPDATE ai_print_checklist_image_jobs
+SET status='pending', locked_until=NULL
+WHERE status='processing' AND locked_until IS NOT NULL AND locked_until<?`).bind(now).run();
+    const job = await env.DB.prepare(`SELECT * FROM ai_print_checklist_image_jobs
+WHERE status='pending' AND (next_attempt_at IS NULL OR next_attempt_at<=?)
+ORDER BY created_at ASC
+LIMIT 1`).bind(now).first();
+    if (!job) return null;
+    const lockUntil = new Date(Date.parse(now) + lockMs).toISOString();
+    const result = await env.DB.prepare(`UPDATE ai_print_checklist_image_jobs
+SET status='processing', started_at=?, locked_until=?, updated_at=?
+WHERE id=? AND status='pending'`).bind(now, lockUntil, now, job.id).run();
+    if ((result?.meta?.changes || 0) < 1) return null;
+    return { ...job, status: "processing", started_at: now, locked_until: lockUntil };
+}
+
+async function completePrintChecklistJob(env, job, result) {
+    const now = nowIso();
+    await env.DB.prepare(`UPDATE ai_print_checklist_image_jobs
+SET status='completed', last_error=NULL, error_code=NULL, image_url=?, format=?, filename=?, prompt_preview=?, locked_until=NULL, completed_at=?, updated_at=?
+WHERE id=?`)
+        .bind(result.imageUrl, result.format || "jpeg", result.filename || "", result.promptPreview || "", now, now, job.id)
+        .run();
+}
+
+async function failPrintChecklistJob(env, job, info) {
+    const retryCount = Number(job.retry_count || 0) + 1;
+    const maxRetries = Number(job.max_retries || DEFAULT_MAX_RETRIES);
+    const canRetry = info.retryable && retryCount < maxRetries;
+    const status = canRetry ? "pending" : "failed";
+    const now = nowIso();
+    const nextAttemptAt = canRetry ? new Date(Date.now() + retryDelayMs(retryCount - 1)).toISOString() : null;
+    await env.DB.prepare(`UPDATE ai_print_checklist_image_jobs
+SET status=?, retry_count=?, error_code=?, last_error=?, next_attempt_at=?, locked_until=NULL, completed_at=?, updated_at=?
+WHERE id=?`)
+        .bind(status, retryCount, info.code, info.message.slice(0, 500), nextAttemptAt, status === "failed" ? now : null, now, job.id)
+        .run();
+    if (status === "failed") {
+        await logSystemError(env, {
+            source: "ai_print_checklist_image_queue",
+            message: info.message,
+            status: 500,
+            metadata: { jobId: job.id, parentId: job.parent_id, childId: job.child_id, errorCode: info.code }
+        });
+    }
+    return canRetry;
+}
+
+export async function processPrintChecklistImageJobs(env, { maxJobs = undefined, lockMs = DEFAULT_LOCK_MS } = {}) {
+    const limit = Number.isFinite(Number(maxJobs)) ? Number(maxJobs) : Number(env.AI_PRINT_CHECKLIST_QUEUE_MAX_JOBS || 2);
+    const stats = { processed: 0, completed: 0, failed: 0, retried: 0, empty: false };
+    for (let index = 0; index < limit; index++) {
+        const job = await reserveNextPrintChecklistJob(env, nowIso(), lockMs);
+        if (!job) {
+            stats.empty = true;
+            break;
+        }
+        stats.processed++;
+        try {
+            const child = await loadChild(env, job);
+            if (!child) throw new NonRetryableError("child_missing");
+            const result = await generatePrintChecklistImage(env, child);
+            await completePrintChecklistJob(env, job, result);
+            stats.completed++;
+        } catch (error) {
+            const retrying = await failPrintChecklistJob(env, job, errorInfo(error));
             if (retrying) stats.retried++;
             else stats.failed++;
         }

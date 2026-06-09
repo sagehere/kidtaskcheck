@@ -1,6 +1,6 @@
 ﻿import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit } from "../utils.js";
-import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs } from "../ai/index.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes } from "../utils.js";
+import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs } from "../ai/index.js";
 
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
@@ -107,6 +107,7 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
             imageBaseUrl: config.imageBaseUrl,
             imageModel: config.imageModel,
             imagePrompt: config.imagePrompt,
+            checklistImagePrompt: config.checklistImagePrompt,
             imageSize: config.imageSize,
             imageQuality: config.imageQuality,
             imageFormat: config.imageFormat,
@@ -128,6 +129,7 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
         const nextImageBaseUrl = input.imageBaseUrl !== undefined ? String(input.imageBaseUrl).trim().replace(/\/+$/, "") : (current.imageBaseUrl || "");
         const nextImageModel = input.imageModel !== undefined ? String(input.imageModel).trim() : (current.imageModel || "gpt-image-2");
         const nextImagePrompt = input.imagePrompt !== undefined ? String(input.imagePrompt).trim() : (current.imagePrompt || "");
+        const nextChecklistImagePrompt = input.checklistImagePrompt !== undefined ? String(input.checklistImagePrompt).trim() : (current.checklistImagePrompt || "");
         const nextImageSize = input.imageSize !== undefined ? String(input.imageSize).trim() : (current.imageSize || "1024x1024");
         const nextImageQuality = input.imageQuality !== undefined ? String(input.imageQuality).trim() : (current.imageQuality || "low");
         const nextImageFormat = input.imageFormat !== undefined ? String(input.imageFormat).trim() : (current.imageFormat || "jpeg");
@@ -150,12 +152,12 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
         const nextApiKey = input.apiKey !== undefined && String(input.apiKey).trim() ? String(input.apiKey).trim() : current.apiKey;
         const nextImageApiKey = input.imageApiKey !== undefined && String(input.imageApiKey).trim() ? String(input.imageApiKey).trim() : current.imageApiKey;
         const updatedAt = nowIso();
-        await env.DB.prepare(`INSERT INTO parent_ai_service_settings (parent_id, base_url, api_key, model, prompt, report_prompt, monthly_prompt, image_base_url, image_api_key, image_model, image_prompt, image_size, image_quality, image_format, image_n, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, prompt=excluded.prompt, report_prompt=excluded.report_prompt, monthly_prompt=excluded.monthly_prompt, image_base_url=excluded.image_base_url, image_api_key=excluded.image_api_key, image_model=excluded.image_model, image_prompt=excluded.image_prompt, image_size=excluded.image_size, image_quality=excluded.image_quality, image_format=excluded.image_format, image_n=excluded.image_n, updated_at=excluded.updated_at`)
-            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, nextReportPrompt, nextMonthlyPrompt, nextImageBaseUrl, nextImageApiKey, nextImageModel, nextImagePrompt, nextImageSize, nextImageQuality, nextImageFormat, nextImageN, updatedAt)
+        await env.DB.prepare(`INSERT INTO parent_ai_service_settings (parent_id, base_url, api_key, model, prompt, report_prompt, monthly_prompt, image_base_url, image_api_key, image_model, image_prompt, checklist_image_prompt, image_size, image_quality, image_format, image_n, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, prompt=excluded.prompt, report_prompt=excluded.report_prompt, monthly_prompt=excluded.monthly_prompt, image_base_url=excluded.image_base_url, image_api_key=excluded.image_api_key, image_model=excluded.image_model, image_prompt=excluded.image_prompt, checklist_image_prompt=excluded.checklist_image_prompt, image_size=excluded.image_size, image_quality=excluded.image_quality, image_format=excluded.image_format, image_n=excluded.image_n, updated_at=excluded.updated_at`)
+            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, nextReportPrompt, nextMonthlyPrompt, nextImageBaseUrl, nextImageApiKey, nextImageModel, nextImagePrompt, nextChecklistImagePrompt, nextImageSize, nextImageQuality, nextImageFormat, nextImageN, updatedAt)
             .run();
-        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, reportPrompt: nextReportPrompt, monthlyPrompt: nextMonthlyPrompt, imageBaseUrl: nextImageBaseUrl, imageModel: nextImageModel, imagePrompt: nextImagePrompt, imageSize: nextImageSize, imageQuality: nextImageQuality, imageFormat: nextImageFormat, imageN: nextImageN, hasKey: !!nextApiKey, hasImageKey: !!nextImageApiKey, updatedAt });
+        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, reportPrompt: nextReportPrompt, monthlyPrompt: nextMonthlyPrompt, imageBaseUrl: nextImageBaseUrl, imageModel: nextImageModel, imagePrompt: nextImagePrompt, checklistImagePrompt: nextChecklistImagePrompt, imageSize: nextImageSize, imageQuality: nextImageQuality, imageFormat: nextImageFormat, imageN: nextImageN, hasKey: !!nextApiKey, hasImageKey: !!nextImageApiKey, updatedAt });
     }
     if (path === "/parent/ai-service/models" && method === "POST") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
@@ -369,6 +371,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
     const childExport = path.match(/^\/children\/([^/]+)\/export-print$/);
     if (childExport && method === "GET") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
+        await settleExpiredCriticismFreezes(env);
         const child = await env.DB.prepare("SELECT id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(childExport[1], a.id)
             .first();
@@ -387,12 +390,50 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
             env.DB.prepare("SELECT * FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(a.id).all()
         ]);
         const table = (headers, rows) => `<table><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
-        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 打印清单</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务</h2>${table(["标题","分类","周期","次数","积分","周","状态","说明"], tasks.results.map((item) => [item.title, item.category_name || "", item.period, item.limit_count || 1, item.points, normalizeWeekdays(item.enabled_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>奖励</h2>${table(["名称","所需积分","限制周期","次数","核销周几","状态","说明"], rewards.results.map((item) => [item.title, item.cost_points, item.limit_period, item.limit_count || "", normalizeWeekdays(item.redeem_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>表扬与批评条款</h2>${table(["类型","标题","积分","状态","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, item.points, item.is_active ? "启用" : "停用", item.description || ""]))}</body></html>`;
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 打印清单</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务</h2>${table(["标题","分类","周期","次数","积分","周","状态","说明"], tasks.results.map((item) => [item.title, item.category_name || "", item.period, item.limit_count || 1, item.points, normalizeWeekdays(item.enabled_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>奖励</h2>${table(["名称","所需积分","限制周期","次数","核销周几","状态","说明"], rewards.results.map((item) => [item.title, item.cost_points, item.limit_period, item.limit_count || "", normalizeWeekdays(item.redeem_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>表扬与批评条款</h2>${table(["类型","标题","积分","补救","状态","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, item.points, item.kind === "criticism" && item.is_remediable ? `${item.remedy_condition || "可补救"}；挽回${item.remedy_points || 0}分；${item.remedy_deadline_hours || 24}小时` : "", item.is_active ? "启用" : "停用", item.description || ""]))}</body></html>`;
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
+    const childPrintImage = path.match(/^\/children\/([^/]+)\/print-checklist-image$/);
+    if (childPrintImage && method === "POST") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const input = await body(request);
+        const child = await env.DB.prepare("SELECT id, parent_id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(childPrintImage[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const config = await getParentAiServiceConfig(env, a.id);
+        if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.checklistImagePrompt)
+            return fail("BAD_REQUEST", "请先完整保存打印清单绘图配置", 400);
+        const imageUrlErr = validateHttpsUrl(config.imageBaseUrl, "绘图 AI Base URL");
+        if (imageUrlErr)
+            return fail("BAD_REQUEST", imageUrlErr, 400);
+        const job = await enqueuePrintChecklistImageJob(env, {
+            parentId: a.id,
+            childId: child.id,
+            resetFailed: !!input.retry,
+            force: !!input.force
+        });
+        ctx?.waitUntil?.(processPrintChecklistImageJobs(env, { maxJobs: 1 }));
+        return ok(publicPrintChecklistJob(job));
+    }
+    const childPrintImageJob = path.match(/^\/children\/([^/]+)\/print-checklist-image\/([^/]+)$/);
+    if (childPrintImageJob && method === "GET") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const child = await env.DB.prepare("SELECT id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(childPrintImageJob[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const job = await loadPrintChecklistImageJob(env, a.id, childPrintImageJob[2]);
+        if (!job || job.child_id !== child.id)
+            return fail("NOT_FOUND", "打印清单绘图任务不存在", 404);
+        return ok(publicPrintChecklistJob(job));
     }
     const childReport = path.match(/^\/children\/([^/]+)\/report$/);
     if (childReport && method === "GET") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
+        await settleExpiredCriticismFreezes(env);
         const child = await env.DB.prepare("SELECT id, display_name, ai_enabled, gender, birth_date, parent_id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(childReport[1], a.id)
             .first();
@@ -508,11 +549,18 @@ ORDER BY pl.created_at DESC`)
             return fail("NOT_FOUND", "表扬或批评条款不存在", 404);
         const ledgerId = id();
         const points = Math.abs(Number(template.points || 0));
-        const amount = template.kind === "praise" ? points : -points;
+        const isFrozenCriticism = template.kind === "criticism" && Number(template.is_remediable || 0) === 1;
+        const frozenAmount = isFrozenCriticism ? points : 0;
+        const amount = template.kind === "praise" ? points : isFrozenCriticism ? 0 : -points;
+        const remedyPoints = isFrozenCriticism ? Math.max(0, Math.min(points, Number(template.remedy_points || 0))) : 0;
+        const remedyDeadlineHours = isFrozenCriticism ? Math.max(1, Number(template.remedy_deadline_hours || 24)) : 0;
+        const remedyDeadlineAt = isFrozenCriticism ? new Date(Date.now() + remedyDeadlineHours * 3600000).toISOString() : null;
         const label = template.kind === "praise" ? "表扬" : "批评";
         const note = template.description ? `${template.title}：${template.description}` : template.title;
-        await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)")
-            .bind(ledgerId, child.id, a.id, amount, template.kind, template.id, note, audit.type, audit.id, audit.label)
+        await env.DB.prepare(`INSERT INTO point_ledger
+(id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot, effective_amount, frozen_amount, freeze_status, remedy_condition, remedy_points, remedy_deadline_at)
+VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .bind(ledgerId, child.id, a.id, amount, template.kind, template.id, note, audit.type, audit.id, audit.label, amount, frozenAmount, isFrozenCriticism ? "frozen" : "", isFrozenCriticism ? String(template.remedy_condition || "").trim() : "", remedyPoints, remedyDeadlineAt)
             .run();
         await recalcAchievements(env, a.id, child.id);
         await notify(env, {
@@ -522,7 +570,7 @@ ORDER BY pl.created_at DESC`)
             actorId: audit.id || a.id,
             actorLabel: audit.label,
             title: `收到一条${label}`,
-            body: `${note}，${amount >= 0 ? "增加" : "扣除"} ${points} 积分。`,
+            body: isFrozenCriticism ? `${note}，冻结 ${points} 积分。按要求补救后可挽回 ${remedyPoints} 积分。` : `${note}，${amount >= 0 ? "增加" : "扣除"} ${points} 积分。`,
             eventType: template.kind,
             relatedType: "point_ledger",
             relatedId: ledgerId,
@@ -537,8 +585,13 @@ ORDER BY pl.created_at DESC`)
         const input = await body(request);
         if (method === "POST") {
             const kind = input.kind === "criticism" ? "criticism" : "praise";
-            await env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(id(), a.id, kind, input.title, input.description || "", Number(input.points || 0), input.iconType || "emoji", input.iconValue || (kind === "praise" ? "✨" : "⚠️"), input.isActive === false ? 0 : 1)
+            const isRemediable = kind === "criticism" && input.isRemediable ? 1 : 0;
+            const remedyPoints = Math.max(0, Math.min(Number(input.points || 0), Number(input.remedyPoints || 0)));
+            const remedyDeadlineHours = Math.max(1, Number(input.remedyDeadlineHours || 24));
+            await env.DB.prepare(`INSERT INTO feedback_templates
+(id, parent_id, kind, title, description, points, icon_type, icon_value, is_active, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                .bind(id(), a.id, kind, input.title, input.description || "", Number(input.points || 0), input.iconType || "emoji", input.iconValue || (kind === "praise" ? "✨" : "⚠️"), input.isActive === false ? 0 : 1, isRemediable, isRemediable ? String(input.remedyCondition || "").trim() : "", isRemediable ? remedyPoints : 0, isRemediable ? remedyDeadlineHours : 24)
                 .run();
             return ok(true);
         }
@@ -551,8 +604,11 @@ ORDER BY pl.created_at DESC`)
         const found = await env.DB.prepare("SELECT id FROM feedback_templates WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(feedbackPatch[1], a.id).first();
         if (!found)
             return fail("NOT_FOUND", "表扬或批评条款不存在", 404);
-        await env.DB.prepare("UPDATE feedback_templates SET kind=?, title=?, description=?, points=?, icon_type=?, icon_value=?, is_active=?, updated_at=? WHERE id=?")
-            .bind(kind, input.title, input.description || "", Number(input.points || 0), input.iconType || "emoji", input.iconValue || (kind === "praise" ? "✨" : "⚠️"), input.isActive === false ? 0 : 1, nowIso(), feedbackPatch[1])
+        const isRemediable = kind === "criticism" && input.isRemediable ? 1 : 0;
+        const remedyPoints = Math.max(0, Math.min(Number(input.points || 0), Number(input.remedyPoints || 0)));
+        const remedyDeadlineHours = Math.max(1, Number(input.remedyDeadlineHours || 24));
+        await env.DB.prepare("UPDATE feedback_templates SET kind=?, title=?, description=?, points=?, icon_type=?, icon_value=?, is_active=?, is_remediable=?, remedy_condition=?, remedy_points=?, remedy_deadline_hours=?, updated_at=? WHERE id=?")
+            .bind(kind, input.title, input.description || "", Number(input.points || 0), input.iconType || "emoji", input.iconValue || (kind === "praise" ? "✨" : "⚠️"), input.isActive === false ? 0 : 1, isRemediable, isRemediable ? String(input.remedyCondition || "").trim() : "", isRemediable ? remedyPoints : 0, isRemediable ? remedyDeadlineHours : 24, nowIso(), feedbackPatch[1])
             .run();
         return ok(true);
     }

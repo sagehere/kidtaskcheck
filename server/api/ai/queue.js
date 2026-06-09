@@ -137,7 +137,7 @@ async function runJob(env, job, offset, ranges) {
     if (!child) throw new NonRetryableError("child_missing");
     const aiOptions = { throwOnError: true };
     if (job.type === "greeting") {
-        return generateParentAiGreeting(env, child, offset, true, { ai: aiOptions });
+        return generateParentAiGreeting(env, child, offset, true, { ai: aiOptions, periodKey: job.period_key });
     }
     const periodType = job.type === "report_monthly" ? "monthly" : "weekly";
     return generateReportCommentary(env, child, periodType, job.period_key, offset, true, {

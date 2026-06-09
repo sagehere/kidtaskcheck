@@ -1,7 +1,7 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
-import { nowIso, balance } from "../utils.js";
+import { nowIso, balance, timezoneOffsetMinutes } from "../utils.js";
 import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries } from "./cache.js";
-import { buildAiPrompt, buildReportAiPrompt, previousWeekReportSummary } from "./prompt.js";
+import { buildDailyGreetingPrompt, buildReportAiPrompt, previousDayReportSummary } from "./prompt.js";
 import { callParentAiService, callParentAiServiceForReport, callParentImageService } from "./providers.js";
 
 export class NonRetryableError extends Error {
@@ -91,6 +91,7 @@ export function buildCartoonReportPrompt(child, reportData, config, periodType) 
     const categories = reportData.categoryCounts?.length ? reportData.categoryCounts.map(([name, count]) => `${name}${count}项`).join("，") : "暂无分类完成";
     const rewards = reportData.rewards?.slice(0, 5).map((row) => row.title).filter(Boolean).join("，") || "暂无奖励兑换";
     const achievements = reportData.achievements?.slice(0, 5).map((row) => row.title).filter(Boolean).join("，") || "暂无新成就";
+    const commentary = reportData.aiCommentary || "暂无AI评语";
     const periodLabel = periodType === "monthly" ? "上月月报" : "上周周报";
     const summary = [
         `孩子：${child.display_name}`,
@@ -99,6 +100,7 @@ export function buildCartoonReportPrompt(child, reportData, config, periodType) 
         `分类亮点：${categories}`,
         `表扬批评：表扬${praiseCount}次，批评${criticismCount}次`,
         `积分：本期${reportData.netPoints >= 0 ? "+" : ""}${reportData.netPoints}，当前余额${reportData.currentBalance}`,
+        `AI评语：${commentary}`,
         `奖励：${rewards}`,
         `成就：${achievements}`,
         "请画成适合孩子看的卡通报告画面，画面要积极、清晰、避免出现真实个人隐私文字。"
@@ -114,14 +116,13 @@ export async function generateParentAiGreeting(env, child, offset, forceRefresh 
         throw new NonRetryableError("ai_config_incomplete");
     const hash = aiConfigHash(config);
     const now = nowIso();
-    const range = reportWindowRange("weekly", now, offset);
-    const weekKey = periodKey("weekly", range.start, offset);
+    const dayKey = options.periodKey || periodKey("daily", now, offset);
     const cached = await env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=? AND previous_week_key=? AND config_hash=?")
-        .bind(child.id, weekKey, hash)
+        .bind(child.id, dayKey, hash)
         .first();
     if (cached?.greeting && !forceRefresh)
         return cached.greeting;
-    const report = await previousWeekReportSummary(env, child.id, offset);
+    const report = await previousDayReportSummary(env, child.id, offset, options.input || now);
     const [assignedTasks, assignedRewards, feedbackTemplates] = await Promise.all([
         env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description
 FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
@@ -135,13 +136,13 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(
         env.DB.prepare("SELECT kind, title, points, is_active, description FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(child.parent_id).all(),
     ]);
     const assignments = { tasks: assignedTasks.results, rewards: assignedRewards.results, feedbackTemplates: feedbackTemplates.results };
-    const aiPrompt = buildAiPrompt(child, report, config, assignments);
+    const aiPrompt = buildDailyGreetingPrompt(child, report, config, assignments);
     if (!aiPrompt)
         return "";
     const greeting = await callParentAiService(env, aiPrompt, config, options.ai || {});
     if (greeting && options.cache !== false) {
         await env.DB.prepare("INSERT OR REPLACE INTO ai_child_greetings (child_id, previous_week_key, config_hash, greeting, generated_at) VALUES (?, ?, ?, ?, ?)")
-            .bind(child.id, weekKey, hash, greeting, now)
+            .bind(child.id, dayKey, hash, greeting, now)
             .run();
     }
     return greeting;
@@ -182,6 +183,17 @@ export async function generateCartoonReportImage(env, child, periodType, range) 
         throw new NonRetryableError("ai_image_config_incomplete");
     }
     const reportData = await collectReportData(env, child, child.parent_id, range);
+    let aiCommentary = "";
+    try {
+        const textConfig = await getParentAiServiceConfig(env, child.parent_id);
+        if (textConfig.baseUrl && textConfig.apiKey && textConfig.model) {
+            const offset = await timezoneOffsetMinutes(env);
+            aiCommentary = await generateReportCommentary(env, child, periodType, range.label, offset, false, { range });
+        }
+    } catch {
+        aiCommentary = "";
+    }
+    reportData.aiCommentary = aiCommentary;
     const prompt = buildCartoonReportPrompt(child, reportData, config, periodType);
     if (!prompt) throw new NonRetryableError("ai_image_prompt_empty");
     const imageUrl = await callParentImageService(env, prompt, config);
@@ -189,6 +201,48 @@ export async function generateCartoonReportImage(env, child, periodType, range) 
         imageUrl,
         format: config.imageFormat || "jpeg",
         filename: `${child.display_name}-${periodType === "monthly" ? "monthly" : "weekly"}-cartoon-report.${config.imageFormat || "jpeg"}`,
+        promptPreview: prompt.slice(0, 240)
+    };
+}
+
+export async function generatePrintChecklistImage(env, child) {
+    const config = await getParentAiServiceConfig(env, child.parent_id);
+    if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.checklistImagePrompt) {
+        throw new NonRetryableError("ai_checklist_image_config_incomplete");
+    }
+    const [tasks, rewards, feedbackTemplates] = await Promise.all([
+        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description
+FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL
+ORDER BY tc.name, t.created_at DESC`).bind(child.id, child.parent_id).all(),
+        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period, r.limit_count, r.redeem_weekdays, r.is_active, r.description
+FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id
+WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL
+ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(),
+        env.DB.prepare(`SELECT kind, title, points, is_active, description, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours
+FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC`).bind(child.parent_id).all(),
+    ]);
+    const taskSummary = tasks.results.slice(0, 12).map((row) => `${row.category_name || "未分类"}-${row.title}(${row.period}, ${row.points}分)`).join("；") || "暂无任务";
+    const rewardSummary = rewards.results.slice(0, 12).map((row) => `${row.title}(${row.cost_points}分)`).join("；") || "暂无奖励";
+    const feedbackSummary = feedbackTemplates.results.slice(0, 12).map((row) => {
+        const type = row.kind === "praise" ? "表扬" : "批评";
+        const remedy = row.kind === "criticism" && row.is_remediable ? `，可补救：${row.remedy_condition || "按要求补救"}，挽回${row.remedy_points || 0}分，${row.remedy_deadline_hours || 24}小时` : "";
+        return `${type}-${row.title}(${row.points}分${remedy})`;
+    }).join("；") || "暂无表扬批评条款";
+    const prompt = truncatePrompt(config.checklistImagePrompt, [
+        `孩子：${child.display_name}`,
+        `任务清单：${taskSummary}`,
+        `奖励清单：${rewardSummary}`,
+        `表扬批评条款：${feedbackSummary}`,
+        "请画成适合孩子查看的清单插画，清晰、积极、避免真实个人隐私文字。"
+    ].join("\n"));
+    if (!prompt) throw new NonRetryableError("ai_checklist_image_prompt_empty");
+    const imageUrl = await callParentImageService(env, prompt, config);
+    return {
+        imageUrl,
+        format: config.imageFormat || "jpeg",
+        filename: `${child.display_name}-print-checklist.${config.imageFormat || "jpeg"}`,
         promptPreview: prompt.slice(0, 240)
     };
 }

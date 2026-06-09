@@ -55,6 +55,23 @@ button:disabled {
   background: #f5f5f5;
 }
 
+.remedy-panel {
+  margin-top: 16px;
+  border-color: #f0c36a;
+  background: #fffaf0;
+}
+
+.remedy-card {
+  align-items: flex-start;
+}
+
+.remedy-card > span {
+  flex: 0 0 auto;
+  min-width: 96px;
+  text-align: right;
+  font-weight: 800;
+}
+
 .settings-surface {
   display: grid;
   gap: 16px;

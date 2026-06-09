@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Award, ClipboardCheck, Coins, Gift, Package, Pin, Star } from "lucide-react";
+import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star } from "lucide-react";
 import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary } from "./types/api";
 import { api } from "./api/client";
 import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle, formatSource } from "./components/UI";
@@ -11,7 +11,7 @@ function LedgerList({ rows }: { rows: LedgerRow[] }) {
       {rows.length ? rows.map((row) => (
         <article className="row" key={row.id}>
           <div>
-            <strong className={row.amount >= 0 ? "positive" : "negative"}>{row.amount >= 0 ? "+" : ""}{row.amount}</strong>
+            <strong className={row.freeze_status === "frozen" ? "negative" : row.amount >= 0 ? "positive" : "negative"}>{row.freeze_status === "frozen" ? `冻结${row.frozen_amount || 0}` : `${row.amount >= 0 ? "+" : ""}${row.amount}`}</strong>
             <span>{[row.sourceLabel || row.note || formatSource(row.source_type), row.actorLabel ? `操作者：${row.actorLabel}` : "", row.localCreatedAt || formatTime(row.created_at)].filter(Boolean).join(" · ")}</span>
           </div>
           <span>{row.sourceTypeLabel || formatSource(row.source_type)}</span>
@@ -47,7 +47,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [summary, setSummary] = useState<ChildDashboardSummary>({ balance: 0, aiGreeting: "", aiRefreshPending: false, child: null });
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [achievementTipId, setAchievementTipId] = useState("");
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   const loadSummaryLockRef = useRef(false);
   const loadDashLockRef = useRef(false);
   const pollingRef = useRef<number | null>(null);
@@ -154,6 +154,16 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const pinnedTask = dash.tasks.find((task: any) => task.isPinned);
   const pinnedReward = dash.rewards.find((reward: any) => reward.isPinned);
   const pinnedCount = Number(Boolean(pinnedTask)) + Number(Boolean(pinnedReward));
+  const remedyCriticisms = dash.remedyCriticisms || [];
+
+  function formatCountdown(ms: number) {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+    if (hours > 0) return `${hours}小时${String(minutes).padStart(2, "0")}分`;
+    return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
+  }
 
   async function loadSummary() {
     if (loadSummaryLockRef.current) return;
@@ -218,9 +228,12 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     };
   }, []);
   useEffect(() => {
-    const timer = window.setInterval(() => setTick((value) => value + 1), 60000);
+    const timer = window.setInterval(() => setTick((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (remedyCriticisms.some((item: any) => item.remedyDeadlineAt && Date.parse(item.remedyDeadlineAt) - Date.now() <= 0)) void loadDashboard();
+  }, [tick, remedyCriticisms.map((item: any) => `${item.id}:${item.remedyDeadlineAt}`).join("|")]);
   useEffect(() => {
     if (ledgerOpen) void api<LedgerResponse>("/points/ledger").then((data) => setLedger(data.items)).catch(() => setLedger([]));
   }, [dash, ledgerOpen]);
@@ -309,6 +322,26 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
               {renderRewardCard(pinnedReward, true)}
             </div>
           )}
+        </section>
+      )}
+      {remedyCriticisms.length > 0 && (
+        <section className="panel remedy-panel" aria-label="待补救批评">
+          <div className="panel-title"><AlertTriangle /><h2>待补救批评</h2></div>
+          <div className="list">
+            {remedyCriticisms.map((item: any) => {
+              const deadlineMs = item.remedyDeadlineAt ? Date.parse(item.remedyDeadlineAt) - Date.now() : Number(item.remainingMs || 0);
+              return (
+                <article className="row remedy-card" key={item.id}>
+                  <div>
+                    <strong>{item.title}</strong>
+                    <span>{item.remedyCondition || "请按家长要求完成补救"} · 冻结 {item.frozenAmount || 0} 积分 · 可挽回 {item.remedyPoints || 0} 积分</span>
+                    <small>截止：{item.localRemedyDeadlineAt || formatTime(item.remedyDeadlineAt)}</small>
+                  </div>
+                  <span className="negative">{formatCountdown(deadlineMs)}</span>
+                </article>
+              );
+            })}
+          </div>
         </section>
       )}
       <Tabs

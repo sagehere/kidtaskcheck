@@ -6,7 +6,7 @@ import { handleChildRoutes } from "../server/api/routes/child.js";
 import { handleParentRoutes } from "../server/api/routes/parent.js";
 import { handleSharedRoutes } from "../server/api/routes/shared.js";
 import { ensureAdmin, actorFromRequest, loginAttempts, sessionCookie, validateHttpsUrl, isPrivateUrl, id, hashPassword } from "../server/api/utils.js";
-import { truncateAiOutput, aiReportConfigHash, processAiGenerationQueue, runScheduledAiRefresh, processCartoonReportJobs } from "../server/api/ai/index.js";
+import { truncateAiOutput, stripAiThinking, aiReportConfigHash, processAiGenerationQueue, runScheduledAiRefresh, processCartoonReportJobs, processPrintChecklistImageJobs } from "../server/api/ai/index.js";
 import { api } from "../src/api/client";
 import { reportWindowRange } from "../src/lib/domain";
 
@@ -210,6 +210,12 @@ describe("Input Validation", () => {
   it("truncateAiOutput keeps short text", () => {
     expect(truncateAiOutput("hello")).toBe("hello");
   });
+  it("stripAiThinking removes complete, repeated, orphan, and unclosed think tags", () => {
+    expect(stripAiThinking("A<think>hidden</think>B")).toBe("AB");
+    expect(stripAiThinking("<THINK>one</THINK>Keep<think>two</think>")).toBe("Keep");
+    expect(stripAiThinking("draft</think>final")).toBe("draftfinal");
+    expect(stripAiThinking("visible<think>unfinished")).toBe("visible");
+  });
 });
 
 describe("Parent AI Service Validation", () => {
@@ -248,6 +254,9 @@ describe("Parent AI Service Validation", () => {
   }
   function stubImage(responseBody: any = { data: [{ url: "https://cdn.example.com/report.jpeg" }] }) {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "https://api.example.com/v1/chat/completions") {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "AI image commentary" } }] }), { status: 200 });
+      }
       expect(String(input)).toBe("https://image.example.com/v1/images/generations");
       expect(init?.method).toBe("POST");
       expect(init?.redirect).toBe("manual");
@@ -261,6 +270,7 @@ describe("Parent AI Service Validation", () => {
       expect(body.format).toBe("jpeg");
       expect(body.prompt).toContain("cartoon style");
       expect(body.prompt).toContain("AI Child");
+      expect(body.prompt).toContain("AI image commentary");
       return new Response(JSON.stringify(responseBody), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -338,13 +348,13 @@ describe("Parent AI Service Validation", () => {
     expect(data.data.models).toEqual(["gpt-a", "gpt-b"]);
     expect(fetchMock).toHaveBeenCalledOnce();
   });
-  it("runs Monday midnight scheduled refresh for greeting and previous weekly commentary once", async () => {
+  it("runs midnight scheduled refresh for daily greeting and previous weekly commentary once", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
     const childId = await seedAiChild(1);
     await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
     const fetchMock = stubChat("Scheduled weekly");
     const result = await runScheduledAiRefresh(env, new Date("2026-06-07T16:00:00.000Z"));
-    expect(result.jobs.map((job: any) => job.jobType)).toEqual(["greeting_weekly", "report_weekly"]);
+    expect(result.jobs.map((job: any) => job.jobType)).toEqual(["greeting_daily", "report_weekly"]);
     expect(result.jobs.every((job: any) => job.skipped === false)).toBe(true);
     expect(result.jobs.map((job: any) => job.enqueued)).toEqual([1, 1]);
     expect(result.queue.completed).toBe(2);
@@ -352,8 +362,9 @@ describe("Parent AI Service Validation", () => {
     const weeklyKey = reportWindowRange("weekly", "2026-06-07T00:00:00.000Z", 480).label;
     const commentary = env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_type='weekly' AND period_key=?").bind(childId, weeklyKey).first() as any;
     expect(commentary.commentary).toBe("Scheduled weekly");
-    const greeting = env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=?").bind(childId).first() as any;
+    const greeting = env.DB.prepare("SELECT greeting, previous_week_key FROM ai_child_greetings WHERE child_id=?").bind(childId).first() as any;
     expect(greeting.greeting).toBe("Scheduled weekly");
+    expect(greeting.previous_week_key).toBe("2026-06-08");
 
     const second = await runScheduledAiRefresh(env, new Date("2026-06-07T16:30:00.000Z"));
     expect(second.jobs.every((job: any) => job.skipped === true)).toBe(true);
@@ -366,13 +377,13 @@ describe("Parent AI Service Validation", () => {
     await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
     const fetchMock = stubChat("Scheduled monthly");
     const result = await runScheduledAiRefresh(env, new Date("2026-06-30T16:00:00.000Z"));
-    expect(result.jobs.map((job: any) => job.jobType)).toEqual(["report_monthly"]);
-    expect(result.jobs[0].enqueued).toBe(1);
-    expect(result.queue.completed).toBe(1);
+    expect(result.jobs.map((job: any) => job.jobType)).toEqual(["greeting_daily", "report_monthly"]);
+    expect(result.jobs.map((job: any) => job.enqueued)).toEqual([1, 1]);
+    expect(result.queue.completed).toBe(2);
     const monthlyKey = reportWindowRange("monthly", "2026-06-15T00:00:00.000Z", 480).label;
     const row = env.DB.prepare("SELECT commentary FROM ai_report_commentaries WHERE child_id=? AND period_type='monthly' AND period_key=?").bind(childId, monthlyKey).first() as any;
     expect(row.commentary).toBe("Scheduled monthly");
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
   it("retries AI rate limits and logs final queue failure", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
@@ -435,8 +446,8 @@ describe("Parent AI Service Validation", () => {
     expect(completed.data.imageUrl).toBe("https://cdn.example.com/report.jpeg");
     expect(completed.data.format).toBe("jpeg");
     expect(completed.data.filename).toContain("weekly-cartoon-report.jpeg");
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(env.DB.prepare("SELECT COUNT(*) as count FROM ai_report_commentaries").first().count).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(env.DB.prepare("SELECT COUNT(*) as count FROM ai_report_commentaries").first().count).toBe(1);
   });
   it("parses cartoon report image URLs, base64 payloads, and choice content", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
@@ -449,6 +460,9 @@ describe("Parent AI Service Validation", () => {
       { choices: [{ message: { content: "https://cdn.example.com/from-choice.jpeg" } }] }
     ];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "https://api.example.com/v1/chat/completions") {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "AI image commentary" } }] }), { status: 200 });
+      }
       expect(String(input)).toBe("https://image.example.com/v1/images/generations");
       expect((init?.headers as Record<string, string>)?.authorization).toBe("Bearer img-key");
       return new Response(JSON.stringify(responses.shift()), { status: 200 });
@@ -477,6 +491,29 @@ describe("Parent AI Service Validation", () => {
     await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
     const r = await safe(handleParentRoutes, "/parent/ai-service/cartoon-report", "POST", makeRequest("POST", "/parent/ai-service/cartoon-report", { childId, period: "weekly" }), env, actor);
     expect(r!.status).toBe(400);
+  });
+  it("generates a print checklist image with its own prompt", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test", imageBaseUrl: "https://image.example.com/v1", imageModel: "gpt-image-2", imagePrompt: "cartoon style", checklistImagePrompt: "checklist poster style", imageApiKey: "img-key", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1 }), env, actor);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://image.example.com/v1/images/generations");
+      const body = JSON.parse(String(init?.body || "{}"));
+      expect(body.prompt).toContain("checklist poster style");
+      expect(body.prompt).toContain("AI Child");
+      expect(body.prompt).not.toContain("cartoon style");
+      return new Response(JSON.stringify({ data: [{ url: "https://cdn.example.com/checklist.jpeg" }] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const r = await safe(handleParentRoutes, `/children/${childId}/print-checklist-image`, "POST", makeRequest("POST", `/children/${childId}/print-checklist-image`, {}), env, actor);
+    expect(r!.status).toBe(200);
+    const data = await r!.json();
+    expect(data.data.status).toBe("pending");
+    await processPrintChecklistImageJobs(env, { maxJobs: 1 } as any);
+    const getRes = await safe(handleParentRoutes, `/children/${childId}/print-checklist-image/${data.data.id}`, "GET", makeRequest("GET", `/children/${childId}/print-checklist-image/${data.data.id}`), env, actor);
+    const completed = await getRes!.json();
+    expect(completed.data.imageUrl).toBe("https://cdn.example.com/checklist.jpeg");
+    expect(completed.data.filename).toContain("print-checklist.jpeg");
   });
   it("force=true re-enqueues a completed cartoon job and clears the cached image", async () => {
     const actor = { type: "user", role: "parent", id: parentId };

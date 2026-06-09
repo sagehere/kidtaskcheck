@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, recalcAchievements, notify } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -38,6 +38,7 @@ export async function handleChildRoutes(path, method, request, env, actor, ctx) 
     }
     if (path === "/reward-redemptions" && method === "POST") {
         const a = requireRole(actor, ["child"]);
+        await settleExpiredCriticismFreezes(env);
         const input = await body(request);
         const reward = await env.DB.prepare("SELECT r.* FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id WHERE r.id=? AND ra.child_id=? AND r.parent_id=? AND r.is_active=1 AND r.deleted_at IS NULL")
             .bind(input.rewardId, a.id, a.parent_id)
@@ -125,6 +126,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
     }
     if (path === "/dashboard/child-summary" && method === "GET") {
         const a = requireRole(actor, ["child"]);
+        await settleExpiredCriticismFreezes(env);
         const offset = await timezoneOffsetMinutes(env);
         const childRow = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=?")
             .bind(a.id)
@@ -141,6 +143,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
     }
     if (path === "/dashboard/child" && method === "GET") {
         const a = requireRole(actor, ["child"]);
+        await settleExpiredCriticismFreezes(env);
         const offset = await timezoneOffsetMinutes(env);
         const pins = (await env.DB.prepare("SELECT item_type, item_id FROM child_pins WHERE child_id=?").bind(a.id).all()).results;
         const pinnedTaskId = pins.find((pin) => pin.item_type === "task")?.item_id || null;
@@ -211,6 +214,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
             pinnedRewardId: visiblePinnedRewardId,
             tasks: taskRows,
             rewards,
+            remedyCriticisms: await activeRemedyCriticisms(env, a.id, offset),
             aiGreeting: "",
             aiRefreshPending: false,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results

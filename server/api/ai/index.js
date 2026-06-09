@@ -1,12 +1,12 @@
 export {
     AI_FETCH_TIMEOUT_MS, AI_MAX_OUTPUT_LENGTH, AiProviderError,
-    truncateAiOutput, detectProvider,
+    truncateAiOutput, stripAiThinking, detectProvider,
     listModels, callParentAiService, callParentAiServiceForReport, callParentImageService,
 } from "./providers.js";
 
 export {
     DEFAULT_WEEKLY_REPORT_PROMPT, DEFAULT_MONTHLY_REPORT_PROMPT,
-    buildAiPrompt, buildReportAiPrompt, previousWeekReportSummary,
+    buildAiPrompt, buildDailyGreetingPrompt, buildReportAiPrompt, previousDayReportSummary, previousWeekReportSummary,
 } from "./prompt.js";
 
 export {
@@ -16,7 +16,7 @@ export {
 } from "./cache.js";
 
 export {
-    generateParentAiGreeting, generateReportCommentary, generateCartoonReportImage,
+    generateParentAiGreeting, generateReportCommentary, generateCartoonReportImage, generatePrintChecklistImage,
     previousCompletedReportRange, collectReportData, buildCartoonReportPrompt,
 } from "./orchestrator.js";
 
@@ -31,4 +31,6 @@ export {
 export {
     ensureAiCartoonReportJobs, enqueueCartoonReportJob, loadCartoonReportJob,
     publicCartoonJob, processCartoonReportJobs,
+    ensureAiPrintChecklistImageJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob,
+    publicPrintChecklistJob, processPrintChecklistImageJobs,
 } from "./cartoon-queue.js";

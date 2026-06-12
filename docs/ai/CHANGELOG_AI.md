@@ -4,6 +4,20 @@
 
 ## 2026-06-12
 
+- 类型：UI 增强
+- 范围：家长任务列表必做信息展示、儿童任务墙必做排序与标记
+- 摘要：
+  - 家长端 `Overview` 组件任务行 small 标签追加"必做 X 次 · 未达标扣 Y 分"摘要，样式与现有文本一致。
+  - 儿童端任务墙对 `dash.tasks` 前端排序，必做任务靠前显示。
+  - 必做任务卡片添加 `required-card` 类，`::before` 渐变色改为琥珀/红色以醒目区分。
+  - 必做任务卡片 `card-meta` 区域添加"须完成X次"标签，使用 `.required-tag` 样式（琥珀色药丸标签）。
+  - 置顶任务卡片 `renderTaskCard` 同步更新必做标记。
+  - 更新 `FEATURE_INDEX.md` 第 5、9 节。
+- 业务代码：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`src/styles.css`
+- 验证：`npm run build`、`npm test`（95 tests passed）
+
+## 2026-06-12
+
 - 类型：功能新增与 UI 修正
 - 范围：任务必做配置、必做结算、前端表单、AI 模型选择、反馈/退款列表滚动、冻结积分标签居中
 - 摘要：

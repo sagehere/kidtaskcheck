@@ -102,8 +102,9 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     const limited = !task.canSubmit;
     const busyId = busy === "task:" + task.id;
     const points = (task.point_type === "earn" ? "+" : "-") + task.points;
+    const isRequired = task.is_required === 1;
     return (
-      <article className={["task-card", "wall-card", pinned ? "pinned-card" : "", limited ? "is-muted" : ""].filter(Boolean).join(" ")} key={task.id}>
+      <article className={["task-card", "wall-card", pinned ? "pinned-card" : "", limited ? "is-muted" : "", isRequired ? "required-card" : ""].filter(Boolean).join(" ")} key={task.id}>
         <div className="card-head wall-card-head with-pin">
           {icon(task.icon_type, task.icon_value, task.title)}
           <div>
@@ -116,6 +117,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         <div className="card-meta">
           <span className={task.point_type === "earn" ? "positive" : "negative"}>{points} 积分</span>
           <span>{task.usedCount}/{task.limitCount} 次</span>
+          {isRequired && <span className="required-tag">须完成{task.required_count || 1}次</span>}
           <span>{task.periodKey}</span>
         </div>
         <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
@@ -359,12 +361,13 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           <section className="panel child-panel">
             <div className="panel-title"><ClipboardCheck /><h2>任务墙</h2></div>
             <div className="wall-grid scroll-list">
-              {dash.tasks.length ? dash.tasks.map((task: any) => {
+              {dash.tasks.length ? [...dash.tasks].sort((a: any, b: any) => (b.is_required || 0) - (a.is_required || 0)).map((task: any) => {
                 const limited = !task.canSubmit;
                 const busyId = busy === `task:${task.id}`;
                 const points = `${task.point_type === "earn" ? "+" : "-"}${task.points}`;
+                const isRequired = task.is_required === 1;
                 return (
-                  <article className={`task-card wall-card ${limited ? "is-muted" : ""}`} key={task.id}>
+                  <article className={`task-card wall-card ${limited ? "is-muted" : ""} ${isRequired ? "required-card" : ""}`} key={task.id}>
                     <div className="card-head wall-card-head with-pin">
                       {icon(task.icon_type, task.icon_value, task.title)}
                       <div>
@@ -377,6 +380,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                     <div className="card-meta">
                       <span className={task.point_type === "earn" ? "positive" : "negative"}>{points} 积分</span>
                       <span>{task.usedCount}/{task.limitCount} 次</span>
+                      {isRequired && <span className="required-tag">须完成{task.required_count || 1}次</span>}
                       <span>{task.periodKey}</span>
                     </div>
                     <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>

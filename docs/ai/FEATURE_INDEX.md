@@ -58,7 +58,7 @@
 
 ## 5. 任务与分类配置
 
-- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制和展示图标。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算。
+- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制和展示图标。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算。现有任务列表中显示必做规则摘要。
 - 用户入口：家长设置/配置区域中的任务和分类表单。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/EmojiSelect.tsx`
@@ -66,7 +66,7 @@
 - 主要调用链：`ParentApp.load` -> `/task-categories`、`/tasks`; `create/update/remove` -> `/task-categories`、`/tasks`; 孩子端从 `/dashboard/child` 接收可提交任务；必做结算 `settleRequiredTaskPenalties` 由 scheduler tick 和 `maybeRunMaintenance` 触发。
 - 相关状态：`task_categories`、`tasks`、`task_assignees`、`task_submissions`、`task_required_penalties`
 - 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`
-- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分。
+- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；家长任务列表 small 标签中追加必做规则摘要。
 - 最近更新时间：2026-06-12
 
 ## 6. 奖励、兑换、仓库与退款
@@ -110,7 +110,7 @@
 
 ## 9. 孩子端任务、积分与固定卡片
 
-- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候。
+- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候。必做任务在任务墙中靠前排序并以醒目标记标识，卡片上提示"须完成X次"。
 - 用户入口：孩子登录后的首页、积分账本弹层、固定按钮。
 - P0：`src/ChildApp.tsx`、`server/api/routes/child.js`、`server/api/routes/shared.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/Shell.tsx`
@@ -118,7 +118,7 @@
 - 主要调用链：`ChildApp.loadSummary` -> `/dashboard/child-summary`; `ChildApp.load` -> `/dashboard/child`; submit -> `/task-submissions`; pin -> `/child-pins/:kind`; ledger -> `/points/ledger`
 - 相关状态：`task_submissions`、`point_ledger`、`child_pins`、`ai_child_greetings`
 - 相关接口：`GET /api/dashboard/child-summary`、`GET /api/dashboard/child`、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`GET /api/points/ledger`
-- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑。
+- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；必做任务排序在前端完成，不改变后端查询顺序；`.required-card::before` 覆盖默认渐变色为琥珀/红色。
 - 最近更新时间：2026-06-12
 
 ## 10. 积分账本、报表、打印与归档

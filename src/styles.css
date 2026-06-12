@@ -1272,6 +1272,15 @@ button:disabled {
   background: #fff1c2;
 }
 
+.card-meta .required-tag {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.wall-card.required-card::before {
+  background: linear-gradient(90deg, #f59e0b, #ef4444);
+}
+
 .card-status {
   display: block;
   padding: 8px 10px;

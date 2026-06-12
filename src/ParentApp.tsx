@@ -709,10 +709,16 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                 </div>
                 <Field label="模型">
                   <div className="inline-fields">
-                    <select value={draftAiConfig.model} onChange={(e) => updateAiDraft({ model: e.target.value })} style={{ flex: 1 }}>
-                      {!draftAiConfig.model && <option value="">请选择或拉取模型列表</option>}
-                      {aiModels.map((model) => <option key={model} value={model}>{model}</option>)}
-                    </select>
+                    <input
+                      list="ai-model-options"
+                      value={draftAiConfig.model}
+                      onChange={(e) => updateAiDraft({ model: e.target.value })}
+                      placeholder="输入或选择模型"
+                      style={{ flex: 1 }}
+                    />
+                    <datalist id="ai-model-options">
+                      {aiModels.map((model) => <option key={model} value={model} />)}
+                    </datalist>
                     <button type="button" className="secondary" disabled={aiFetching || !draftAiConfig.baseUrl} onClick={async () => { setAiFetching(true); try { const modelsBody: { baseUrl: string; apiKey?: string } = { baseUrl: draftAiConfig.baseUrl }; if (aiFetchApiKey) modelsBody.apiKey = aiFetchApiKey; const data = await api<{ models: string[] }>("/parent/ai-service/models", { method: "POST", body: JSON.stringify(modelsBody) }); setAiModels(data.models); if (data.models.length && !draftAiConfig.model) updateAiDraft({ model: data.models[0] }); } catch (err) { setError(err instanceof Error ? err.message : "拉取失败"); } finally { setAiFetching(false); } }}>{aiFetching ? "获取中..." : "拉取模型"}</button>
                   </div>
                 </Field>
@@ -1315,8 +1321,9 @@ export function CreateAchievement({ tasks, categories, onCreate }: { tasks: Task
 }
 
 export function CreateTask({ children, categories, onCreate }: { children: Child[]; categories: Category[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, enabledWeekdays: [...DEFAULT_WEEKDAYS], iconValue: "✅", isActive: true, childIds: [] as string[] });
+  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, enabledWeekdays: [...DEFAULT_WEEKDAYS], iconValue: "✅", isActive: true, childIds: [] as string[], isRequired: false, requiredCount: 1, requiredPenaltyPoints: 0 });
   const categoryId = data.categoryId || categories[0]?.id || "";
+  const showRequired = data.period !== "once";
   return (
     <FormPanel title="新任务" icon={<ClipboardCheck />} onSubmit={() => onCreate({ ...data, categoryId, iconType: "emoji" })}>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
@@ -1327,7 +1334,7 @@ export function CreateTask({ children, categories, onCreate }: { children: Child
         </select>
       </Field>
       <Field label="周期">
-        <select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value })}>
+        <select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value, isRequired: e.target.value === "once" ? false : data.isRequired })}>
           <option value="daily">每日</option>
           <option value="weekly">每周</option>
           <option value="monthly">每月</option>
@@ -1339,6 +1346,17 @@ export function CreateTask({ children, categories, onCreate }: { children: Child
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
+      {showRequired && (
+        <>
+          <Toggle label="必做任务" checked={data.isRequired} onChange={(isRequired) => setData({ ...data, isRequired })} />
+          {data.isRequired && (
+            <div className="grid two compact-fields">
+              <Field label="必做次数"><input type="number" min="1" value={data.requiredCount} onChange={(e) => setData({ ...data, requiredCount: Number(e.target.value) })} /></Field>
+              <Field label="未达标扣分"><input type="number" min="0" value={data.requiredPenaltyPoints} onChange={(e) => setData({ ...data, requiredPenaltyPoints: Number(e.target.value) })} /></Field>
+            </div>
+          )}
+        </>
+      )}
       <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />
     </FormPanel>
   );
@@ -1761,8 +1779,12 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
     prerequisites: item.prerequisites || [],
     iconValue: item.icon_value || "⭐",
     isActive: item.is_active !== 0,
-    childIds: item.assignees || []
+    childIds: item.assignees || [],
+    isRequired: item.is_required === 1,
+    requiredCount: item.required_count || 1,
+    requiredPenaltyPoints: item.required_penalty_points || 0
   }));
+  const showRequired = kind === "task" && data.period !== "once";
   return (
     <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave(kind === "achievement" ? achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "", targetCategoryId: data.targetCategoryId || categories[0]?.id || "" }) : { ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" }); }}>
       <Field label={kind === "reward" ? "名称" : "标题"}><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
@@ -1770,10 +1792,21 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
       {kind === "task" && (
         <>
           <Field label="分类"><select value={data.categoryId} onChange={(e) => setData({ ...data, categoryId: e.target.value })}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
-          <Field label="周期"><select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
+          <Field label="周期"><select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value, isRequired: e.target.value === "once" ? false : data.isRequired })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
           <Field label="次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
           <Field label="启用周几"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
           <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
+          {showRequired && (
+            <>
+              <Toggle label="必做任务" checked={data.isRequired} onChange={(isRequired) => setData({ ...data, isRequired })} />
+              {data.isRequired && (
+                <div className="grid two compact-fields">
+                  <Field label="必做次数"><input type="number" min="1" value={data.requiredCount} onChange={(e) => setData({ ...data, requiredCount: Number(e.target.value) })} /></Field>
+                  <Field label="未达标扣分"><input type="number" min="0" value={data.requiredPenaltyPoints} onChange={(e) => setData({ ...data, requiredPenaltyPoints: Number(e.target.value) })} /></Field>
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
       {kind === "reward" && (

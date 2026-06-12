@@ -709,8 +709,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     }
     if (path === "/tasks") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
-        if (method === "GET")
+        if (method === "GET") {
+            await ensureRequiredTaskSchema(env);
             return ok(await listWithAssignees(env, "tasks", a.id));
+        }
         const input = await body(request);
         if (method === "POST") {
             const title = String(input.title || "").trim();
@@ -719,9 +721,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
                 || validateEnum(input.iconType || "emoji", ["emoji", "gallery_image"], "图标类型");
             if (err) return fail("BAD_REQUEST", err, 400);
             await validateCategoryOwnership(env, a.id, input.categoryId);
+            await ensureRequiredTaskSchema(env);
             const taskId = id();
-            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(taskId, a.id, input.categoryId, title, input.description || "", input.period || "daily", "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1)
+            const period = input.period || "daily";
+            const isRequired = period !== "once" && input.isRequired ? 1 : 0;
+            const requiredCount = isRequired ? Math.max(1, Number(input.requiredCount || 1)) : 0;
+            const requiredPenaltyPoints = isRequired ? Math.max(0, Number(input.requiredPenaltyPoints || 0)) : 0;
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, a.id, input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints)
                 .run();
             await replaceAssignees(env, a.id, "task_assignees", "task_id", taskId, input.childIds || []);
             return ok(true);
@@ -742,8 +749,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             || validateEnum(input.iconType || "emoji", ["emoji", "gallery_image"], "图标类型");
         if (err) return fail("BAD_REQUEST", err, 400);
         await validateCategoryOwnership(env, a.id, input.categoryId);
-        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, enabled_weekdays=?, is_active=?, updated_at=? WHERE id=?")
-            .bind(input.categoryId, title, input.description || "", input.period || "daily", "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, nowIso(), taskPatch[1])
+        await ensureRequiredTaskSchema(env);
+        const period = input.period || "daily";
+        const isRequired = period !== "once" && input.isRequired ? 1 : 0;
+        const requiredCount = isRequired ? Math.max(1, Number(input.requiredCount || 1)) : 0;
+        const requiredPenaltyPoints = isRequired ? Math.max(0, Number(input.requiredPenaltyPoints || 0)) : 0;
+        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, enabled_weekdays=?, is_active=?, is_required=?, required_count=?, required_penalty_points=?, updated_at=? WHERE id=?")
+            .bind(input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, nowIso(), taskPatch[1])
             .run();
         await replaceAssignees(env, a.id, "task_assignees", "task_id", taskPatch[1], input.childIds || []);
         return ok(true);

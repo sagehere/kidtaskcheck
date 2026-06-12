@@ -7,9 +7,9 @@ import { repairSqlite0002 } from "../scripts/sqlite-repair-0002.mjs";
 const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
 describe("Task 35: Migration Smoke Test", () => {
-  it("all 21 migration files apply sequentially on empty DB without errors", () => {
+  it("all 22 migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(21);
+    expect(files.length).toBe(22);
     const db = new SqliteTestDb();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
@@ -60,6 +60,12 @@ describe("Task 35: Migration Smoke Test", () => {
     const ledgerColumnNames = ledgerColumns.map((column: any) => column.name);
     expect(ledgerColumnNames).toContain("freeze_status");
     expect(ledgerColumnNames).toContain("effective_amount");
+    expect(tableNames).toContain("task_required_penalties");
+    const taskColumns = db.prepare("PRAGMA table_info(tasks)").all().results as any[];
+    const taskColumnNames = taskColumns.map((column: any) => column.name);
+    expect(taskColumnNames).toContain("is_required");
+    expect(taskColumnNames).toContain("required_count");
+    expect(taskColumnNames).toContain("required_penalty_points");
     db.close();
   });
 

@@ -707,6 +707,7 @@ button.child-tile {
 
 .refund-list {
   max-height: 360px;
+  overflow-y: auto;
 }
 
 .selectable-row {
@@ -936,6 +937,7 @@ button:disabled {
 .hero-band .metric .frozen-tag {
   font-size: 13px;
   margin-top: 8px;
+  justify-self: center;
 }
 
 .row.unread {

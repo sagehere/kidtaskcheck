@@ -198,3 +198,99 @@ describe("Task 33: Points Ledger", () => {
     expect(parentDash.data.children[0].frozenPoints).toBe(80);
   });
 });
+
+describe("Required Task Penalties", () => {
+  let env: any, pid: string, cid: string, tid: string;
+
+  beforeEach(async () => {
+    env = resetTestEnv();
+    await ensureAdmin(env);
+    pid = id();
+    const pw = await hashPassword("ppw");
+    env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, ?, ?, 'parent', 'TP')").bind(pid, "tp", pw).run();
+    cid = id();
+    const cpw = await hashPassword("cpw");
+    env.DB.prepare("INSERT INTO children (id, parent_id, username, password_hash, display_name, status) VALUES (?, ?, ?, ?, 'TC', 'active')").bind(cid, pid, "tc", cpw).run();
+    env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value) VALUES ('cat-1', ?, 'Cat', 'emoji', '📚')").bind(pid).run();
+  });
+
+  it("deducts points when required task approval count is below threshold", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 3, 5)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const subId = id();
+    env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, status, submitted_at, period_key) VALUES (?, ?, ?, ?, 'approved', ?, '2026-06-10')").bind(subId, tid, cid, pid, new Date().toISOString()).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    const result = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(result.settled).toBe(1);
+    const penalty = env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).first() as any;
+    expect(penalty).not.toBeNull();
+    expect(Number(penalty.penalty_points)).toBe(5);
+    expect(Number(penalty.actual_count)).toBe(1);
+    expect(Number(penalty.required_count)).toBe(3);
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(95);
+  });
+
+  it("does not deduct points when required task approval count meets threshold", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 2, 5)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    for (let i = 0; i < 2; i++) {
+      const subId = id();
+      env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, status, submitted_at, period_key) VALUES (?, ?, ?, ?, 'approved', ?, '2026-06-10')").bind(subId, tid, cid, pid, new Date().toISOString()).run();
+    }
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    const result = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(result.settled).toBe(0);
+    const penalty = env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).first() as any;
+    expect(penalty).toBeNull();
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(100);
+  });
+
+  it("does not count pending submissions toward required task completion", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 2, 5)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const subId = id();
+    env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, status, submitted_at, period_key) VALUES (?, ?, ?, ?, 'pending', ?, '2026-06-10')").bind(subId, tid, cid, pid, new Date().toISOString()).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    const result = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(result.settled).toBe(1);
+    const penalty = env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).first() as any;
+    expect(penalty).not.toBeNull();
+    expect(Number(penalty.penalty_points)).toBe(5);
+    expect(Number(penalty.actual_count)).toBe(0);
+  });
+
+  it("caps penalty at available balance and does not produce negative balance", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 3, 20)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 8, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    const result = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(result.settled).toBe(1);
+    const penalty = env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).first() as any;
+    expect(Number(penalty.penalty_points)).toBe(8);
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(0);
+  });
+
+  it("idempotent: running settlement twice does not double-deduct", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 3, 5)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    const result2 = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(result2.settled).toBe(0);
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(95);
+  });
+});

@@ -390,6 +390,25 @@ export async function ensureIterationSchema(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_redemptions_child_status ON reward_redemptions(child_id, status, requested_at)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_submissions_child_task_status ON task_submissions(child_id, task_id, status)").run();
 }
+export async function ensureRequiredTaskSchema(env) {
+    await ensureColumn(env, "tasks", "is_required", "is_required INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "tasks", "required_count", "required_count INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "tasks", "required_penalty_points", "required_penalty_points INTEGER NOT NULL DEFAULT 0");
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_required_penalties (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  child_id TEXT NOT NULL REFERENCES children(id),
+  parent_id TEXT NOT NULL REFERENCES users(id),
+  period_key TEXT NOT NULL,
+  required_count INTEGER NOT NULL,
+  actual_count INTEGER NOT NULL,
+  penalty_points INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(task_id, child_id, period_key)
+)`).run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_required_penalties_child ON task_required_penalties(child_id, period_key)").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_required_penalties_parent ON task_required_penalties(parent_id, period_key)").run();
+}
 export async function ensureRetentionSchema(env) {
     await ensureColumn(env, "point_ledger", "revoked_at", "revoked_at TEXT");
     await ensureColumn(env, "point_ledger", "revoke_ledger_id", "revoke_ledger_id TEXT REFERENCES point_ledger(id)");
@@ -451,6 +470,84 @@ WHERE id=? AND freeze_status='frozen' AND revoked_at IS NULL`)
         await recalcAchievements(env, row.parent_id, row.child_id);
     }
     return { settled: rows.length };
+}
+export async function settleRequiredTaskPenalties(env, at = nowIso()) {
+    await ensureRequiredTaskSchema(env);
+    const offset = await timezoneOffsetMinutes(env);
+    const now = new Date(at);
+    const nowZoned = new Date(now.getTime() + offset * 60000);
+    const hour = nowZoned.getUTCHours();
+    const dayOfWeek = nowZoned.getUTCDay();
+    const dayOfMonth = nowZoned.getUTCDate();
+    const prevDay = new Date(nowZoned.getTime() - 86400000);
+    const prevWeek = new Date(nowZoned.getTime() - 7 * 86400000);
+    const prevMonth = new Date(nowZoned.getUTCFullYear(), nowZoned.getUTCMonth() - 1, 1);
+    const dailyKey = periodKey("daily", prevDay, 0);
+    const weeklyKey = periodKey("weekly", prevWeek, 0);
+    const monthlyKey = periodKey("monthly", prevMonth, 0);
+    const shouldSettleDaily = hour >= 0;
+    const shouldSettleWeekly = dayOfWeek === 1 && hour >= 0;
+    const shouldSettleMonthly = dayOfMonth === 1 && hour >= 0;
+    if (!shouldSettleDaily && !shouldSettleWeekly && !shouldSettleMonthly)
+        return { settled: 0 };
+    const tasks = (await env.DB.prepare(`SELECT t.id, t.parent_id, t.period, t.required_count, t.required_penalty_points,
+  ta.child_id
+FROM tasks t
+JOIN task_assignees ta ON ta.task_id=t.id
+WHERE t.is_required=1
+  AND t.required_count>0
+  AND t.is_active=1
+  AND t.deleted_at IS NULL`).all()).results;
+    let settled = 0;
+    for (const task of tasks) {
+        let periodKeyValue = null;
+        if (task.period === "daily" && shouldSettleDaily)
+            periodKeyValue = dailyKey;
+        else if (task.period === "weekly" && shouldSettleWeekly)
+            periodKeyValue = weeklyKey;
+        else if (task.period === "monthly" && shouldSettleMonthly)
+            periodKeyValue = monthlyKey;
+        else
+            continue;
+        const existing = await env.DB.prepare("SELECT id FROM task_required_penalties WHERE task_id=? AND child_id=? AND period_key=?")
+            .bind(task.id, task.child_id, periodKeyValue).first();
+        if (existing)
+            continue;
+        const childStatus = await env.DB.prepare("SELECT status FROM children WHERE id=? AND deleted_at IS NULL")
+            .bind(task.child_id).first();
+        if (!childStatus || childStatus.status !== "active")
+            continue;
+        const actualCount = (await env.DB.prepare(`SELECT COUNT(*) as cnt FROM task_submissions
+WHERE task_id=? AND child_id=? AND period_key=? AND status='approved'`)
+            .bind(task.id, task.child_id, periodKeyValue).first())?.cnt || 0;
+        if (Number(actualCount) >= Number(task.required_count))
+            continue;
+        const penaltyPoints = Math.abs(Number(task.required_penalty_points || 0));
+        if (penaltyPoints <= 0)
+            continue;
+        const currentBalance = await balance(env, task.child_id);
+        const actualPenalty = Math.min(penaltyPoints, currentBalance);
+        if (actualPenalty <= 0) {
+            await env.DB.prepare(`INSERT INTO task_required_penalties (id, task_id, child_id, parent_id, period_key, required_count, actual_count, penalty_points, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`)
+                .bind(id(), task.id, task.child_id, task.parent_id, periodKeyValue, task.required_count, actualCount, at)
+                .run();
+            settled++;
+            continue;
+        }
+        const ledgerId = id();
+        await env.DB.prepare(`INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, created_at)
+VALUES (?, ?, ?, ?, 'task_required_penalty', ?, ?, ?, ?)`)
+            .bind(ledgerId, task.child_id, task.parent_id, -actualPenalty, task.id, periodKeyValue, `必做任务未达标扣分`, at)
+            .run();
+        await env.DB.prepare(`INSERT INTO task_required_penalties (id, task_id, child_id, parent_id, period_key, required_count, actual_count, penalty_points, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .bind(id(), task.id, task.child_id, task.parent_id, periodKeyValue, task.required_count, actualCount, actualPenalty, at)
+            .run();
+        await recalcAchievements(env, task.parent_id, task.child_id);
+        settled++;
+    }
+    return { settled };
 }
 export async function activeRemedyCriticisms(env, childId, offset, at = nowIso()) {
     await settleExpiredCriticismFreezes(env, at);
@@ -565,6 +662,7 @@ export async function maybeRunMaintenance(env) {
     try {
         await cleanupShortRetention(env, shortCutoff);
         await settleExpiredCriticismFreezes(env, now);
+        await settleRequiredTaskPenalties(env, now);
         const offset = await timezoneOffsetMinutes(env);
         await archiveOldActivity(env, detailCutoff, offset);
         await hardDeleteSoftDeleted(env, detailCutoff);
@@ -1051,6 +1149,7 @@ WHERE s.child_id=? AND s.status='approved'`).bind(childId).all()).results;
     }
 }
 export async function listWithAssignees(env, kind, parentId) {
+    if (kind === "tasks") await ensureRequiredTaskSchema(env);
     const rows = await env.DB.prepare(`SELECT * FROM ${kind} WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC`).bind(parentId).all();
     const table = kind === "tasks" ? "task_assignees" : "reward_assignees";
     const key = kind === "tasks" ? "task_id" : "reward_id";
@@ -1101,9 +1200,13 @@ export async function insertTaskFromConfig(env, parentId, item, categoryMap, chi
     const categoryId = categoryMap.get(item.category_name) || categoryMap.values().next().value;
     if (!categoryId)
         return false;
+    await ensureRequiredTaskSchema(env);
     const taskId = id();
-    await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?)")
-        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), importedActive(item))
+    const isRequired = period !== "once" && item.is_required ? 1 : 0;
+    const requiredCount = isRequired ? Math.max(1, Number(item.required_count || item.requiredCount || 1)) : 0;
+    const requiredPenaltyPoints = isRequired ? Math.max(0, Number(item.required_penalty_points || item.requiredPenaltyPoints || 0)) : 0;
+    await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), importedActive(item), isRequired, requiredCount, requiredPenaltyPoints)
         .run();
     const requestedAssignees = item.assignee_names || item.assigneeNames || [];
     await replaceAssignees(env, parentId, "task_assignees", "task_id", taskId, requestedAssignees.map((name) => childMap.get(name)).filter(Boolean));

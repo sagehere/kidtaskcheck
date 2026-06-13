@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { resetTestEnv } from "./helpers/setup";
-import { ensureAdmin, hashPassword, id } from "../server/api/utils.js";
+import { ensureAdmin, hashPassword, id, notify } from "../server/api/utils.js";
 import { handleParentRoutes } from "../server/api/routes/parent.js";
 import { handleChildRoutes } from "../server/api/routes/child.js";
 import { handleSharedRoutes } from "../server/api/routes/shared.js";
@@ -231,6 +231,26 @@ describe("Required Task Penalties", () => {
     expect(Number(penalty.required_count)).toBe(3);
     const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
     expect(Number(balance.b)).toBe(95);
+
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
+    const notificationsReq = makeRequest("GET", "/notifications");
+    const notificationsRes = await safe(handleSharedRoutes, norm(new URL(notificationsReq.url).pathname), "GET", notificationsReq, env, childActor, new URL(notificationsReq.url));
+    expect(notificationsRes!.status).toBe(200);
+    const notifications = await notificationsRes!.json();
+    const penaltyNotification = notifications.data.items.find((item: any) => item.event_type === "task_required_penalty");
+    expect(penaltyNotification).toBeTruthy();
+    expect(penaltyNotification.sourceTypeLabel).toBe("必做扣分");
+    expect(penaltyNotification.sourceLabel).toBe("任务：TT");
+
+    const parentActor = { type: "user", role: "parent", id: pid };
+    const ledgerReq = makeRequest("GET", `/points/ledger?childId=${cid}`);
+    const ledgerRes = await safe(handleSharedRoutes, norm(new URL(ledgerReq.url).pathname), "GET", ledgerReq, env, parentActor, new URL(ledgerReq.url));
+    expect(ledgerRes!.status).toBe(200);
+    const ledger = await ledgerRes!.json();
+    const penaltyRow = ledger.data.items.find((row: any) => row.source_type === "task_required_penalty");
+    expect(penaltyRow).toBeTruthy();
+    expect(penaltyRow.sourceTypeLabel).toBe("必做扣分");
+    expect(penaltyRow.sourceLabel).toBe("任务：TT");
   });
 
   it("does not deduct points when required task approval count meets threshold", async () => {
@@ -292,5 +312,38 @@ describe("Required Task Penalties", () => {
     expect(result2.settled).toBe(0);
     const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
     expect(Number(balance.b)).toBe(95);
+  });
+
+  it("notifications and ledger are sorted by created_at DESC without special priority for required task penalties", async () => {
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
+    const parentActor = { type: "user", role: "parent", id: pid };
+    await notify(env, {
+      recipientType: "child", recipientId: cid, actorType: "system", actorId: null,
+      title: "Old notification", body: "", eventType: "praise",
+      relatedType: "point_ledger", relatedId: "dummy-old", createdAt: "2026-01-01T00:00:00.000Z"
+    });
+    const ledgerId = id();
+    await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, created_at) VALUES (?, ?, ?, ?, 'manual', 'x', '2026-01-03', 'old ledger entry', '2026-01-03T00:00:00.000Z')")
+      .bind(ledgerId, cid, pid, 10).run();
+    const penaltyLedgerId = id();
+    await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, created_at) VALUES (?, ?, ?, ?, 'task_required_penalty', 'task-x', '2026-01-02', 'penalty', '2026-01-02T00:00:00.000Z')")
+      .bind(penaltyLedgerId, cid, pid, -5).run();
+    await notify(env, {
+      recipientType: "child", recipientId: cid, actorType: "system", actorId: null,
+      title: "Penalty", body: "", eventType: "task_required_penalty",
+      relatedType: "point_ledger", relatedId: penaltyLedgerId, createdAt: "2026-01-02T00:00:00.000Z"
+    });
+
+    const nReq = makeRequest("GET", "/notifications");
+    const nRes = await safe(handleSharedRoutes, norm(new URL(nReq.url).pathname), "GET", nReq, env, childActor, new URL(nReq.url));
+    const notifications = await nRes!.json();
+    const createdAts = notifications.data.items.map((item: any) => item.created_at);
+    expect(createdAts).toEqual([...createdAts].sort().reverse());
+
+    const lReq = makeRequest("GET", `/points/ledger?childId=${cid}`);
+    const lRes = await safe(handleSharedRoutes, norm(new URL(lReq.url).pathname), "GET", lReq, env, parentActor, new URL(lReq.url));
+    const ledger = await lRes!.json();
+    const ledgerCreatedAts = ledger.data.items.map((item: any) => item.created_at);
+    expect(ledgerCreatedAts).toEqual([...ledgerCreatedAts].sort().reverse());
   });
 });

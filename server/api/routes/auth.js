@@ -43,7 +43,7 @@ export async function handleAuthRoutes(path, method, request, env, actor) {
         if (!passwordOk)
             return fail("BAD_CREDENTIALS", "账号或密码错误", 401);
         const token = id();
-        const expires = new Date(Date.now() + 7 * 86400000).toISOString();
+        const expires = new Date(Date.now() + 180 * 86400000).toISOString();
         const actorType = child ? "child" : "user";
         const actorId = delegate ? `delegate:${account.id}` : account.id;
         await env.DB.prepare("INSERT INTO sessions (token, actor_type, actor_id, expires_at) VALUES (?, ?, ?, ?)")

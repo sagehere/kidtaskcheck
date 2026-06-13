@@ -490,7 +490,7 @@ export async function settleRequiredTaskPenalties(env, at = nowIso()) {
     const shouldSettleMonthly = dayOfMonth === 1 && hour >= 0;
     if (!shouldSettleDaily && !shouldSettleWeekly && !shouldSettleMonthly)
         return { settled: 0 };
-    const tasks = (await env.DB.prepare(`SELECT t.id, t.parent_id, t.period, t.required_count, t.required_penalty_points,
+    const tasks = (await env.DB.prepare(`SELECT t.id, t.parent_id, t.period, t.required_count, t.required_penalty_points, t.title,
   ta.child_id
 FROM tasks t
 JOIN task_assignees ta ON ta.task_id=t.id
@@ -540,6 +540,18 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`)
 VALUES (?, ?, ?, ?, 'task_required_penalty', ?, ?, ?, ?)`)
             .bind(ledgerId, task.child_id, task.parent_id, -actualPenalty, task.id, periodKeyValue, `必做任务未达标扣分`, at)
             .run();
+        await notify(env, {
+            recipientType: "child",
+            recipientId: task.child_id,
+            actorType: "system",
+            actorId: null,
+            title: "必做任务未达标扣分",
+            body: `必做任务「${task.title}」未达标，扣除 ${actualPenalty} 积分。`,
+            eventType: "task_required_penalty",
+            relatedType: "point_ledger",
+            relatedId: ledgerId,
+            createdAt: at
+        });
         await env.DB.prepare(`INSERT INTO task_required_penalties (id, task_id, child_id, parent_id, period_key, required_count, actual_count, penalty_points, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .bind(id(), task.id, task.child_id, task.parent_id, periodKeyValue, task.required_count, actualCount, actualPenalty, at)
@@ -1368,8 +1380,9 @@ export async function childLatestTaskStatuses(env, childId, itemPeriods) {
 }
 export async function notify(env, input) {
     await ensureOperatorAuditSchema(env);
+    const createdAt = input.createdAt || nowIso();
     await env.DB.prepare("INSERT INTO notifications (id, recipient_type, recipient_id, actor_type, actor_id, actor_label_snapshot, title, body, event_type, related_type, related_id, requires_ack, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(id(), input.recipientType, input.recipientId, input.actorType, input.actorId || null, input.actorLabel || input.actorLabelSnapshot || "", input.title, input.body || "", input.eventType, input.relatedType || null, input.relatedId || null, input.requiresAck ? 1 : 0, nowIso())
+        .bind(id(), input.recipientType, input.recipientId, input.actorType, input.actorId || null, input.actorLabel || input.actorLabelSnapshot || "", input.title, input.body || "", input.eventType, input.relatedType || null, input.relatedId || null, input.requiresAck ? 1 : 0, createdAt)
         .run();
 }
 export function notificationRecipient(actor) {
@@ -1386,7 +1399,8 @@ export function eventTypeLabel(value) {
         reward_refund: "奖励退还",
         achievement_reward: "成就奖励",
         praise: "表扬",
-        criticism: "批评"
+        criticism: "批评",
+        task_required_penalty: "必做扣分"
     };
     return labels[value] || "消息";
 }
@@ -1407,7 +1421,7 @@ export async function notificationSource(env, item) {
             return { sourceTypeLabel: "奖励", sourceLabel: `奖励：${row.title}` };
     }
     if (item.related_type === "point_ledger") {
-        const row = await env.DB.prepare("SELECT pl.source_type, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id=?").bind(item.related_id).first();
+        const row = await env.DB.prepare("SELECT pl.source_type, pl.source_id, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id=?").bind(item.related_id).first();
         if (row?.title) {
             const label = row.source_type === "criticism" ? "批评" : "表扬";
             return { sourceTypeLabel: label, sourceLabel: `${label}：${row.title}` };
@@ -1422,6 +1436,12 @@ export async function notificationSource(env, item) {
                 const label = eventTypeLabel(original.source_type);
                 return { sourceTypeLabel: `${label}撤回`, sourceLabel: `${label}` };
             }
+        }
+        if (row?.source_type === "task_required_penalty") {
+            const taskRow = await env.DB.prepare("SELECT title FROM tasks WHERE id=?").bind(row.source_id).first();
+            if (taskRow?.title)
+                return { sourceTypeLabel: "必做扣分", sourceLabel: `任务：${taskRow.title}` };
+            return { sourceTypeLabel: "必做扣分", sourceLabel: "必做扣分" };
         }
         if (row?.source_type) {
             const label = eventTypeLabel(row.source_type);
@@ -1455,6 +1475,12 @@ export async function ledgerSource(env, row) {
             return { sourceTypeLabel: label, sourceLabel: `${label}：${found.title}` };
         return { sourceTypeLabel: label, sourceLabel: label };
     }
+    if (row.source_type === "task_required_penalty") {
+        const found = await env.DB.prepare("SELECT title FROM tasks WHERE id=?").bind(row.source_id).first();
+        if (found?.title)
+            return { sourceTypeLabel: "必做扣分", sourceLabel: `任务：${found.title}` };
+        return { sourceTypeLabel: "必做扣分", sourceLabel: "必做扣分" };
+    }
     if (row.source_type === "feedback_recall") {
         const original = await env.DB.prepare("SELECT pl.source_type, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id=?").bind(row.source_id).first();
         if (original?.title) {
@@ -1483,7 +1509,7 @@ export function sessionCookie(value, env, request) {
         || (request?.url ? new URL(request.url).protocol.replace(":", "") : "")
         || (env.APP_URL ? new URL(env.APP_URL).protocol.replace(":", "") : "http");
     const secure = proto === "https" ? "; Secure" : "";
-    return `session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 86400}${secure}`;
+    return `session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${180 * 86400}${secure}`;
 }
 export function validateNonGetRequest(request, env) {
     if (request.method === "GET" || request.method === "HEAD") return;

@@ -2,6 +2,21 @@
 
 本文件记录 AI/Codex 对项目的维护历史。每次修改都应追加记录，最新记录放在顶部。
 
+## 2026-06-14
+
+- 类型：功能增强与测试
+- 范围：登录会话时长、必做扣分通知、来源标签、排序语义
+- 摘要：
+  - 将登录会话从 7 天延长为 180 天，同步更新 `sessions.expires_at` 和 HttpOnly cookie `Max-Age`。
+  - 必做任务未达标扣分时同步创建孩子端通知（`eventType='task_required_penalty'`，`relatedType='point_ledger'`）。
+  - `notify` 扩展可选 `createdAt` 参数，必做扣分通知使用结算时间 `at` 保证排序与账本一致。
+  - `eventTypeLabel`、`notificationSource`、`ledgerSource` 新增 `task_required_penalty` 支持，展示"必做扣分 / 任务：{title}"。
+  - 通知 `/notifications` 和账本 `/points/ledger` 保持按 `created_at DESC` 排序，不对必做扣分做置顶。
+  - 新增测试断言：login cookie 180 天 Max-Age、session 有效期、必做扣分通知来源标签、混排顺序。
+- 业务代码：`server/api/routes/auth.js`、`server/api/utils.js`
+- 测试：`tests/api.test.ts`、`tests/ledger.test.ts`
+- 验证：`npx vitest run` 92 passed
+
 ## 2026-06-12
 
 - 类型：UI 增强

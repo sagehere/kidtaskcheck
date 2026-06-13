@@ -1,6 +1,6 @@
 # FEATURE_INDEX
 
-最近更新：2026-06-12
+最近更新：2026-06-14
 
 本文件按“用户可感知功能”组织维护入口。P0 是默认必须读取文件；P1 是实现跨界或需要上下文时再读；P2 是 schema、测试、部署或高风险排查时谨慎读取。
 
@@ -14,8 +14,8 @@
 - 主要调用链：`App Login.submit` -> `api("/auth/login")` -> `handleApiRequest` -> `handleAuthRoutes`; `App.loadMe` -> `/auth/me`; `Shell.logout` -> `/auth/logout`
 - 相关状态：`sessions`、`users.status`、`users.role`、浏览器 unauthorized 事件
 - 相关接口：`POST /api/auth/login`、`GET /api/auth/me`、`POST /api/auth/logout`
-- 修改注意事项：登录错误要保留后端凭据错误；生产默认管理员密码限制在 router/bootstrap 路径；角色分流改动会影响三个角色 App。
-- 最近更新时间：2026-06-12
+- 修改注意事项：登录错误要保留后端凭据错误；生产默认管理员密码限制在 router/bootstrap 路径；角色分流改动会影响三个角色 App；会话过期时间已从 7 天延长到 180 天（auth.js + utils.js cookie Max-Age 同步更新）。
+- 最近更新时间：2026-06-14
 
 ## 2. 管理员后台
 
@@ -66,8 +66,8 @@
 - 主要调用链：`ParentApp.load` -> `/task-categories`、`/tasks`; `create/update/remove` -> `/task-categories`、`/tasks`; 孩子端从 `/dashboard/child` 接收可提交任务；必做结算 `settleRequiredTaskPenalties` 由 scheduler tick 和 `maybeRunMaintenance` 触发。
 - 相关状态：`task_categories`、`tasks`、`task_assignees`、`task_submissions`、`task_required_penalties`
 - 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`
-- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；家长任务列表 small 标签中追加必做规则摘要。
-- 最近更新时间：2026-06-12
+- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；家长任务列表 small 标签中追加必做规则摘要；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶。
+- 最近更新时间：2026-06-14
 
 ## 6. 奖励、兑换、仓库与退款
 
@@ -131,8 +131,8 @@
 - 主要调用链：ledger modal -> `/points/ledger`; print -> `/children/:id/export-print`; report -> `/children/:id/report?period=weekly|monthly`; report may read cached AI commentary.
 - 相关状态：`point_ledger`、`activity_archives`、`ai_report_commentaries`、`system_settings.timezone_offset_minutes`
 - 相关接口：`GET /api/points/ledger`、`GET /api/children/:id/export-print`、`GET /api/children/:id/report`
-- 修改注意事项：报表应使用已完成周期语义；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口。
-- 最近更新时间：2026-06-12
+- 修改注意事项：报表应使用已完成周期语义；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口；`ledgerSource` 支持 `task_required_penalty` 来源类型，展示"必做扣分 / 任务：{title}"。
+- 最近更新时间：2026-06-14
 
 ## 11. 通知中心
 
@@ -144,8 +144,8 @@
 - 主要调用链：`Shell.loadNotifications` -> `/notifications`; mark read -> `/notifications/:id/read`; read all -> `/notifications/read-all`; quick action -> parent review/redemption endpoints.
 - 相关状态：`notifications.read_at`、`recipient_type`、`recipient_id`、`actor_label_snapshot`
 - 相关接口：`GET /api/notifications`、`PATCH /api/notifications/read-all`、`PATCH /api/notifications/:id/read`
-- 修改注意事项：当前通知列表倾向展示未读；快捷操作后要刷新通知和业务 dashboard；协同管理称谓要保留快照语义。
-- 最近更新时间：2026-06-12
+- 修改注意事项：当前通知列表只展示未读；排序按 `created_at DESC` 无特殊置顶；`notificationSource` 支持 `task_required_penalty` 事件类型和 `point_ledger` 关联来源；`eventTypeLabel` 新增 `task_required_penalty` 返回"必做扣分"。
+- 最近更新时间：2026-06-14
 
 ## 12. AI 服务、问候与报告评论
 

@@ -40,6 +40,20 @@ describe("Auth", () => {
     const c = r!.headers.get("set-cookie") || "";
     expect(c).toContain("session=");
   });
+  it("login cookie Max-Age is 180 days", async () => {
+    const r = await safe(handleAuthRoutes, "/auth/login", "POST", makeRequest("POST", "/auth/login", { username: "admin", password: "test-admin-pw" }), env, null);
+    expect(r!.status).toBe(200);
+    const c = r!.headers.get("set-cookie") || "";
+    expect(c).toContain("Max-Age=15552000");
+  });
+  it("session expires_at is ~180 days from now", async () => {
+    const r = await safe(handleAuthRoutes, "/auth/login", "POST", makeRequest("POST", "/auth/login", { username: "admin", password: "test-admin-pw" }), env, null);
+    expect(r!.status).toBe(200);
+    const session = env.DB.prepare("SELECT * FROM sessions ORDER BY created_at DESC LIMIT 1").first() as any;
+    const diff = Date.parse(session.expires_at) - Date.now();
+    expect(diff).toBeGreaterThan(179 * 86400000);
+    expect(diff).toBeLessThan(181 * 86400000);
+  });
   it("login cookie includes Secure when request is HTTPS", () => {
     const req = new Request("https://example.com/api/auth/login", { headers: { "x-forwarded-proto": "https" } });
     expect(sessionCookie("tok", {}, req)).toContain("Secure");

@@ -398,6 +398,7 @@ button,
   color: #157f6f;
   font-size: 12px;
   font-weight: 800;
+  line-height: 1;
 }
 
 .notification-actions {

@@ -2,6 +2,20 @@
 
 本文件记录 AI/Codex 对项目的维护历史。每次修改都应追加记录，最新记录放在顶部。
 
+## 2026-06-14
+
+- 类型：CSS 展示修复
+- 范围：消息中心筛选标签布局
+- 摘要：
+  - 修复消息中心（`.notification-filter-bar`）分类标签被下方消息列表遮挡、滚动条可见的问题。
+  - 为筛选条设置 `flex: 0 0 auto` 固定高度、`overflow-y: hidden` 和 `align-items: center` 垂直居中。
+  - 隐藏筛选条横向滚动条（`scrollbar-width: none`、`-ms-overflow-style: none`、`::-webkit-scrollbar`），同时保留小屏横向滑动能力。
+  - 将 `.notification-filter-bar` 与 `.ledger-filter-bar` 的 CSS 选择器拆分，避免误伤积分筛选滚动条行为。
+  - `.notification-list.scroll-list` 保持 `min-height: 0; flex: 1 1 auto`，列表只占剩余空间，不向上覆盖筛选标签。
+- 业务代码：`src/styles.css`
+- 文档：`docs/ai/FEATURE_INDEX.md`
+- 验证：`npm run build`
+
 ## 2026-06-13
 
 - 类型：UI/交互修正

@@ -144,7 +144,7 @@
 - 主要调用链：`Shell.loadNotifications` -> `/notifications`; mark read -> `/notifications/:id/read`; read all -> `/notifications/read-all`; quick action -> parent review/redemption endpoints.
 - 相关状态：`notifications.read_at`、`recipient_type`、`recipient_id`、`actor_label_snapshot`
 - 相关接口：`GET /api/notifications`、`PATCH /api/notifications/read-all`、`PATCH /api/notifications/:id/read`
-- 修改注意事项：当前通知列表只展示未读；后端排序为待处理项（`task_submission` / `reward_redemption`）优先，再按 `created_at DESC, id DESC`；前端消息中心提供全部未读、待处理、需签收、普通消息筛选，并在全部未读中把待处理分组置顶；`notificationSource` 支持 `task_required_penalty` 事件类型和 `point_ledger` 关联来源；`eventTypeLabel` 新增 `task_required_penalty` 返回"必做扣分"。
+- 修改注意事项：当前通知列表只展示未读；后端排序为待处理项（`task_submission` / `reward_redemption`）优先，再按 `created_at DESC, id DESC`；前端消息中心提供全部未读、待处理、需签收、普通消息筛选，并在全部未读中把待处理分组置顶；`notificationSource` 支持 `task_required_penalty` 事件类型和 `point_ledger` 关联来源；`eventTypeLabel` 新增 `task_required_penalty` 返回"必做扣分"；消息筛选条（`.notification-filter-bar`）已修复 CSS 布局：固定高度、隐藏滚动条、不遮挡下方消息列表、移动端保留横向滑动但不显示滚动条。
 - 最近更新时间：2026-06-14
 
 ## 12. AI 服务、问候与报告评论

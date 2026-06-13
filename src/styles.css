@@ -291,7 +291,22 @@ button,
   padding-right: 4px;
 }
 
-.notification-filter-bar,
+.notification-filter-bar {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 6px 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.notification-filter-bar::-webkit-scrollbar {
+  display: none;
+}
+
 .ledger-filter-bar {
   display: flex;
   gap: 8px;

@@ -5,7 +5,12 @@ export async function handleSharedRoutes(path, method, request, env, actor, url)
     if (path === "/notifications" && method === "GET") {
         const a = requireRole(actor, ["parent", "parent_delegate", "child"]);
         const recipient = notificationRecipient(a);
-        const rows = (await env.DB.prepare("SELECT * FROM notifications WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL ORDER BY created_at DESC LIMIT 50")
+        const rows = (await env.DB.prepare(`SELECT * FROM notifications
+WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL
+ORDER BY CASE WHEN related_type IN ('task_submission', 'reward_redemption') THEN 0 ELSE 1 END,
+  created_at DESC,
+  id DESC
+LIMIT 50`)
             .bind(recipient.type, recipient.id)
             .all()).results;
         const unread = Number((await env.DB.prepare("SELECT COUNT(*) v FROM notifications WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL")

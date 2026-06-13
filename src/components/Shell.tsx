@@ -4,10 +4,20 @@ import { Me, Notification, REFRESH_INTERVAL_MS } from "../types/api";
 import { api } from "../api/client";
 import { Empty, formatNotificationSource, formatTime } from "./UI";
 
+type NotificationTab = "all" | "action" | "ack" | "normal";
+
+const NOTIFICATION_TABS: { value: NotificationTab; label: string }[] = [
+  { value: "all", label: "全部未读" },
+  { value: "action", label: "待处理" },
+  { value: "ack", label: "需签收" },
+  { value: "normal", label: "普通消息" }
+];
+
 export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullable<Me>; refresh: () => void; children: ReactNode; onQuickAction?: () => void }) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
+  const [notificationTab, setNotificationTab] = useState<NotificationTab>("all");
   const [quickError, setQuickError] = useState("");
   const [quickBusyId, setQuickBusyId] = useState("");
   const [ackBusy, setAckBusy] = useState(false);
@@ -100,6 +110,63 @@ export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullabl
     await api("/auth/logout", { method: "POST" });
     refresh();
   }
+  const canQuickAction = me.role === "parent" || me.role === "parent_delegate";
+  function isActionable(item: Notification) {
+    return canQuickAction && (
+      item.related_type === "task_submission" ||
+      (item.related_type === "reward_redemption" && item.event_type === "reward_requested")
+    );
+  }
+  function matchesTab(item: Notification) {
+    if (notificationTab === "action") return isActionable(item);
+    if (notificationTab === "ack") return !!item.requires_ack;
+    if (notificationTab === "normal") return !isActionable(item) && !item.requires_ack;
+    return true;
+  }
+  const visibleNotifications = notifications.filter(matchesTab);
+  const actionNotifications = visibleNotifications.filter(isActionable);
+  const otherNotifications = visibleNotifications.filter((item) => !isActionable(item));
+  function renderNotification(item: Notification) {
+    const isBusy = quickBusyId === `${item.id}:approve` || quickBusyId === `${item.id}:reject` || quickBusyId === `${item.id}:redeem` || quickBusyId === `${item.id}:cancel`;
+    const source = formatNotificationSource(item);
+    return (
+      <article className={`notification-row ${item.read_at ? "" : "unread"}`} key={item.id}>
+        <div className="notification-main">
+          <div className="notification-row-head">
+            <span className="notification-chip">{source || item.sourceTypeLabel || "消息"}</span>
+            <time>{formatTime(item.created_at)}</time>
+          </div>
+          <strong>{item.title}</strong>
+          <span>{item.body}</span>
+          {item.actorLabel && <small className="source-line">操作者：{item.actorLabel}</small>}
+        </div>
+        <div className="notification-actions">
+          {canQuickAction && item.related_type === "task_submission" && (
+            <>
+              <button className="icon good" title="通过" aria-label="通过" disabled={isBusy} onClick={() => quickAction(item, "approve")}><Check size={16} /></button>
+              <button className="icon danger" title="驳回" aria-label="驳回" disabled={isBusy} onClick={() => quickAction(item, "reject")}><Trash2 size={16} /></button>
+            </>
+          )}
+          {canQuickAction && item.related_type === "reward_redemption" && item.event_type === "reward_requested" && (
+            <>
+              <button className="icon good" title="核销" aria-label="核销" disabled={isBusy} onClick={() => quickAction(item, "redeem")}><BadgeCheck size={16} /></button>
+              <button className="icon danger" title="取消" aria-label="取消奖励" disabled={isBusy} onClick={() => quickAction(item, "cancel")}><Trash2 size={16} /></button>
+            </>
+          )}
+          {!item.read_at && <button className="secondary" disabled={ackBusy || isBusy} aria-label="签收" onClick={() => readOne(item.id)}>签收</button>}
+        </div>
+      </article>
+    );
+  }
+  function renderNotificationGroup(title: string, rows: Notification[]) {
+    if (!rows.length) return null;
+    return (
+      <section className="notification-group" key={title}>
+        <h3>{title}</h3>
+        <div className="notification-group-list">{rows.map(renderNotification)}</div>
+      </section>
+    );
+  }
   const blockingAck = me.role === "child" ? notifications.find((item) => item.requires_ack && !item.read_at && (item.event_type === "praise" || item.event_type === "criticism")) : null;
   return (
     <div className="app">
@@ -116,37 +183,25 @@ export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullabl
                 <div className="panel-title compact-title">
                   <Bell />
                   <h2>消息中心</h2>
-                  <button className="secondary" onClick={readAll}>全部已读</button>
+                  <button className="secondary" disabled={!unread} onClick={readAll}>全部已读</button>
                 </div>
                 {quickError && <div className="error" style={{ padding: "0.5rem" }}>{quickError}</div>}
-                <div className="list scroll-list">
-                  {notifications.length ? notifications.map((item) => {
-                    const busyKey = `${item.id}:approve`;
-                    const isBusy = quickBusyId === busyKey || quickBusyId === `${item.id}:reject` || quickBusyId === `${item.id}:redeem` || quickBusyId === `${item.id}:cancel`;
-                    return (
-                      <article className={`row ${item.read_at ? "" : "unread"}`} key={item.id}>
-                        <div>
-                          <strong>{item.title}</strong>
-                          <span>{item.body}</span>
-                          <small className="source-line">{[formatNotificationSource(item), item.actorLabel ? `操作者：${item.actorLabel}` : ""].filter(Boolean).join(" · ")}</small>
-                          <small>{formatTime(item.created_at)}</small>
-                        </div>
-                        {(me.role === "parent" || me.role === "parent_delegate") && item.related_type === "task_submission" && (
-                          <div className="actions">
-                            <button className="icon good" title="通过" aria-label="通过" disabled={isBusy} onClick={() => quickAction(item, "approve")}><Check size={16} /></button>
-                            <button className="icon danger" title="驳回" aria-label="驳回" disabled={isBusy} onClick={() => quickAction(item, "reject")}><Trash2 size={16} /></button>
-                          </div>
-                        )}
-                        {(me.role === "parent" || me.role === "parent_delegate") && item.related_type === "reward_redemption" && item.event_type === "reward_requested" && (
-                          <div className="actions">
-                            <button className="icon good" title="核销" aria-label="核销" disabled={isBusy} onClick={() => quickAction(item, "redeem")}><BadgeCheck size={16} /></button>
-                            <button className="icon danger" title="取消" aria-label="取消奖励" disabled={isBusy} onClick={() => quickAction(item, "cancel")}><Trash2 size={16} /></button>
-                          </div>
-                        )}
-                        {!item.read_at && <button className="secondary" disabled={ackBusy} aria-label="签收" onClick={() => readOne(item.id)}>签收</button>}
-                      </article>
-                    );
-                  }) : <Empty text="暂无消息" />}
+                <div className="notification-filter-bar" role="tablist" aria-label="消息筛选">
+                  {NOTIFICATION_TABS.map((item) => (
+                    <button key={item.value} type="button" className={notificationTab === item.value ? "active" : ""} onClick={() => setNotificationTab(item.value)}>
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="notification-list scroll-list">
+                  {visibleNotifications.length ? (
+                    notificationTab === "all"
+                      ? <>
+                          {renderNotificationGroup("待处理", actionNotifications)}
+                          {renderNotificationGroup(actionNotifications.length ? "其他未读" : "未读消息", otherNotifications)}
+                        </>
+                      : renderNotificationGroup(NOTIFICATION_TABS.find((item) => item.value === notificationTab)?.label || "未读消息", visibleNotifications)
+                  ) : <Empty text="暂无消息" />}
                 </div>
               </div>
             )}

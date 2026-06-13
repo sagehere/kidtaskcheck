@@ -4,6 +4,7 @@ import { ensureAdmin, hashPassword, id, localTimeText, notify } from "../server/
 import { handleParentRoutes } from "../server/api/routes/parent.js";
 import { handleChildRoutes } from "../server/api/routes/child.js";
 import { handleSharedRoutes } from "../server/api/routes/shared.js";
+import { groupLedgerRows, ledgerMatchesFilter, ledgerSummary } from "../src/lib/ledgerView";
 
 function makeRequest(m: string, p: string, b?: any): Request {
   return new Request(`http://localhost/api${p}`, { method: m, headers: { "content-type": "application/json" }, ...(b ? { body: JSON.stringify(b) } : {}) });
@@ -374,5 +375,22 @@ describe("Required Task Penalties", () => {
     const ledger = await ledgerRes!.json();
     expect(ledger.data.items.slice(0, 2).map((item: any) => item.id)).toEqual([criticismLedgerId, penaltyLedgerId]);
     expect(ledger.data.items[0].localCreatedAt).toBe("2026-06-14 01:05:50");
+  });
+});
+
+describe("Ledger view helpers", () => {
+  it("summarizes, filters, and groups loaded ledger rows by local date", () => {
+    const rows = [
+      { id: "income", amount: 8, source_type: "task", note: "", created_at: "2026-06-13T02:00:00.000Z", localCreatedAt: "2026-06-13 10:00:00" },
+      { id: "penalty", amount: -3, source_type: "task_required_penalty", note: "", created_at: "2026-06-13T01:00:00.000Z", localCreatedAt: "2026-06-13 09:00:00" },
+      { id: "frozen", amount: 0, source_type: "criticism", note: "", created_at: "2026-06-12T11:00:00.000Z", localCreatedAt: "2026-06-12 19:00:00", freeze_status: "frozen", frozen_amount: 5 }
+    ] as any[];
+
+    expect(ledgerSummary(rows)).toEqual({ income: 8, expense: 3, net: 5, frozen: 5 });
+    expect(ledgerMatchesFilter(rows[1], "required")).toBe(true);
+    expect(ledgerMatchesFilter(rows[2], "frozen")).toBe(true);
+    const groups = groupLedgerRows(rows, "all", new Date("2026-06-13T12:00:00.000Z"));
+    expect(groups.map((group) => group.label)).toEqual(["今天", "昨天"]);
+    expect(groups[0].rows.map((row) => row.id)).toEqual(["income", "penalty"]);
   });
 });

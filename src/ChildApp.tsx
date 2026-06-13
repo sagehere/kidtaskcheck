@@ -2,39 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star } from "lucide-react";
 import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary } from "./types/api";
 import { api } from "./api/client";
-import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle, formatSource } from "./components/UI";
+import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle } from "./components/UI";
+import { LedgerModal } from "./components/LedgerModal";
 import { Shell } from "./components/Shell";
-
-function LedgerList({ rows }: { rows: LedgerRow[] }) {
-  return (
-    <div className="list ledger-list">
-      {rows.length ? rows.map((row) => (
-        <article className="row" key={row.id}>
-          <div>
-            <strong className={row.freeze_status === "frozen" ? "negative" : row.amount >= 0 ? "positive" : "negative"}>{row.freeze_status === "frozen" ? `预扣冻结${row.frozen_amount || 0}` : `${row.amount >= 0 ? "+" : ""}${row.amount}`}</strong>
-            <span>{[row.sourceLabel || row.note || formatSource(row.source_type), row.actorLabel ? `操作者：${row.actorLabel}` : "", row.localCreatedAt || formatTime(row.created_at)].filter(Boolean).join(" · ")}</span>
-          </div>
-          <span>{row.sourceTypeLabel || formatSource(row.source_type)}</span>
-        </article>
-      )) : <Empty text="暂无积分记录" />}
-    </div>
-  );
-}
-
-function LedgerModal({ title, rows, onClose }: { title: string; rows: LedgerRow[]; onClose: () => void }) {
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <section className="panel ledger-modal">
-        <div className="panel-title compact-title">
-          <Coins />
-          <h2>{title}</h2>
-          <button className="secondary" onClick={onClose}>关闭</button>
-        </div>
-        <LedgerList rows={rows} />
-      </section>
-    </div>
-  );
-}
 
 export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [dash, setDash] = useState<any>({ tasks: [], rewards: [], achievements: [], balance: 0 });

@@ -1,12 +1,13 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import {
-  Award, BadgeCheck, Check, ClipboardCheck, Coins, Download, Edit3, Gift, KeyRound,
+  Award, BadgeCheck, Check, ClipboardCheck, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users, AlertTriangle
 } from "lucide-react";
 import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ParentDelegate, RemedyCriticismItem } from "./types/api";
 import { api } from "./api/client";
-import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, formatSource, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
+import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
+import { LedgerModal } from "./components/LedgerModal";
 import { Shell } from "./components/Shell";
 import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, formatAchievementRule } from "./lib/appHelpers";
 
@@ -1039,38 +1040,6 @@ export function PraiseCriticismPanel({ children, templates, onSubmit, remedyItem
         </div>
       )}
     </section>
-  );
-}
-
-export function LedgerList({ rows }: { rows: LedgerRow[] }) {
-  return (
-    <div className="list ledger-list">
-      {rows.length ? rows.map((row) => (
-        <article className="row" key={row.id}>
-          <div>
-            <strong className={row.freeze_status === "frozen" ? "negative" : row.amount >= 0 ? "positive" : "negative"}>{row.freeze_status === "frozen" ? `预扣冻结${row.frozen_amount || 0}` : `${row.amount >= 0 ? "+" : ""}${row.amount}`}</strong>
-            <span>{[row.sourceLabel || row.note || formatSource(row.source_type), row.actorLabel ? `操作者：${row.actorLabel}` : "", row.localCreatedAt || formatTime(row.created_at)].filter(Boolean).join(" · ")}</span>
-            {row.remedy_condition && <small>补救：{row.remedy_condition}{row.remedy_points ? ` · 可挽回 ${row.remedy_points} 分` : ""}{row.localRemedyDeadlineAt ? ` · 截止 ${row.localRemedyDeadlineAt}` : ""}</small>}
-          </div>
-          <span>{row.sourceTypeLabel || formatSource(row.source_type)}</span>
-        </article>
-      )) : <Empty text="暂无积分记录" />}
-    </div>
-  );
-}
-
-export function LedgerModal({ title, rows, onClose }: { title: string; rows: LedgerRow[]; onClose: () => void }) {
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <section className="panel ledger-modal">
-        <div className="panel-title compact-title">
-          <Coins />
-          <h2>{title}</h2>
-          <button className="secondary" onClick={onClose}>关闭</button>
-        </div>
-        <LedgerList rows={rows} />
-      </section>
-    </div>
   );
 }
 

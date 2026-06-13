@@ -4,6 +4,19 @@
 
 ## 2026-06-13
 
+- 类型：UI/交互优化
+- 范围：消息中心、积分清单
+- 摘要：
+  - 消息中心仍只展示未读消息，但后端排序改为待处理项优先，其后按时间倒序；前端新增全部未读、待处理、需签收、普通消息筛选和待处理分组。
+  - 消息记录重排为来源标签、时间、标题、正文、操作者和固定操作区，保留签收、全部已读和家长快捷审核/核销操作。
+  - 抽出共享 `LedgerModal` 和账本展示 helper，家长端与孩子端积分清单共用同一套时间分组、筛选和汇总逻辑。
+  - 积分清单默认按今天/昨天/日期分组，支持收入、支出、冻结/补救、任务、奖励、反馈、必做扣分筛选，并汇总当前加载记录。
+- 业务代码：`src/components/Shell.tsx`、`src/components/LedgerModal.tsx`、`src/lib/ledgerView.ts`、`src/ParentApp.tsx`、`src/ChildApp.tsx`、`src/styles.css`、`server/api/routes/shared.js`
+- 测试：`tests/notifications.test.ts`、`tests/ledger.test.ts`
+- 验证：`rtk npm test -- tests/notifications.test.ts tests/ledger.test.ts`（17 passed）、`rtk npm run build`
+
+## 2026-06-13
+
 - 类型：缺陷修复
 - 范围：积分账本排序、表扬批评记录时间、旧 SQLite 时间兼容
 - 摘要：

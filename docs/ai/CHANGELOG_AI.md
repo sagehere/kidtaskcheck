@@ -2,6 +2,19 @@
 
 本文件记录 AI/Codex 对项目的维护历史。每次修改都应追加记录，最新记录放在顶部。
 
+## 2026-06-13
+
+- 类型：缺陷修复
+- 范围：积分账本排序、表扬批评记录时间、旧 SQLite 时间兼容
+- 摘要：
+  - `/points/ledger`、反馈记录和报表中的账本查询改为按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序，报表/反馈时间窗口用 `datetime(created_at)` 过滤，避免 ISO 时间文本让必做扣分长期靠前。
+  - 表扬/批评创建时显式写入 `point_ledger.created_at=nowIso()`，并把同一时间传给通知，避免依赖 SQLite `CURRENT_TIMESTAMP`。
+  - `localTimeText` 兼容旧 `YYYY-MM-DD HH:mm:ss` 时间文本，将其按 UTC 解析后再应用系统时区，避免日期提前一天。
+  - 新增账本回归测试覆盖混合时间格式排序和反馈记录本地时间展示。
+- 业务代码：`server/api/routes/shared.js`、`server/api/routes/parent.js`、`server/api/utils.js`
+- 测试：`tests/ledger.test.ts`
+- 验证：`rtk npm test -- tests/ledger.test.ts`（13 passed）、`rtk npm run build`
+
 ## 2026-06-14
 
 - 类型：功能增强与测试

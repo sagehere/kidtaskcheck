@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { resetTestEnv } from "./helpers/setup";
-import { ensureAdmin, hashPassword, id, notify } from "../server/api/utils.js";
+import { ensureAdmin, hashPassword, id, localTimeText, notify } from "../server/api/utils.js";
 import { handleParentRoutes } from "../server/api/routes/parent.js";
 import { handleChildRoutes } from "../server/api/routes/child.js";
 import { handleSharedRoutes } from "../server/api/routes/shared.js";
@@ -69,9 +69,17 @@ describe("Task 33: Points Ledger", () => {
     const feedbackReq = makeRequest("POST", `/children/${cid}/feedback-events`, { templateId });
     const feedbackRes = await safe(handleParentRoutes, norm(new URL(feedbackReq.url).pathname), "POST", feedbackReq, env, parentActor);
     expect(feedbackRes!.status).toBe(200);
-    const original = env.DB.prepare("SELECT id, amount FROM point_ledger WHERE child_id=? AND source_type='praise'").bind(cid).first() as any;
+    const original = env.DB.prepare("SELECT id, amount, created_at FROM point_ledger WHERE child_id=? AND source_type='praise'").bind(cid).first() as any;
     expect(original).not.toBeNull();
     expect(Number(original.amount)).toBe(8);
+    expect(original.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
+
+    const createdLedgerReq = makeRequest("GET", `/points/ledger?childId=${cid}`);
+    const createdLedgerRes = await safe(handleSharedRoutes, norm(new URL(createdLedgerReq.url).pathname), "GET", createdLedgerReq, env, parentActor, new URL(createdLedgerReq.url));
+    expect(createdLedgerRes!.status).toBe(200);
+    const createdLedger = await createdLedgerRes!.json();
+    const createdFeedbackRow = createdLedger.data.items.find((row: any) => row.id === original.id);
+    expect(createdFeedbackRow.localCreatedAt).toBe(localTimeText(original.created_at, createdLedger.data.timezoneOffsetMinutes));
 
     const recallReq = makeRequest("PATCH", `/feedback-events/${original.id}/recall`, {});
     const recallRes = await safe(handleSharedRoutes, norm(new URL(recallReq.url).pathname), "PATCH", recallReq, env, parentActor);
@@ -345,5 +353,26 @@ describe("Required Task Penalties", () => {
     const ledger = await lRes!.json();
     const ledgerCreatedAts = ledger.data.items.map((item: any) => item.created_at);
     expect(ledgerCreatedAts).toEqual([...ledgerCreatedAts].sort().reverse());
+  });
+
+  it("orders mixed ISO and legacy SQLite ledger timestamps by actual time", async () => {
+    const parentActor = { type: "user", role: "parent", id: pid };
+    const templateId = id();
+    env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active) VALUES (?, ?, 'criticism', 'Late cleanup', '', 3, 'emoji', '!', 1)")
+      .bind(templateId, pid)
+      .run();
+    const penaltyLedgerId = id();
+    await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, created_at) VALUES (?, ?, ?, ?, 'task_required_penalty', ?, '2026-06-12', 'penalty', '2026-06-13T15:32:35.000Z')")
+      .bind(penaltyLedgerId, cid, pid, -1, tid).run();
+    const criticismLedgerId = id();
+    await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, created_at) VALUES (?, ?, ?, ?, 'criticism', ?, NULL, 'criticism', '2026-06-13 17:05:50')")
+      .bind(criticismLedgerId, cid, pid, -3, templateId).run();
+
+    const ledgerReq = makeRequest("GET", `/points/ledger?childId=${cid}`);
+    const ledgerRes = await safe(handleSharedRoutes, norm(new URL(ledgerReq.url).pathname), "GET", ledgerReq, env, parentActor, new URL(ledgerReq.url));
+    expect(ledgerRes!.status).toBe(200);
+    const ledger = await ledgerRes!.json();
+    expect(ledger.data.items.slice(0, 2).map((item: any) => item.id)).toEqual([criticismLedgerId, penaltyLedgerId]);
+    expect(ledger.data.items[0].localCreatedAt).toBe("2026-06-14 01:05:50");
   });
 });

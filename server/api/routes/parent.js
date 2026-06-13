@@ -445,7 +445,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const range = anchor ? reportWindowRange(period, anchor, offset) : previousCompletedReportRange(period, nowIso(), offset);
         const periodKey = range.label;
         const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows] = await Promise.all([
-            env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC").bind(child.id, a.id, range.start, range.end).all(),
+            env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND datetime(created_at)>=datetime(?) AND datetime(created_at)<datetime(?) ORDER BY datetime(created_at) DESC, created_at DESC, id DESC").bind(child.id, a.id, range.start, range.end).all(),
             env.DB.prepare(`SELECT s.*, t.title, tc.name category_name
 FROM task_submissions s
 JOIN tasks t ON t.id=s.task_id
@@ -460,8 +460,8 @@ ORDER BY rr.requested_at DESC`).bind(child.id, a.id, range.start, range.end).all
             env.DB.prepare(`SELECT pl.*, ft.title template_title
 FROM point_ledger pl
 LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
-WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND pl.created_at>=? AND pl.created_at<?
-ORDER BY pl.created_at DESC`).bind(child.id, a.id, range.start, range.end).all(),
+WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND datetime(pl.created_at)>=datetime(?) AND datetime(pl.created_at)<datetime(?)
+ORDER BY datetime(pl.created_at) DESC, pl.created_at DESC, pl.id DESC`).bind(child.id, a.id, range.start, range.end).all(),
             env.DB.prepare(`SELECT a.title, ca.unlocked_at
 FROM child_achievements ca
 JOIN achievements a ON a.id=ca.achievement_id
@@ -526,8 +526,8 @@ ORDER BY rr.requested_at DESC`).bind(child.id, a.id).all()).results);
         const rows = (await env.DB.prepare(`SELECT pl.*, ft.title template_title, ft.kind template_kind
 FROM point_ledger pl
 LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
-WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND pl.created_at>=?
-ORDER BY pl.created_at DESC`)
+WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND datetime(pl.created_at)>=datetime(?)
+ORDER BY datetime(pl.created_at) DESC, pl.created_at DESC, pl.id DESC`)
             .bind(child.id, a.id, cutoff)
             .all()).results;
         const offset = await timezoneOffsetMinutes(env);
@@ -555,12 +555,13 @@ ORDER BY pl.created_at DESC`)
         const remedyPoints = isFrozenCriticism ? Math.max(0, Math.min(points, Number(template.remedy_points || 0))) : 0;
         const remedyDeadlineHours = isFrozenCriticism ? Math.max(1, Number(template.remedy_deadline_hours || 24)) : 0;
         const remedyDeadlineAt = isFrozenCriticism ? new Date(Date.now() + remedyDeadlineHours * 3600000).toISOString() : null;
+        const now = nowIso();
         const label = template.kind === "praise" ? "表扬" : "批评";
         const note = template.description ? `${template.title}：${template.description}` : template.title;
         await env.DB.prepare(`INSERT INTO point_ledger
-(id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot, effective_amount, frozen_amount, freeze_status, remedy_condition, remedy_points, remedy_deadline_at)
-VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .bind(ledgerId, child.id, a.id, amount, template.kind, template.id, note, audit.type, audit.id, audit.label, amount, frozenAmount, isFrozenCriticism ? "frozen" : "", isFrozenCriticism ? String(template.remedy_condition || "").trim() : "", remedyPoints, remedyDeadlineAt)
+(id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot, effective_amount, frozen_amount, freeze_status, remedy_condition, remedy_points, remedy_deadline_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .bind(ledgerId, child.id, a.id, amount, template.kind, template.id, note, audit.type, audit.id, audit.label, amount, frozenAmount, isFrozenCriticism ? "frozen" : "", isFrozenCriticism ? String(template.remedy_condition || "").trim() : "", remedyPoints, remedyDeadlineAt, now)
             .run();
         await recalcAchievements(env, a.id, child.id);
         await notify(env, {
@@ -574,7 +575,8 @@ VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             eventType: template.kind,
             relatedType: "point_ledger",
             relatedId: ledgerId,
-            requiresAck: true
+            requiresAck: true,
+            createdAt: now
         });
         return ok(true);
     }

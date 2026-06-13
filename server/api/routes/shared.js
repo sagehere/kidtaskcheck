@@ -252,7 +252,7 @@ WHERE id=? AND freeze_status='frozen'`)
         if (a.role !== "child" && !(await childIdsForParent(env, a.id)).includes(childId))
             return fail("FORBIDDEN", "没有权限查看该孩子积分", 403);
         const offset = await timezoneOffsetMinutes(env);
-        const rows = (await env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? ORDER BY created_at DESC LIMIT 100").bind(childId).all()).results;
+        const rows = (await env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? ORDER BY datetime(created_at) DESC, created_at DESC, id DESC LIMIT 100").bind(childId).all()).results;
         return ok({ timezoneOffsetMinutes: offset, timezoneLabel: timezoneLabel(offset), items: await withLedgerSources(env, rows, offset) });
     }
     if (path === "/dashboard/parent" && method === "GET") {

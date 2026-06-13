@@ -255,7 +255,14 @@ export function weekdayJson(value) {
 export function localTimeText(value, offsetMinutes) {
     if (!value)
         return "";
-    return new Date(new Date(value).getTime() + offsetMinutes * 60000).toISOString().replace("T", " ").slice(0, 19);
+    const text = String(value);
+    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)
+        ? `${text.replace(" ", "T")}Z`
+        : text;
+    const time = new Date(normalized).getTime();
+    if (Number.isNaN(time))
+        return text;
+    return new Date(time + offsetMinutes * 60000).toISOString().replace("T", " ").slice(0, 19);
 }
 export async function ensureSystemErrorLogs(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS system_error_logs (

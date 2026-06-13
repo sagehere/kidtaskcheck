@@ -366,12 +366,12 @@ button,
 }
 
 .notification-main strong,
-.notification-main span,
+.notification-main > span,
 .notification-main small {
   overflow-wrap: anywhere;
 }
 
-.notification-main span,
+.notification-main > span,
 .notification-main small,
 .notification-row-head time {
   color: #69737d;
@@ -1008,6 +1008,7 @@ button:disabled {
 .scroll-list {
   max-height: 460px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
 }
 

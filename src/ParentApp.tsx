@@ -1051,7 +1051,7 @@ export function RefundRewardDialog({ child, rows, onRefund, onClose }: { child: 
   }
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <section className="panel refund-modal">
+      <section className="panel refund-modal scrolling-list-modal">
         <div className="panel-title compact-title">
           <RotateCcw />
           <h2>退还奖励</h2>
@@ -1088,7 +1088,7 @@ export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child
   }
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <section className="panel refund-modal">
+      <section className="panel refund-modal scrolling-list-modal">
         <div className="panel-title compact-title">
           <RotateCcw />
           <h2>撤回反馈</h2>

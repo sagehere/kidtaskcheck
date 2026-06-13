@@ -79,8 +79,8 @@
 - 主要调用链：`ChildApp.redeemReward` -> `/reward-redemptions`; `ParentApp.finishRedemption` -> `/reward-redemptions/:id/redeem|cancel`; refund modal -> `/reward-redemptions/:id/refund`; warehouse -> `/warehouse`
 - 相关状态：`rewards`、`reward_assignees`、`reward_prerequisites`、`reward_redemptions`、`point_ledger`
 - 相关接口：`GET/POST /api/rewards`、`PATCH/DELETE /api/rewards/:id`、`POST /api/reward-redemptions`、`PATCH /api/reward-redemptions/:id/redeem|cancel|refund`、`GET /api/warehouse`、`PATCH /api/warehouse/clear-redeemed`
-- 修改注意事项：取消/退款要正确返还积分；已核销仓库记录和孩子端隐藏逻辑要分清；奖励前置任务会依赖任务完成周期。
-- 最近更新时间：2026-06-12
+- 修改注意事项：取消/退款要正确返还积分；已核销仓库记录和孩子端隐藏逻辑要分清；奖励前置任务会依赖任务完成周期；退还奖励弹窗的候选列表需要保持弹窗内滚动，避免记录较多时挤出操作按钮。
+- 最近更新时间：2026-06-13
 
 ## 7. 成就规则
 
@@ -105,8 +105,8 @@
 - 主要调用链：`ParentApp.applyFeedback` -> `/children/:id/feedback-events`; event list -> `/children/:id/feedback-events`; recall/remedy -> `/feedback-events/:id/recall|remedy`
 - 相关状态：`feedback_templates`、`point_ledger`、`activity_archives`、`notifications`
 - 相关接口：`GET/POST /api/feedback-templates`、`PATCH/DELETE /api/feedback-templates/:id`、`GET/POST /api/children/:id/feedback-events`、`PATCH /api/feedback-events/:id/recall`、`PATCH /api/feedback-events/:id/remedy`
-- 修改注意事项：批评可能冻结积分，补救后结算；召回要保留审计/归档语义；相关账本字段在 0021 之后扩展；反馈创建必须显式写入 `point_ledger.created_at=nowIso()` 并把同一 `createdAt` 传给通知，反馈记录查询用 `datetime(created_at)` 过滤并按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序以兼容旧 SQLite 时间文本。
-- 最近更新时间：2026-06-12
+- 修改注意事项：批评可能冻结积分，补救后结算；召回要保留审计/归档语义；相关账本字段在 0021 之后扩展；反馈创建必须显式写入 `point_ledger.created_at=nowIso()` 并把同一 `createdAt` 传给通知，反馈记录查询用 `datetime(created_at)` 过滤并按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序以兼容旧 SQLite 时间文本；反馈撤回弹窗的候选列表需要保持弹窗内滚动，避免记录较多时挤出操作按钮。
+- 最近更新时间：2026-06-13
 
 ## 9. 孩子端任务、积分与固定卡片
 
@@ -131,8 +131,8 @@
 - 主要调用链：ledger modal -> `/points/ledger`; print -> `/children/:id/export-print`; report -> `/children/:id/report?period=weekly|monthly`; report may read cached AI commentary.
 - 相关状态：`point_ledger`、`activity_archives`、`ai_report_commentaries`、`system_settings.timezone_offset_minutes`
 - 相关接口：`GET /api/points/ledger`、`GET /api/children/:id/export-print`、`GET /api/children/:id/report`
-- 修改注意事项：报表应使用已完成周期语义；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口；`ledgerSource` 支持 `task_required_penalty` 来源类型，展示"必做扣分 / 任务：{title}"；`/points/ledger` 按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序，报表账本窗口用 `datetime(created_at)` 过滤，`localTimeText` 将旧 `YYYY-MM-DD HH:mm:ss` 视为 UTC 后再应用系统时区；积分清单 UI 使用共享 `LedgerModal`，默认按今天/昨天/日期分组，支持收入、支出、冻结/补救、任务、奖励、反馈、必做扣分筛选，并在顶部汇总当前加载记录。
-- 最近更新时间：2026-06-14
+- 修改注意事项：报表应使用已完成周期语义；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口；`ledgerSource` 支持 `task_required_penalty` 来源类型，展示"必做扣分 / 任务：{title}"；`/points/ledger` 按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序，报表账本窗口用 `datetime(created_at)` 过滤，`localTimeText` 将旧 `YYYY-MM-DD HH:mm:ss` 视为 UTC 后再应用系统时区；积分清单 UI 使用共享 `LedgerModal`，默认按今天/昨天/日期分组，支持收入、支出、冻结/补救、任务、奖励、反馈、必做扣分筛选，不显示顶部汇总卡片。
+- 最近更新时间：2026-06-13
 
 ## 11. 通知中心
 

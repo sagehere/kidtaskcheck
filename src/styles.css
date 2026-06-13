@@ -823,9 +823,20 @@ button.child-tile {
   width: min(620px, calc(100vw - 32px));
 }
 
+.scrolling-list-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: min(86vh, 720px);
+  overflow: hidden;
+}
+
 .refund-list {
-  max-height: 360px;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(52vh, 420px);
   overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
 }
 
 .selectable-row {
@@ -1600,32 +1611,6 @@ button:disabled {
   padding-right: 4px;
 }
 
-.ledger-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.ledger-summary div {
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid #ece7dd;
-  border-radius: 8px;
-  background: #fffdfa;
-}
-
-.ledger-summary span {
-  display: block;
-  color: #69737d;
-  font-size: 12px;
-}
-
-.ledger-summary strong {
-  display: block;
-  margin-top: 2px;
-  font-size: 20px;
-}
-
 .ledger-group {
   display: grid;
   gap: 8px;
@@ -1865,8 +1850,10 @@ button:disabled {
     min-width: 0;
   }
 
-  .ledger-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .refund-list.scroll-list {
+    max-height: min(56vh, 420px);
+    overflow-y: auto;
+    padding-right: 4px;
   }
 
   .ledger-row {

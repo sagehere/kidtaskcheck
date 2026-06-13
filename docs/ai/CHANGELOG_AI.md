@@ -4,6 +4,18 @@
 
 ## 2026-06-13
 
+- 类型：UI/交互修正
+- 范围：积分清单、反馈撤回、奖励退款
+- 摘要：
+  - 积分清单共享 `LedgerModal` 移除顶部收入、支出、净变化、冻结汇总卡片，仅保留时间分组列表和筛选器。
+  - 退还奖励、撤回反馈弹窗改为受限高度的列表弹窗，候选记录列表在弹窗内滚动，避免记录较多时挤出底部操作按钮。
+  - 移除不再使用的 `ledger-summary` 样式，并补充移动端列表滚动覆盖规则。
+- 业务代码：`src/components/LedgerModal.tsx`、`src/ParentApp.tsx`、`src/styles.css`
+- 文档：`docs/ai/FEATURE_INDEX.md`
+- 验证：`rtk npm test -- tests/ledger.test.ts`（14 passed）、`rtk npm run build`
+
+## 2026-06-13
+
 - 类型：UI/交互优化
 - 范围：消息中心、积分清单
 - 摘要：

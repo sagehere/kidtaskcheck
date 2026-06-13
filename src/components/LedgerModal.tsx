@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Coins } from "lucide-react";
 import { LedgerRow } from "../types/api";
 import { Empty, formatSource } from "./UI";
-import { groupLedgerRows, LEDGER_FILTERS, LedgerFilter, ledgerDisplayTime, ledgerSummary } from "../lib/ledgerView";
+import { groupLedgerRows, LEDGER_FILTERS, LedgerFilter, ledgerDisplayTime } from "../lib/ledgerView";
 
 function amountText(row: LedgerRow) {
   if (row.freeze_status === "frozen") return `预扣冻结${row.frozen_amount || 0}`;
@@ -46,7 +46,6 @@ function LedgerRowItem({ row }: { row: LedgerRow }) {
 
 export function LedgerModal({ title, rows, onClose }: { title: string; rows: LedgerRow[]; onClose: () => void }) {
   const [filter, setFilter] = useState<LedgerFilter>("all");
-  const summary = useMemo(() => ledgerSummary(rows), [rows]);
   const groups = useMemo(() => groupLedgerRows(rows, filter), [rows, filter]);
   const visibleCount = groups.reduce((count, group) => count + group.rows.length, 0);
 
@@ -57,13 +56,6 @@ export function LedgerModal({ title, rows, onClose }: { title: string; rows: Led
           <Coins />
           <h2>{title}</h2>
           <button className="secondary" onClick={onClose}>关闭</button>
-        </div>
-
-        <div className="ledger-summary" aria-label="积分汇总">
-          <div><span>收入</span><strong className="positive">+{summary.income}</strong></div>
-          <div><span>支出</span><strong className="negative">-{summary.expense}</strong></div>
-          <div><span>净变化</span><strong className={summary.net >= 0 ? "positive" : "negative"}>{summary.net >= 0 ? "+" : ""}{summary.net}</strong></div>
-          <div><span>冻结</span><strong>{summary.frozen}</strong></div>
         </div>
 
         <div className="ledger-filter-bar" role="tablist" aria-label="积分筛选">

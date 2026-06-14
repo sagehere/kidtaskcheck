@@ -323,6 +323,60 @@ describe("Required Task Penalties", () => {
     expect(Number(balance.b)).toBe(95);
   });
 
+  it("deducts for each unmet period across consecutive days", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 3, 5)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    const r1 = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(r1.settled).toBe(1);
+    const r2 = await settleRequiredTaskPenalties(env, "2026-06-12T00:00:00.000Z");
+    expect(r2.settled).toBe(1);
+    const penalties = env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=? ORDER BY period_key").bind(tid, cid).all().results;
+    expect(penalties).toHaveLength(2);
+    expect(penalties[0].period_key).toBe("2026-06-10");
+    expect(penalties[1].period_key).toBe("2026-06-11");
+    expect(penalties[0].period_key).not.toBe(penalties[1].period_key);
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(90);
+  });
+
+  it("same period idempotent after settling a different period", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 3, 5)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    const dup = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(dup.settled).toBe(0);
+    await settleRequiredTaskPenalties(env, "2026-06-12T00:00:00.000Z");
+    const penalties = env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).all().results;
+    expect(penalties).toHaveLength(2);
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(90);
+  });
+
+  it("met period skipped, subsequent unmet period still deducts", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 1, 5)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const subId = id();
+    env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, status, submitted_at, period_key) VALUES (?, ?, ?, ?, 'approved', ?, '2026-06-10')").bind(subId, tid, cid, pid, new Date().toISOString()).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    const r1 = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(r1.settled).toBe(0);
+    const r2 = await settleRequiredTaskPenalties(env, "2026-06-12T00:00:00.000Z");
+    expect(r2.settled).toBe(1);
+    const penalties = env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).all().results;
+    expect(penalties).toHaveLength(1);
+    expect(penalties[0].period_key).toBe("2026-06-11");
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(95);
+  });
+
   it("notifications and ledger are sorted by created_at DESC without special priority for required task penalties", async () => {
     const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
     const parentActor = { type: "user", role: "parent", id: pid };

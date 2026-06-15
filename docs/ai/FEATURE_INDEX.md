@@ -149,16 +149,16 @@
 
 ## 12. AI 服务、问候与报告评论
 
-- 功能说明：家长配置 OpenAI-compatible 文本 AI，拉取模型，测试连接，预览问候/周报/月报，系统定时生成孩子问候和报告评论。模型选择支持手动输入任意兼容模型名。
+- 功能说明：家长配置 OpenAI-compatible 文本 AI，拉取模型，测试连接，预览问候/周报/月报，系统定时生成孩子问候和报告评论。模型选择支持手动输入任意兼容模型名。预览结果可手动替换写入对应缓存。
 - 用户入口：家长设置中的 AI 服务区域、孩子端问候、家长报表。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`server/api/ai/orchestrator.js`、`server/api/ai/providers.js`、`server/api/ai/prompt.js`
 - P1：`server/api/ai/cache.js`、`server/api/ai/queue.js`、`server/api/ai/scheduled.js`、`server/scheduler-tick.mjs`、`server/scheduler.mjs`、`server/api/utils.js`、`src/types/api.ts`
-- P2：`migrations/0011_ai_service_and_child_fields.sql`、`migrations/0014_parent_ai_service_settings.sql`、`migrations/0015_ai_report_commentaries.sql`、`migrations/0016_ai_generation_queue.sql`、`migrations/0017_ai_scheduled_refresh_runs.sql`、`migrations/0018_system_error_logs_and_ai_queue_controls.sql`、`tests/ai.test.ts`
-- 主要调用链：settings load/save -> `/parent/ai-service`; model/test -> `/parent/ai-service/models|test`; preview -> `/parent/ai-service/preview`; scheduler -> `server/api/ai/scheduled.js` -> queue/orchestrator/cache。
+- P2：`migrations/0011_ai_service_and_child_fields.sql`、`migrations/0014_parent_ai_service_settings.sql`、`migrations/0015_ai_report_commentaries.sql`、`migrations/0016_ai_generation_queue.sql`、`migrations/0017_ai_scheduled_refresh_runs.sql`、`migrations/0018_system_error_logs_and_ai_queue_controls.sql`、`tests/ai.test.ts`、`tests/api.test.ts`
+- 主要调用链：settings load/save -> `/parent/ai-service`; model/test -> `/parent/ai-service/models|test`; preview -> `/parent/ai-service/preview`; preview/cache -> `/parent/ai-service/preview/cache`; scheduler -> `server/api/ai/scheduled.js` -> queue/orchestrator/cache。
 - 相关状态：`parent_ai_service_settings`、`ai_child_greetings`、`ai_report_commentaries`、`ai_generation_queue`、`ai_scheduled_refresh_runs`、`system_error_logs`
-- 相关接口：`GET/PATCH /api/parent/ai-service`、`POST /api/parent/ai-service/models`、`POST /api/parent/ai-service/test`、`POST /api/parent/ai-service/preview`
-- 修改注意事项：AI 预览默认不写缓存；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure；scheduled 使用管理员时区和已完成周期；模型字段使用 `<input list>` 支持手动输入。
-- 最近更新时间：2026-06-12
+- 相关接口：`GET/PATCH /api/parent/ai-service`、`POST /api/parent/ai-service/models`、`POST /api/parent/ai-service/test`、`POST /api/parent/ai-service/preview`、`POST /api/parent/ai-service/preview/cache`
+- 修改注意事项：AI 预览默认不写缓存（`{ cache: false }`）；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure；scheduled 使用管理员时区和已完成周期；模型字段使用 `<input list>` 支持手动输入；预览替换缓存使用 `INSERT OR REPLACE` 只替换当前配置 hash 下的缓存，不触发新 AI 调用。
+- 最近更新时间：2026-06-15
 
 ## 13. AI 图片、漫画报告与打印清单图
 

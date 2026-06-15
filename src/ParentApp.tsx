@@ -41,7 +41,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; error?: string; models?: string[] } | null>(null);
   const [selectedAiTestChildId, setSelectedAiTestChildId] = useState("");
   const [aiPreviewing, setAiPreviewing] = useState<"" | "greeting" | "weeklyReport" | "monthlyReport">("");
-  const [aiPreviewResult, setAiPreviewResult] = useState<{ title: string; text: string } | null>(null);
+  const [aiPreviewResult, setAiPreviewResult] = useState<{ title: string; text: string; type: string; childId: string } | null>(null);
+  const [aiPreviewCaching, setAiPreviewCaching] = useState(false);
   const [cartoonReportGenerating, setCartoonReportGenerating] = useState<"" | "weekly" | "monthly">("");
   const [cartoonReportResult, setCartoonReportResult] = useState<(CartoonReportResponse & { title: string }) | null>(null);
   const [checklistImageGenerating, setChecklistImageGenerating] = useState(false);
@@ -121,11 +122,28 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         method: "POST",
         body: JSON.stringify({ childId, type })
       });
-      setAiPreviewResult({ title, text: result.text || "本次没有返回内容" });
+      setAiPreviewResult({ title, text: result.text || "本次没有返回内容", type, childId });
     } catch (err) {
       setError(err instanceof Error ? err.message : "AI 预览失败");
     } finally {
       setAiPreviewing("");
+    }
+  }
+
+  async function cachePreviewResult(type: string, childId: string, text: string) {
+    setAiPreviewCaching(true);
+    setError("");
+    try {
+      await api("/parent/ai-service/preview/cache", {
+        method: "POST",
+        body: JSON.stringify({ childId, type, text })
+      });
+      setAiPreviewResult(null);
+      setMessage("已成功写入缓存");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "写入缓存失败");
+    } finally {
+      setAiPreviewCaching(false);
     }
   }
 
@@ -870,6 +888,10 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         <AiPreviewDialog
           title={aiPreviewResult.title}
           text={aiPreviewResult.text}
+          type={aiPreviewResult.type}
+          childId={aiPreviewResult.childId}
+          caching={aiPreviewCaching}
+          onCache={(type, childId, text) => void cachePreviewResult(type, childId, text)}
           onClose={() => setAiPreviewResult(null)}
         />
       )}
@@ -1184,7 +1206,7 @@ export function CartoonReportDialog({ result, onRetry, onRegenerate, onClose }: 
   );
 }
 
-export function AiPreviewDialog({ title, text, onClose }: { title: string; text: string; onClose: () => void }) {
+export function AiPreviewDialog({ title, text, type, childId, caching, onCache, onClose }: { title: string; text: string; type: string; childId: string; caching: boolean; onCache: (type: string, childId: string, text: string) => void; onClose: () => void }) {
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <section className="panel refund-modal">
@@ -1194,6 +1216,12 @@ export function AiPreviewDialog({ title, text, onClose }: { title: string; text:
           <button type="button" className="secondary" onClick={onClose}>关闭</button>
         </div>
         <p className="ai-preview-text">{text}</p>
+        <div className="inline-fields" style={{ marginTop: "1rem" }}>
+          <button type="button" className="primary" disabled={caching} onClick={() => onCache(type, childId, text)}>
+            {caching ? "写入中..." : "替换当前缓存"}
+          </button>
+          <button type="button" className="secondary" onClick={onClose}>关闭</button>
+        </div>
       </section>
     </div>
   );

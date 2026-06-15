@@ -446,6 +446,64 @@ describe("Parent AI Service Validation", () => {
     expect(env.DB.prepare("SELECT COUNT(*) as count FROM ai_child_greetings").first().count).toBe(0);
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+  it("preview/cache writes weekly report commentary into ai_report_commentaries", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test", reportPrompt: "report prompt" }), env, actor);
+    const text = "Cached weekly commentary";
+    const r = await safe(handleParentRoutes, "/parent/ai-service/preview/cache", "POST", makeRequest("POST", "/parent/ai-service/preview/cache", { childId, type: "weeklyReport", text }), env, actor);
+    expect(r!.status).toBe(200);
+    const rows = env.DB.prepare("SELECT * FROM ai_report_commentaries").all().results as any[];
+    expect(rows.length).toBe(1);
+    expect(rows[0].commentary).toBe(text);
+    expect(rows[0].period_type).toBe("weekly");
+    expect(rows[0].child_id).toBe(childId);
+  });
+  it("preview/cache writes greeting into ai_child_greetings", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    const text = "Cached greeting text";
+    const r = await safe(handleParentRoutes, "/parent/ai-service/preview/cache", "POST", makeRequest("POST", "/parent/ai-service/preview/cache", { childId, type: "greeting", text }), env, actor);
+    expect(r!.status).toBe(200);
+    const rows = env.DB.prepare("SELECT * FROM ai_child_greetings").all().results as any[];
+    expect(rows.length).toBe(1);
+    expect(rows[0].greeting).toBe(text);
+    expect(rows[0].child_id).toBe(childId);
+  });
+  it("preview/cache writes monthly report commentary into ai_report_commentaries", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test", monthlyPrompt: "monthly prompt" }), env, actor);
+    const text = "Cached monthly commentary";
+    const r = await safe(handleParentRoutes, "/parent/ai-service/preview/cache", "POST", makeRequest("POST", "/parent/ai-service/preview/cache", { childId, type: "monthlyReport", text }), env, actor);
+    expect(r!.status).toBe(200);
+    const rows = env.DB.prepare("SELECT * FROM ai_report_commentaries").all().results as any[];
+    expect(rows.length).toBe(1);
+    expect(rows[0].commentary).toBe(text);
+    expect(rows[0].period_type).toBe("monthly");
+  });
+  it("preview/cache rejects empty text", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    const r = await safe(handleParentRoutes, "/parent/ai-service/preview/cache", "POST", makeRequest("POST", "/parent/ai-service/preview/cache", { childId, type: "weeklyReport", text: "" }), env, actor);
+    expect(r!.status).toBe(400);
+    expect(env.DB.prepare("SELECT COUNT(*) as count FROM ai_report_commentaries").first().count).toBe(0);
+  });
+  it("preview/cache rejects non-existent child", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const r = await safe(handleParentRoutes, "/parent/ai-service/preview/cache", "POST", makeRequest("POST", "/parent/ai-service/preview/cache", { childId: "non-existent", type: "weeklyReport", text: "text" }), env, actor);
+    expect(r!.status).toBe(404);
+  });
+  it("preview/cache rejects disabled AI child", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(0);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    const r = await safe(handleParentRoutes, "/parent/ai-service/preview/cache", "POST", makeRequest("POST", "/parent/ai-service/preview/cache", { childId, type: "weeklyReport", text: "text" }), env, actor);
+    expect(r!.status).toBe(400);
+    expect(env.DB.prepare("SELECT COUNT(*) as count FROM ai_report_commentaries").first().count).toBe(0);
+  });
   it("generates a cartoon weekly report image without caching it", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
     const childId = await seedAiChild(1);

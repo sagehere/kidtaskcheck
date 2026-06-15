@@ -1,6 +1,6 @@
-﻿import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange } from "../../../src/lib/domain.js";
+﻿import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
 import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema } from "../utils.js";
-import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs } from "../ai/index.js";
+import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs } from "../ai/index.js";
 
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
@@ -254,6 +254,44 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             text = await generateReportCommentary(env, child, period, range.label, offset, true, { cache: false, range });
         }
         return ok({ text });
+    }
+    if (path === "/parent/ai-service/preview/cache" && method === "POST") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const input = await body(request);
+        const type = String(input.type || "");
+        if (!["greeting", "weeklyReport", "monthlyReport"].includes(type))
+            return fail("BAD_REQUEST", "无效的 AI 测试类型", 400);
+        const text = String(input.text || "").trim();
+        if (!text)
+            return fail("BAD_REQUEST", "缓存文本不能为空", 400);
+        const child = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(String(input.childId || ""), a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        if (!child.ai_enabled)
+            return fail("BAD_REQUEST", "请先为该孩子启用 AI", 400);
+        const config = await getParentAiServiceConfig(env, a.id);
+        if (!config.baseUrl || !config.apiKey || !config.model || !config.prompt)
+            return fail("BAD_REQUEST", "请先完整保存 AI 服务配置", 400);
+        const offset = await timezoneOffsetMinutes(env);
+        const now = nowIso();
+        if (type === "greeting") {
+            const hash = aiConfigHash(config);
+            const dayKey = periodKey("daily", now, offset);
+            await env.DB.prepare("INSERT OR REPLACE INTO ai_child_greetings (child_id, previous_week_key, config_hash, greeting, generated_at) VALUES (?, ?, ?, ?, ?)")
+                .bind(child.id, dayKey, hash, text, now)
+                .run();
+        } else {
+            const period = type === "monthlyReport" ? "monthly" : "weekly";
+            const hash = aiReportConfigHash(config, period);
+            const range = previousCompletedReportRange(period, now, offset);
+            await ensureAiReportCommentaries(env);
+            await env.DB.prepare("INSERT OR REPLACE INTO ai_report_commentaries (child_id, parent_id, period_key, period_type, config_hash, commentary, generated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+                .bind(child.id, child.parent_id, range.label, period, hash, text, now)
+                .run();
+        }
+        return ok({ ok: true });
     }
     if (path === "/parent/ai-service/cartoon-report" && method === "POST") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);

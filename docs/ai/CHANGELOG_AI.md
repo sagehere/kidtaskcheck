@@ -4,6 +4,20 @@
 
 ## 2026-06-15
 
+- 类型：功能新增
+- 范围：AI 测试结果替换缓存按钮
+- 摘要：
+  - 后端新增 `POST /api/parent/ai-service/preview/cache` 接口，接受 `{ childId, type, text }`，校验权限、孩子归属、AI 启用和配置完整性，拒绝空文本。
+  - `greeting` 写入 `ai_child_greetings`（key: `periodKey("daily", now, offset)` + `aiConfigHash`）；`weeklyReport/monthlyReport` 写入 `ai_report_commentaries`（key: `previousCompletedReportRange(...)` 已完成周期 + `aiReportConfigHash`）。
+  - 前端 `AiPreviewDialog` 增加"替换当前缓存"按钮，调用新接口，成功后关闭弹窗并显示成功提示；失败时保留弹窗和预览文本。
+  - 保持 AI 预览默认不写缓存（`{ cache: false }`）。
+- 业务代码：`server/api/routes/parent.js`、`src/ParentApp.tsx`
+- 测试：`tests/api.test.ts` — 新增 6 个用例（周报替换、日寄语替换、月报替换、空文本拒绝、错误孩子拒绝、未启用 AI 拒绝）
+- 文档：`docs/ai/FEATURE_INDEX.md`、`docs/ai/CHANGELOG_AI.md`
+- 验证：`npm test`
+
+## 2026-06-15
+
 - 类型：缺陷修复
 - 范围：必做任务自动扣分未触发
 - 摘要：

@@ -2,6 +2,21 @@
 
 本文件记录 AI/Codex 对项目的维护历史。每次修改都应追加记录，最新记录放在顶部。
 
+## 2026-06-15
+
+- 类型：缺陷修复
+- 范围：必做任务自动扣分未触发
+- 摘要：
+  - 根因：内置 scheduler（`ENABLE_BUILTIN_SCHEDULER=true`）的内置 tick 只调用 `bootstrap` + `runScheduledAiRefresh`，未像独立 scheduler 那样显式调用 `settleRequiredTaskPenalties`；`bootstrap -> maybeRunMaintenance` 虽有间接调用但受 24 小时 `cleanup_last_run_at` 闸门控制。
+  - 修复：新建 `server/scheduler-tick.mjs` 作为统一 scheduler tick 入口，每次 tick 都依次执行 `bootstrap`、`settleRequiredTaskPenalties`、`runScheduledAiRefresh`。
+  - `server/index.mjs` 和 `server/scheduler.mjs` 改为复用同一共享 tick，保证行为一致。
+  - 日志输出统一包含 `requiredPenalties` 字段，部署后可从容器日志确认是否结算。
+  - 不做历史漏期补扣；保留 `settleRequiredTaskPenalties` 的幂等、余额封顶、按 `task_id + child_id + period_key` 去重规则。
+- 业务代码：`server/scheduler-tick.mjs`（新增）、`server/index.mjs`、`server/scheduler.mjs`
+- 测试：`tests/scheduler.test.ts`（新增 5 个用例覆盖 tick 返回 requiredPenalties、非午夜窗口仍做必做结算、cleanup 24h 内仍触发、无必做任务不报错、幂等不重复扣）
+- 文档：`docs/ai/FEATURE_INDEX.md`、`docs/ai/CHANGELOG_AI.md`
+- 验证：`npm test` — 109 passed、`npm run build`
+
 ## 2026-06-14
 
 - 类型：测试覆盖增强

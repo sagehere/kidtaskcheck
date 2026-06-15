@@ -63,7 +63,7 @@
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/EmojiSelect.tsx`
 - P2：`migrations/0001_initial.sql`、`migrations/0002_limits_and_repeat_submissions.sql`、`migrations/0005_feedback_templates_and_timezone.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`migrations/0022_required_tasks.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
-- 主要调用链：`ParentApp.load` -> `/task-categories`、`/tasks`; `create/update/remove` -> `/task-categories`、`/tasks`; 孩子端从 `/dashboard/child` 接收可提交任务；必做结算 `settleRequiredTaskPenalties` 由 scheduler tick 和 `maybeRunMaintenance` 触发。
+- 主要调用链：`ParentApp.load` -> `/task-categories`、`/tasks`; `create/update/remove` -> `/task-categories`、`/tasks`; 孩子端从 `/dashboard/child` 接收可提交任务；必做结算 `settleRequiredTaskPenalties` 由 `server/scheduler-tick.mjs` 的共享 `schedulerTick` 函数（被内置 scheduler 和独立 scheduler 共同调用）每次 tick 显式触发，同时受 `maybeRunMaintenance` 的 24 小时清理闸门间接触发。
 - 相关状态：`task_categories`、`tasks`、`task_assignees`、`task_submissions`、`task_required_penalties`
 - 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`
 - 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；家长任务列表 small 标签中追加必做规则摘要；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶；必做扣分按 `task_id + child_id + period_key` 每周期幂等结算，同周期不重复扣、不同周期各自生成独立扣分和账本记录。
@@ -152,7 +152,7 @@
 - 功能说明：家长配置 OpenAI-compatible 文本 AI，拉取模型，测试连接，预览问候/周报/月报，系统定时生成孩子问候和报告评论。模型选择支持手动输入任意兼容模型名。
 - 用户入口：家长设置中的 AI 服务区域、孩子端问候、家长报表。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`server/api/ai/orchestrator.js`、`server/api/ai/providers.js`、`server/api/ai/prompt.js`
-- P1：`server/api/ai/cache.js`、`server/api/ai/queue.js`、`server/api/ai/scheduled.js`、`server/scheduler.mjs`、`server/api/utils.js`、`src/types/api.ts`
+- P1：`server/api/ai/cache.js`、`server/api/ai/queue.js`、`server/api/ai/scheduled.js`、`server/scheduler-tick.mjs`、`server/scheduler.mjs`、`server/api/utils.js`、`src/types/api.ts`
 - P2：`migrations/0011_ai_service_and_child_fields.sql`、`migrations/0014_parent_ai_service_settings.sql`、`migrations/0015_ai_report_commentaries.sql`、`migrations/0016_ai_generation_queue.sql`、`migrations/0017_ai_scheduled_refresh_runs.sql`、`migrations/0018_system_error_logs_and_ai_queue_controls.sql`、`tests/ai.test.ts`
 - 主要调用链：settings load/save -> `/parent/ai-service`; model/test -> `/parent/ai-service/models|test`; preview -> `/parent/ai-service/preview`; scheduler -> `server/api/ai/scheduled.js` -> queue/orchestrator/cache。
 - 相关状态：`parent_ai_service_settings`、`ai_child_greetings`、`ai_report_commentaries`、`ai_generation_queue`、`ai_scheduled_refresh_runs`、`system_error_logs`

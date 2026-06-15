@@ -3,8 +3,8 @@ import { createServer } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleApiRequest } from "./api/router.mjs";
-import { runScheduledAiRefresh } from "./api/ai/index.js";
-import { bootstrap, logSystemError } from "./api/utils.js";
+import { logSystemError } from "./api/utils.js";
+import { schedulerTick } from "./scheduler-tick.mjs";
 import { createSqliteDb } from "./sqlite-db.mjs";
 import { createNodeExecutionContext, createRuntimeEnv } from "./runtime-env.mjs";
 
@@ -171,11 +171,10 @@ if (process.env.ENABLE_BUILTIN_SCHEDULER === "true") {
   const intervalMs = Number(process.env.SCHEDULER_INTERVAL_MS || 30 * 60 * 1000);
   console.log(`builtin scheduler enabled, interval=${intervalMs}ms`);
 
-  async function schedulerTick() {
+  async function tick() {
     try {
-      await bootstrap(env);
-      const result = await runScheduledAiRefresh(env, new Date());
-      console.log(JSON.stringify({ at: new Date().toISOString(), ...result }));
+      const result = await schedulerTick(env);
+      console.log(JSON.stringify(result));
     } catch (error) {
       console.error("scheduled refresh failed:", error?.stack || error);
       await logSystemError(env, {
@@ -187,6 +186,6 @@ if (process.env.ENABLE_BUILTIN_SCHEDULER === "true") {
     }
   }
 
-  schedulerTick();
-  setInterval(() => void schedulerTick(), intervalMs);
+  tick();
+  setInterval(() => void tick(), intervalMs);
 }

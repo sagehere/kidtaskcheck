@@ -1,5 +1,5 @@
-import { runScheduledAiRefresh } from "./api/ai/index.js";
-import { bootstrap, logSystemError, settleRequiredTaskPenalties } from "./api/utils.js";
+import { logSystemError } from "./api/utils.js";
+import { schedulerTick } from "./scheduler-tick.mjs";
 import { createRuntimeEnv } from "./runtime-env.mjs";
 
 const intervalMs = Number(process.env.SCHEDULER_INTERVAL_MS || 30 * 60 * 1000);
@@ -7,11 +7,8 @@ const env = createRuntimeEnv();
 
 async function tick() {
   try {
-    await bootstrap(env);
-    const now = new Date();
-    const penaltyResult = await settleRequiredTaskPenalties(env, now.toISOString());
-    const result = await runScheduledAiRefresh(env, now);
-    console.log(JSON.stringify({ at: now.toISOString(), ...result, requiredPenalties: penaltyResult }));
+    const result = await schedulerTick(env);
+    console.log(JSON.stringify(result));
   } catch (error) {
     console.error("scheduled refresh failed:", error?.stack || error);
     await logSystemError(env, {

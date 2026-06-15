@@ -64,6 +64,7 @@ This is a Docker-first Node.js + React + SQLite family task check-in app. There 
 - API utilities and database helpers: `server/api/utils.js`
 - AI generation, queues, cache, scheduled refresh: `server/api/ai`
 - Node HTTP/static server: `server/index.mjs`
+- Shared scheduler tick: `server/scheduler-tick.mjs`
 - Local scheduler process: `server/scheduler.mjs`
 - SQLite adapter: `server/sqlite-db.mjs`
 - Migrations: `migrations/*.sql`

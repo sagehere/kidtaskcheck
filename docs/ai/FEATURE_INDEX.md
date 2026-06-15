@@ -175,7 +175,7 @@
 
 ## 14. 配置导入导出与开发测试入口
 
-- 功能说明：家长导出/导入家庭配置，开发模式下重置当前家长进度。
+- 功能说明：家长导出/导入家庭配置，开发模式下重置当前家长进度。导出配置会保留任务/奖励的孩子分配显示名、必做任务规则、奖励前置任务标题和成就指定任务标题，导入时按当前家庭的孩子名、分类名和任务标题重新映射。
 - 用户入口：家长设置中的导入导出按钮和开发隐藏重置入口。
 - P0：`src/ParentApp.tsx`、`server/api/routes/shared.js`
 - P1：`server/api/utils.js`、`server/api/routes/parent.js`、`src/types/api.ts`
@@ -183,5 +183,5 @@
 - 主要调用链：export -> `/config/export`; import -> `/config/import`; dev reset -> `/testing/reset-parent-progress`
 - 相关状态：家庭配置相关表、任务/奖励/成就/反馈模板/孩子分配关系
 - 相关接口：`GET /api/config/export`、`POST /api/config/import`、`POST /api/testing/reset-parent-progress`
-- 修改注意事项：导入必须保持跨家庭隔离和去重策略；开发重置只应在开发环境可用；`migrations/*.sql` 属 P2，只有 schema 兼容排查或导入格式变化时读取。待确认：导入导出的完整字段覆盖范围需要按当前实现再次核对。
-- 最近更新时间：2026-06-12
+- 修改注意事项：导入必须保持跨家庭隔离和去重策略；开发重置只应在开发环境可用；`migrations/*.sql` 属 P2，只有 schema 兼容排查或导入格式变化时读取；跨库可移植配置不要依赖旧数据库内的任务/孩子 ID，优先使用 `assignee_names`、`task_title`、`target_task_title` 等名称映射。
+- 最近更新时间：2026-06-15

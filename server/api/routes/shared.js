@@ -39,6 +39,11 @@ LIMIT 50`)
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         const config = await listConfig(env, a.id);
         const categoryNames = new Map(config.categories.map((category) => [category.id, category.name]));
+        const taskNames = new Map(config.tasks.map((task) => [task.id, task.title]));
+        const childNames = new Map((await env.DB.prepare("SELECT id, display_name FROM children WHERE parent_id=? AND deleted_at IS NULL")
+            .bind(a.id)
+            .all()).results.map((child) => [child.id, child.display_name]));
+        const assigneeNames = (item) => (item.assignees || []).map((childId) => childNames.get(childId)).filter(Boolean);
         return ok({
             version: 2,
             exportedAt: nowIso(),
@@ -56,6 +61,10 @@ LIMIT 50`)
                 points: item.points,
                 limit_count: item.limit_count,
                 enabled_weekdays: item.enabled_weekdays,
+                is_required: item.is_required,
+                required_count: item.required_count,
+                required_penalty_points: item.required_penalty_points,
+                assignee_names: assigneeNames(item),
                 icon_type: item.icon_type,
                 icon_value: item.icon_value
             })),
@@ -67,8 +76,12 @@ LIMIT 50`)
                 limit_period: item.limit_period,
                 limit_count: item.limit_count,
                 redeem_weekdays: item.redeem_weekdays,
-                prerequisites: item.prerequisites,
+                prerequisites: (item.prerequisites || []).map((prerequisite) => ({
+                    ...prerequisite,
+                    task_title: taskNames.get(prerequisite.task_id) || prerequisite.title || ""
+                })),
                 required_achievement_title: item.requiredAchievementTitle,
+                assignee_names: assigneeNames(item),
                 icon_type: item.icon_type,
                 icon_value: item.icon_value
             })),
@@ -82,6 +95,7 @@ LIMIT 50`)
                 window_start: item.window_start,
                 window_end: item.window_end,
                 target_task_id: item.target_task_id,
+                target_task_title: taskNames.get(item.target_task_id) || "",
                 target_category_id: item.target_category_id,
                 target_category_name: categoryNames.get(item.target_category_id) || "",
                 icon_type: item.icon_type,

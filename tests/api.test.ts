@@ -184,8 +184,8 @@ describe("Parent delegate accounts", () => {
     const parentActor = { type: "user", role: "parent", id: pid, displayName: "Parent A", operatorLabel: "妈妈" };
     const payload = {
       tasks: [{ title: "Imported Task", category_name: "Cat", period: "daily", points: 2, assignee_names: ["Child A", "Missing"], is_active: 1 }],
-      rewards: [{ title: "Imported Reward", cost_points: 3, assignee_names: ["Missing"], is_active: 1 }],
-      achievements: [{ title: "Imported Achievement", threshold: 1, metric: "tasks_completed", is_active: 1 }],
+      rewards: [{ title: "Imported Reward", cost_points: 3, assignee_names: ["Missing"], prerequisites: [{ task_title: "Imported Task", required_count: 2 }], is_active: 1 }],
+      achievements: [{ title: "Imported Achievement", threshold: 1, rule_type: "specific_task_completed", target_task_title: "Imported Task", is_active: 1 }],
       feedbackTemplates: [{ kind: "praise", title: "Imported Praise", points: 1, is_active: 1 }]
     };
     const imported = await safe(handleSharedRoutes, "/config/import", "POST", makeRequest("POST", "/config/import", payload), env, parentActor, new URL("http://localhost/api/config/import"));
@@ -197,6 +197,36 @@ describe("Parent delegate accounts", () => {
     expect((env.DB.prepare("SELECT is_active FROM feedback_templates WHERE title='Imported Praise'").first() as any).is_active).toBe(0);
     const assignees = env.DB.prepare("SELECT COUNT(*) v FROM task_assignees ta JOIN tasks t ON t.id=ta.task_id WHERE t.title='Imported Task'").first() as any;
     expect(Number(assignees.v)).toBe(1);
+    const prerequisite = env.DB.prepare("SELECT t.title, rp.required_count FROM reward_prerequisites rp JOIN tasks t ON t.id=rp.task_id JOIN rewards r ON r.id=rp.reward_id WHERE r.title='Imported Reward'").first() as any;
+    expect(prerequisite).toMatchObject({ title: "Imported Task", required_count: 2 });
+    const achievement = env.DB.prepare("SELECT t.title target_title FROM achievements a JOIN tasks t ON t.id=a.target_task_id WHERE a.title='Imported Achievement'").first() as any;
+    expect(achievement.target_title).toBe("Imported Task");
+  });
+
+  it("exports required task settings and child assignment names", async () => {
+    const parentActor = { type: "user", role: "parent", id: pid, displayName: "Parent A", operatorLabel: "妈妈" };
+    env.DB.prepare("UPDATE tasks SET is_required=1, required_count=3, required_penalty_points=4 WHERE id=?").bind(tid).run();
+    const rid = id();
+    env.DB.prepare("INSERT INTO rewards (id, parent_id, title, cost_points, limit_period, redeem_weekdays) VALUES (?, ?, 'Snack', 8, 'daily', '[1,2,3,4,5,6,0]')").bind(rid, pid).run();
+    env.DB.prepare("INSERT INTO reward_assignees (reward_id, child_id) VALUES (?, ?)").bind(rid, cid).run();
+    env.DB.prepare("INSERT INTO reward_prerequisites (reward_id, task_id, required_count) VALUES (?, ?, 2)").bind(rid, tid).run();
+    env.DB.prepare("INSERT INTO achievements (id, parent_id, title, metric, threshold, rule_type, target_task_id) VALUES (?, ?, 'Read Master', 'tasks_completed', 1, 'specific_task_completed', ?)").bind(id(), pid, tid).run();
+
+    const exported = await safe(handleSharedRoutes, "/config/export", "GET", makeRequest("GET", "/config/export"), env, parentActor, new URL("http://localhost/api/config/export"));
+    expect(exported!.status).toBe(200);
+    const payload = await exported!.json();
+    const task = payload.data.tasks.find((item: any) => item.title === "Read");
+    expect(task).toMatchObject({
+      is_required: 1,
+      required_count: 3,
+      required_penalty_points: 4,
+      assignee_names: ["Child A"]
+    });
+    const reward = payload.data.rewards.find((item: any) => item.title === "Snack");
+    expect(reward.assignee_names).toEqual(["Child A"]);
+    expect(reward.prerequisites).toEqual([expect.objectContaining({ task_title: "Read", required_count: 2 })]);
+    const achievement = payload.data.achievements.find((item: any) => item.title === "Read Master");
+    expect(achievement.target_task_title).toBe("Read");
   });
 });
 

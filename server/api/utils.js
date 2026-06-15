@@ -1268,6 +1268,10 @@ export async function importConfig(env, parentId, input) {
         else
             stats.tasks.skipped += 1;
     }
+    const taskRows = (await env.DB.prepare("SELECT id, title FROM tasks WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC")
+        .bind(parentId)
+        .all()).results;
+    const taskMap = new Map(taskRows.map((task) => [task.title, task.id]));
     for (const item of input.rewards || []) {
         const title = String(item.title || "").trim();
         const exists = title ? await env.DB.prepare("SELECT id FROM rewards WHERE parent_id=? AND title=? AND deleted_at IS NULL").bind(parentId, title).first() : true;
@@ -1282,7 +1286,11 @@ export async function importConfig(env, parentId, input) {
         const requestedAssignees = item.assignee_names || item.assigneeNames || [];
         stats.ignoredAssignments += requestedAssignees.filter((name) => !childMap.get(name)).length;
         await replaceAssignees(env, parentId, "reward_assignees", "reward_id", rewardId, requestedAssignees.map((name) => childMap.get(name)).filter(Boolean));
-        await replaceRewardPrerequisites(env, parentId, rewardId, item.prerequisites || []);
+        const prerequisites = (item.prerequisites || []).map((prerequisite) => ({
+            ...prerequisite,
+            task_id: prerequisite.task_id || prerequisite.taskId || taskMap.get(prerequisite.task_title || prerequisite.taskTitle)
+        }));
+        await replaceRewardPrerequisites(env, parentId, rewardId, prerequisites);
         if (item.required_achievement_title || item.requiredAchievementTitle)
             pendingRewardRequirements.push({ rewardId, achievementTitle: item.required_achievement_title || item.requiredAchievementTitle });
         stats.rewards.created += 1;
@@ -1291,6 +1299,7 @@ export async function importConfig(env, parentId, input) {
         const title = String(item.title || "").trim();
         const rule = normalizeAchievementInput({
             ...item,
+            targetTaskId: taskMap.get(item.target_task_title || item.targetTaskTitle) || item.target_task_id || item.targetTaskId,
             targetCategoryId: categoryMap.get(item.target_category_name || item.targetCategoryName) || item.target_category_id || item.targetCategoryId
         });
         const exists = title ? await env.DB.prepare(`SELECT id FROM achievements

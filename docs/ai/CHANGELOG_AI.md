@@ -4,6 +4,19 @@
 
 ## 2026-06-15
 
+- 类型：缺陷修复
+- 范围：配置导入导出
+- 摘要：
+  - 修复 `/config/export` 漏导任务/奖励孩子分配、必做任务规则的问题，避免配置备份后再导入丢失分配和必做扣分设置。
+  - 导出奖励前置任务和成就指定任务时补充任务标题，导入 `/config/import` 时按当前家庭任务标题重新映射，避免跨库导入使用旧任务 ID 导致条件丢失或外键失败。
+  - 保持导入默认禁用配置项的既有行为不变。
+- 业务代码：`server/api/routes/shared.js`、`server/api/utils.js`
+- 测试：`tests/api.test.ts` — 增加配置导出字段和标题映射导入回归
+- 文档：`docs/ai/FEATURE_INDEX.md`、`docs/ai/CHANGELOG_AI.md`
+- 验证：`rtk npm test -- tests/api.test.ts`
+
+## 2026-06-15
+
 - 类型：功能新增
 - 范围：AI 测试结果替换缓存按钮
 - 摘要：

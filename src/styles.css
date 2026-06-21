@@ -2061,3 +2061,108 @@ button:disabled {
     width: 100%;
   }
 }
+
+.task-wall-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.schedule-wall-toggle {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.schedule-wall-groups {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.schedule-wall-group {
+  display: grid;
+  gap: 10px;
+}
+
+.schedule-wall-group-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
+}
+
+.schedule-wall-group-title strong {
+  font-size: 1rem;
+}
+
+.schedule-wall-group-title span {
+  color: var(--muted, #64748b);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.schedule-wall-grid {
+  margin-top: 0;
+}
+
+.schedule-slot-card.is-active {
+  border-color: var(--accent, #157f6f);
+  box-shadow: 0 0 0 2px rgba(21, 127, 111, 0.12);
+}
+
+.schedule-shared-pool {
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: #fffdfa;
+}
+
+.schedule-pool-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 0.5rem;
+}
+
+.schedule-pool-title span {
+  color: var(--muted, #64748b);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.schedule-shared-pool .schedule-slot-tasks-pool {
+  border-top: 1px dashed var(--border-color, #ddd);
+  min-height: 52px;
+}
+
+@media (min-width: 920px) {
+  .schedule-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+    align-items: start;
+  }
+
+  .schedule-shared-pool {
+    position: sticky;
+    top: 16px;
+  }
+}
+
+@media (max-width: 560px) {
+  .task-wall-title {
+    align-items: flex-start;
+  }
+
+  .schedule-wall-toggle {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .schedule-pool-title,
+  .schedule-wall-group-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

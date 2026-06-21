@@ -13,6 +13,14 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [busy, setBusy] = useState("");
   const [activeTab, setActiveTab] = useState<"tasks" | "rewards" | "warehouse" | "schedule">("tasks");
   const [schedule, setSchedule] = useState<ChildScheduleData>({ slots: [], items: [] });
+  const [activeScheduleSlotId, setActiveScheduleSlotId] = useState("");
+  const [showScheduleOnWall, setShowScheduleOnWall] = useState(() => {
+    try {
+      return localStorage.getItem(`task-wall-schedule:${me.id}`) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [warehouse, setWarehouse] = useState<WarehouseItem[]>([]);
   const [summary, setSummary] = useState<ChildDashboardSummary>({ balance: 0, frozenPoints: 0, aiGreeting: "", aiRefreshPending: false, child: null });
@@ -124,10 +132,18 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     );
   }
 
-  const pinnedTask = dash.tasks.find((task: any) => task.isPinned);
-  const pinnedReward = dash.rewards.find((reward: any) => reward.isPinned);
+  const taskRows = dash.tasks || [];
+  const rewardRows = dash.rewards || [];
+  const pinnedTask = taskRows.find((task: any) => task.isPinned);
+  const pinnedReward = rewardRows.find((reward: any) => reward.isPinned);
   const pinnedCount = Number(Boolean(pinnedTask)) + Number(Boolean(pinnedReward));
   const remedyCriticisms = dash.remedyCriticisms || [];
+  const activeTasks = taskRows.filter((task: any) => task.is_active !== 0);
+  const sortedTasks = [...taskRows].sort((a: any, b: any) => (b.is_required || 0) - (a.is_required || 0));
+  const taskById = new Map(taskRows.map((task: any) => [task.id, task]));
+  const scheduledTaskIds = new Set(schedule.items.map((item) => item.taskId));
+  const availableScheduleTasks = activeTasks.filter((task: any) => scheduledCountForTask(task.id) < getTaskScheduleLimit(task.id));
+  const selectedScheduleSlot = schedule.slots.find((slot) => slot.id === activeScheduleSlotId);
 
   function formatCountdown(ms: number) {
     const total = Math.max(0, Math.floor(ms / 1000));
@@ -236,30 +252,40 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     setSchedule({ ...schedule, slots, items });
   }
 
-  function getTaskRequiredCount(taskId: string): number {
-    const task = dash.tasks.find((t: any) => t.id === taskId);
-    return Math.max(1, task?.required_count || 1);
+  function getTaskScheduleLimit(taskId: string): number {
+    const task = taskById.get(taskId) as any;
+    return Math.max(1, Number(task?.limitCount || task?.limit_count || 1));
+  }
+
+  function scheduledCountForTask(taskId: string): number {
+    return schedule.items.filter((item) => item.taskId === taskId).length;
+  }
+
+  function selectScheduleSlot(slotId: string) {
+    setActiveScheduleSlotId(slotId);
   }
 
   function toggleTaskInSlot(taskId: string, slotId: string) {
-    let items = [...schedule.items];
+    const items = [...schedule.items];
     const existingInSlotIdx = items.findIndex((item) => item.taskId === taskId && item.slotId === slotId);
-    const existingElsewhere = items.filter((item) => item.taskId === taskId && item.slotId !== slotId);
-    const maxCount = getTaskRequiredCount(taskId);
-    const totalCount = (existingInSlotIdx >= 0 ? 1 : 0) + existingElsewhere.length;
+    const maxCount = getTaskScheduleLimit(taskId);
 
     if (existingInSlotIdx >= 0) {
       items.splice(existingInSlotIdx, 1);
-    } else if (existingElsewhere.length > 0 && totalCount >= maxCount) {
-      items = items.map((item) =>
-        item.taskId === taskId && item.id === existingElsewhere[0].id
-          ? { ...item, slotId }
-          : item
-      );
+    } else if (scheduledCountForTask(taskId) < maxCount) {
+      const task = taskById.get(taskId) as any;
+      items.push({ id: crypto.randomUUID(), slotId, taskId, title: task?.title });
     } else {
-      items.push({ id: crypto.randomUUID(), slotId, taskId, title: dash.tasks.find((t: any) => t.id === taskId)?.title });
+      return;
     }
     setSchedule({ ...schedule, items });
+    selectScheduleSlot(slotId);
+  }
+
+  function addTaskToSelectedSlot(taskId: string) {
+    const slotId = activeScheduleSlotId || schedule.slots[0]?.id || "";
+    if (!slotId) return;
+    toggleTaskInSlot(taskId, slotId);
   }
 
   function removeTaskFromSchedule(itemId: string) {
@@ -320,6 +346,22 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     const timer = window.setInterval(() => setTick((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(`task-wall-schedule:${me.id}`, showScheduleOnWall ? "1" : "0");
+    } catch {
+      // Ignore private browsing or storage quota failures; the toggle still works for this session.
+    }
+  }, [me.id, showScheduleOnWall]);
+  useEffect(() => {
+    if (!schedule.slots.length) {
+      if (activeScheduleSlotId) setActiveScheduleSlotId("");
+      return;
+    }
+    if (!activeScheduleSlotId || !schedule.slots.some((slot) => slot.id === activeScheduleSlotId)) {
+      setActiveScheduleSlotId(schedule.slots[0].id || "");
+    }
+  }, [schedule.slots, activeScheduleSlotId]);
   useEffect(() => {
     if (remedyCriticisms.some((item: any) => item.remedyDeadlineAt && Date.parse(item.remedyDeadlineAt) - Date.now() <= 0)) void loadDashboard();
   }, [tick, remedyCriticisms.map((item: any) => `${item.id}:${item.remedyDeadlineAt}`).join("|")]);
@@ -441,43 +483,60 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           { value: "tasks", label: "任务" },
           { value: "rewards", label: "奖励" },
           { value: "warehouse", label: "仓库" },
-          { value: "schedule", label: "日程表" }
+          { value: "schedule", label: "日程表设置" }
         ]}
       />
       {activeTab === "tasks" && (
         <div className="grid">
           <section className="panel child-panel">
-            <div className="panel-title"><ClipboardCheck /><h2>任务墙</h2></div>
-            <div className="wall-grid scroll-list">
-              {dash.tasks.length ? [...dash.tasks].sort((a: any, b: any) => (b.is_required || 0) - (a.is_required || 0)).map((task: any) => {
-                const limited = !task.canSubmit;
-                const busyId = busy === `task:${task.id}`;
-                const points = `${task.point_type === "earn" ? "+" : "-"}${task.points}`;
-                const isRequired = task.is_required === 1;
-                return (
-                  <article className={`task-card wall-card ${limited ? "is-muted" : ""} ${isRequired ? "required-card" : ""}`} key={task.id}>
-                    <div className="card-head wall-card-head with-pin">
-                      {icon(task.icon_type, task.icon_value, task.title)}
-                      <div>
-                        <strong>{task.title}</strong>
-                        <small>{formatPeriod(task.period)}</small>
-                      </div>
-                      {pinButton("task", task)}
-                    </div>
-                    {task.description && <small className="card-description">{task.description}</small>}
-                    <div className="card-meta">
-                      <span className={task.point_type === "earn" ? "positive" : "negative"}>{points} 积分</span>
-                      <span>{task.usedCount}/{task.limitCount} 次</span>
-                      {isRequired && <span className="required-tag">须完成{task.required_count || 1}次</span>}
-                      <span>{task.periodKey}</span>
-                    </div>
-                    <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
-                      {busyId ? "提交中..." : limited ? formatReset(task.resetAt) : "提交完成"}
-                    </button>
-                  </article>
-                );
-              }) : <Empty text="暂无任务" />}
+            <div className="panel-title task-wall-title">
+              <ClipboardCheck /><h2>任务墙</h2>
+              <label className="toggle schedule-wall-toggle">
+                <input type="checkbox" checked={showScheduleOnWall} onChange={(e) => setShowScheduleOnWall(e.target.checked)} />
+                <span>日程表显示</span>
+              </label>
             </div>
+            {!showScheduleOnWall ? (
+              <div className="wall-grid scroll-list">
+                {sortedTasks.length ? sortedTasks.map((task: any) => renderTaskCard(task)) : <Empty text="暂无任务" />}
+              </div>
+            ) : (
+              <div className="schedule-wall-groups scroll-list">
+                {schedule.slots.length === 0 && <Empty text="暂无日程安排，请先到日程表设置中添加时段" />}
+                {schedule.slots.map((slot) => {
+                  if (!slot.id) return null;
+                  const tasksInSlot = schedule.items
+                    .filter((item) => item.slotId === slot.id)
+                    .map((item) => taskById.get(item.taskId))
+                    .filter(Boolean);
+                  return (
+                    <section className="schedule-wall-group" key={slot.id}>
+                      <div className="schedule-wall-group-title">
+                        <strong>{slot.title || "未命名时段"}</strong>
+                        <span>{fmtMinutes(slot.startMinutes)} - {fmtMinutes(slot.endMinutes)}</span>
+                      </div>
+                      {tasksInSlot.length ? (
+                        <div className="wall-grid schedule-wall-grid">
+                          {tasksInSlot.map((task: any) => renderTaskCard(task))}
+                        </div>
+                      ) : <Empty text="这个时段暂无任务" />}
+                    </section>
+                  );
+                })}
+                {(() => {
+                  const unscheduledTasks = sortedTasks.filter((task: any) => !scheduledTaskIds.has(task.id));
+                  if (!unscheduledTasks.length) return null;
+                  return (
+                    <section className="schedule-wall-group">
+                      <div className="schedule-wall-group-title"><strong>未安排任务</strong><span>{unscheduledTasks.length} 项</span></div>
+                      <div className="wall-grid schedule-wall-grid">
+                        {unscheduledTasks.map((task: any) => renderTaskCard(task))}
+                      </div>
+                    </section>
+                  );
+                })()}
+              </div>
+            )}
           </section>
         </div>
       )}
@@ -485,7 +544,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         <section className="panel child-panel">
           <div className="panel-title"><Gift /><h2>奖励墙</h2></div>
           <div className="wall-grid scroll-list">
-            {dash.rewards.length ? dash.rewards.map((reward: any) => {
+            {rewardRows.length ? rewardRows.map((reward: any) => {
               const limited = !reward.canRedeem;
               const disabled = dash.balance < reward.cost_points || limited || busy === `reward:${reward.id}`;
               return (
@@ -538,7 +597,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
       {activeTab === "schedule" && (
         <section className="panel child-panel">
           <div className="panel-title compact-title">
-            <Calendar /><h2>我的日程表</h2>
+            <Calendar /><h2>我的日程表设置</h2>
             <div className="actions" style={{ gap: "0.5rem" }}>
               <button className="secondary" onClick={addScheduleSlot}>添加时段</button>
               <button className="primary" disabled={busy === "schedule:save"} onClick={() => void saveSchedule()}>{busy === "schedule:save" ? "保存中..." : "保存日程"}</button>
@@ -552,15 +611,15 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                 const slotId = slot.id;
                 const slotItems = schedule.items.filter((item) => item.slotId === slotId);
                 return (
-                  <article className="schedule-slot-card" key={slotId}>
+                  <article className={`schedule-slot-card ${activeScheduleSlotId === slotId ? "is-active" : ""}`} key={slotId} onClick={() => selectScheduleSlot(slotId)}>
                     <div className="schedule-slot-header">
-                      <input className="schedule-slot-title-input" placeholder="时段名称" value={slot.title} onChange={(e) => updateScheduleSlot(index, "title", e.target.value)} />
+                      <input className="schedule-slot-title-input" placeholder="时段名称" value={slot.title} onChange={(e) => updateScheduleSlot(index, "title", e.target.value)} onFocus={() => selectScheduleSlot(slotId)} />
                       <div className="schedule-time-inputs">
-                        <input type="time" value={fmtMinutes(slot.startMinutes)} onChange={(e) => { const [h, m] = e.target.value.split(":").map(Number); updateScheduleSlot(index, "startMinutes", h * 60 + m); }} />
+                        <input type="time" value={fmtMinutes(slot.startMinutes)} onChange={(e) => { const [h, m] = e.target.value.split(":").map(Number); updateScheduleSlot(index, "startMinutes", h * 60 + m); }} onFocus={() => selectScheduleSlot(slotId)} />
                         <span>至</span>
-                        <input type="time" value={fmtMinutes(slot.endMinutes)} onChange={(e) => { const [h, m] = e.target.value.split(":").map(Number); updateScheduleSlot(index, "endMinutes", h * 60 + m); }} />
+                        <input type="time" value={fmtMinutes(slot.endMinutes)} onChange={(e) => { const [h, m] = e.target.value.split(":").map(Number); updateScheduleSlot(index, "endMinutes", h * 60 + m); }} onFocus={() => selectScheduleSlot(slotId)} />
                       </div>
-                      <button className="icon" style={{ color: "var(--danger, #e53e3e)" }} onClick={() => removeScheduleSlot(index)} title="删除时段">&times;</button>
+                      <button className="icon" style={{ color: "var(--danger, #e53e3e)" }} onClick={(e) => { e.stopPropagation(); removeScheduleSlot(index); }} title="删除时段">&times;</button>
                     </div>
                     <div
                       className="schedule-slot-items"
@@ -569,40 +628,12 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                       onDrop={(e) => handleSlotDrop(e, slotId)}
                     >
                       {slotItems.length === 0 && <small className="muted">拖拽任务到此处</small>}
-                      {slotItems.map((item) => (
-                        <div className="schedule-slot-task" key={item.id}>
-                          <span>{item.title || "加载中..."}</span>
-                          <button className="icon" onClick={() => item.id && removeTaskFromSchedule(item.id)} title="移除">&times;</button>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="schedule-slot-tasks-pool">
-                      {dash.tasks.filter((t: any) => t.is_active !== 0).map((task: any) => {
-                        const countInSlot = slotItems.filter((item) => item.taskId === task.id).length;
-                        const assignedElsewhere = schedule.items.some((item) => item.taskId === task.id && item.slotId !== slotId);
-                        const maxCount = getTaskRequiredCount(task.id);
+                      {slotItems.map((item) => {
+                        const task = taskById.get(item.taskId) as any;
                         return (
-                          <div
-                            key={task.id}
-                            className={`schedule-task-chip ${countInSlot > 0 ? "is-assigned" : ""}`}
-                            draggable
-                            onDragStart={(e) => handleDragStart(e, task.id)}
-                            onClick={() => toggleTaskInSlot(task.id, slotId)}
-                            title={`${task.title}${countInSlot > 0 ? `（已分配 ${countInSlot}/${maxCount} 次）` : ""}`}
-                          >
-                            {icon(task.icon_type, task.icon_value, task.title)}
-                            <div className="schedule-chip-info">
-                              <span className="schedule-chip-title">{task.title}</span>
-                              <span className="schedule-chip-meta">
-                                <span className={task.point_type === "earn" ? "positive" : "negative"}>
-                                  {task.point_type === "earn" ? "+" : "-"}{task.points}
-                                </span>
-                                {assignedElsewhere && <span className="chip-moved-tag">已排</span>}
-                                {countInSlot > 0 && maxCount > 1 && (
-                                  <span className="chip-count-badge">{countInSlot}/{maxCount}</span>
-                                )}
-                              </span>
-                            </div>
+                          <div className="schedule-slot-task" key={item.id}>
+                            <span>{task?.title || item.title || "加载中..."}</span>
+                            <button className="icon" onClick={(e) => { e.stopPropagation(); if (item.id) removeTaskFromSchedule(item.id); }} title="移除">&times;</button>
                           </div>
                         );
                       })}
@@ -611,6 +642,39 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                 );
               })}
             </div>
+            <aside className="schedule-shared-pool" aria-label="任务卡片池">
+              <div className="schedule-pool-title">
+                <strong>任务卡片池</strong>
+                <span>{selectedScheduleSlot ? `当前：${selectedScheduleSlot.title || "未命名时段"}` : "请先选择时段"}</span>
+              </div>
+              <div className="schedule-slot-tasks-pool">
+                {availableScheduleTasks.length ? availableScheduleTasks.map((task: any) => {
+                  const used = scheduledCountForTask(task.id);
+                  const maxCount = getTaskScheduleLimit(task.id);
+                  return (
+                    <div
+                      key={task.id}
+                      className="schedule-task-chip"
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, task.id)}
+                      onClick={() => addTaskToSelectedSlot(task.id)}
+                      title={`${task.title}（已安排 ${used}/${maxCount} 次）`}
+                    >
+                      {icon(task.icon_type, task.icon_value, task.title)}
+                      <div className="schedule-chip-info">
+                        <span className="schedule-chip-title">{task.title}</span>
+                        <span className="schedule-chip-meta">
+                          <span className={task.point_type === "earn" ? "positive" : "negative"}>
+                            {task.point_type === "earn" ? "+" : "-"}{task.points}
+                          </span>
+                          {maxCount > 1 && <span className="chip-count-badge">{used}/{maxCount}</span>}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }) : <Empty text="本周期可安排次数已用完" />}
+              </div>
+            </aside>
           </div>
         </section>
       )}

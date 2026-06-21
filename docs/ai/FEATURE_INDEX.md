@@ -110,7 +110,7 @@
 
 ## 9. 孩子端任务、积分与固定卡片
 
-- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候。必做任务在任务墙中靠前排序并以醒目标记标识，卡片上提示"须完成X次"。
+- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候。必做任务在任务墙中靠前排序并以醒目标记标识，卡片上提示"须完成X次"。任务墙右上角支持"日程表显示"开关，打开后按已设置的日程时段组织任务，并保留未安排任务分组。
 - 用户入口：孩子登录后的首页、积分账本弹层、固定按钮。
 - P0：`src/ChildApp.tsx`、`server/api/routes/child.js`、`server/api/routes/shared.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/Shell.tsx`
@@ -118,8 +118,8 @@
 - 主要调用链：`ChildApp.loadSummary` -> `/dashboard/child-summary`; `ChildApp.load` -> `/dashboard/child`; submit -> `/task-submissions`; pin -> `/child-pins/:kind`; ledger -> `/points/ledger`
 - 相关状态：`task_submissions`、`point_ledger`、`child_pins`、`ai_child_greetings`
 - 相关接口：`GET /api/dashboard/child-summary`、`GET /api/dashboard/child`、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`GET /api/points/ledger`
-- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；必做任务排序在前端完成，不改变后端查询顺序；`.required-card::before` 覆盖默认渐变色为琥珀/红色。
-- 最近更新时间：2026-06-12
+- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；`.required-card::before` 覆盖默认渐变色为琥珀/红色。
+- 最近更新时间：2026-06-21
 
 ## 10. 积分账本、报表、打印与归档
 
@@ -175,15 +175,15 @@
 
 ## 14. 孩子日程表
 
-- 功能说明：孩子编辑每日日程表（时段增删、任务拖入/移除），家长打印日程表、绘制日程表插画。日程表为每日模板结构，独立于清单/报表。日程表绘图有独立提示词。
-- 用户入口：孩子端"日程表"标签页、家长报告弹窗中"打印日程表/绘制日程表"。
+- 功能说明：孩子编辑每日日程表设置（时段增删、任务拖入/移除），所有时段共用一个任务卡片池；任务达到本周期可完成次数上限后从任务池移除。家长打印日程表、绘制日程表插画。日程表为每日模板结构，独立于清单/报表。日程表绘图有独立提示词。
+- 用户入口：孩子端"日程表设置"标签页、任务墙右上角"日程表显示"开关、家长报告弹窗中"打印日程表/绘制日程表"。
 - P0：`src/ChildApp.tsx`、`src/ParentApp.tsx`、`server/api/routes/child.js`、`server/api/routes/parent.js`
 - P1：`server/api/utils.js`、`server/api/ai/cartoon-queue.js`、`server/api/ai/orchestrator.js`、`server/api/ai/cache.js`、`server/api/ai/index.js`、`src/types/api.ts`、`src/styles.css`
 - P2：`migrations/0023_child_schedule.sql`、`migrations/0024_child_schedule_drop_unique.sql`、`tests/migration.test.ts`
 - 主要调用链：`ChildApp.scheduleTab` -> GET/PUT `/children/:id/schedule`; `ParentApp.exportChildSchedulePrint` -> window.open `/children/:id/schedule-print`; `ParentApp.generateScheduleImage` -> POST `/children/:id/schedule-image` -> queue -> polling -> GET `/children/:id/schedule-image/:jobId`
 - 相关状态：`child_schedule_slots`、`child_schedule_items`、`ai_schedule_image_jobs`、`parent_ai_service_settings.schedule_image_prompt`
 - 相关接口：`GET/PUT /api/children/:id/schedule`、`GET /api/children/:id/schedule-print`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
-- 修改注意事项：日程表只有孩子可编辑、家长只读查看；任务拖入日程表不改变积分/任务提交流程；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023 需 bootstrap 运行 ensureChildScheduleSchema。
+- 修改注意事项：日程表只有孩子可编辑、家长只读查看；任务拖入日程表不改变积分/任务提交流程；任务卡片池使用任务自身 `limitCount/limit_count` 作为可安排次数口径，不使用必做 `required_count`；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023 需 bootstrap 运行 ensureChildScheduleSchema。
 - 最近更新时间：2026-06-21
 
 ## 15. 配置导入导出与开发测试入口

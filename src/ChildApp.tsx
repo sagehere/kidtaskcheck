@@ -180,8 +180,27 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   }
 
   async function loadSchedule() {
-    const data = await api<ChildScheduleData>("/child-schedule").catch(() => ({ slots: [], items: [] }));
-    setSchedule(data);
+    const raw = await api<any>("/child-schedule").catch(() => ({ slots: [], items: [] }));
+    const slots: ChildScheduleData["slots"] = (raw.slots || []).map((s: any) => ({
+      id: s.id,
+      title: s.title ?? "",
+      startMinutes: s.start_minutes ?? s.startMinutes ?? 0,
+      endMinutes: s.end_minutes ?? s.endMinutes ?? 0,
+      sort_order: s.sort_order,
+    }));
+    const items: ChildScheduleData["items"] = (raw.items || []).map((it: any) => ({
+      id: it.id,
+      slotId: it.slot_id ?? it.slotId,
+      taskId: it.task_id ?? it.taskId,
+      title: it.title,
+      points: it.points,
+      period: it.period,
+      category_name: it.category_name,
+      is_required: it.is_required,
+      required_count: it.required_count,
+      description: it.description,
+    }));
+    setSchedule({ slots, items });
   }
 
   async function saveSchedule() {
@@ -238,7 +257,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           : item
       );
     } else {
-      items.push({ id: crypto.randomUUID(), slotId, taskId });
+      items.push({ id: crypto.randomUUID(), slotId, taskId, title: dash.tasks.find((t: any) => t.id === taskId)?.title });
     }
     setSchedule({ ...schedule, items });
   }
@@ -281,6 +300,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   useEffect(() => {
     void loadSummary();
     void loadDashboard();
+    void loadSchedule();
     pollingRef.current = window.setInterval(() => void refreshAll(), REFRESH_INTERVAL_MS);
     function onVisibility() {
       if (document.hidden) {

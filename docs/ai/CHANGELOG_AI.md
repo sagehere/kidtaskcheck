@@ -5,6 +5,16 @@
 ## 2026-06-21
 
 - 类型：缺陷修复
+- 范围：孩子日程表（保存后不显示 + 任务加载中卡住）
+- 摘要：
+  - **BUG 1**：保存日程表后界面无已保存内容。根因：后端 GET `/child-schedule` 返回 snake_case 字段（`slot_id`、`task_id`、`start_minutes`、`end_minutes`），前端 `loadSchedule()` 直接透传未做字段转换，UI 用 camelCase 字段过滤匹配不上。修复：`loadSchedule()` 中将 snake_case 映射为 camelCase。
+  - **BUG 2**：点击选择任务显示"加载中..."。根因：(a) `useEffect` mount 时未调用 `loadSchedule()`，首次进入日程表数据为空；(b) `toggleTaskInSlot` 创建新 item 时只有 `id/slotId/taskId` 没有 `title`。修复：mount 时调用 `loadSchedule()`；创建 item 时从 `dash.tasks` 填入 `title`。
+- 修改文件：`src/ChildApp.tsx`
+- 验证：build 通过，116 tests 全部通过
+
+## 2026-06-21
+
+- 类型：缺陷修复
 - 范围：孩子日程表（BUG 修复 + 拖拽 + 多实例支持）
 - 摘要：
   - **BUG 1**：`addScheduleSlot()` 未为新时段分配客户端 ID，导致后端验证"日程项引用了不存在的时段"。修复：`addScheduleSlot()` 使用 `crypto.randomUUID()` 生成 ID；后端 item 匹配增加 `(slot.id || slotId)` 兜底。

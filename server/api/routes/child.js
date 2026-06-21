@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, ensureChildScheduleSchema } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -221,6 +221,81 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
             aiRefreshPending: false,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
         });
+    }
+    if (path === "/child-schedule" && method === "GET") {
+        const a = requireRole(actor, ["child"]);
+        await ensureChildScheduleSchema(env);
+        const slots = (await env.DB.prepare("SELECT * FROM child_schedule_slots WHERE child_id=? ORDER BY sort_order, created_at")
+            .bind(a.id).all()).results;
+        const items = slots.length
+            ? (await env.DB.prepare(`SELECT csi.*, t.title, t.points, t.period, t.limit_count, t.is_required, t.required_count, t.description, tc.name category_name
+FROM child_schedule_items csi
+JOIN tasks t ON t.id=csi.task_id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE csi.child_id=? ORDER BY csi.sort_order, csi.created_at`).bind(a.id).all()).results
+            : [];
+        return ok({ slots, items });
+    }
+    if (path === "/child-schedule" && method === "PUT") {
+        const a = requireRole(actor, ["child"]);
+        await ensureChildScheduleSchema(env);
+        const input = await body(request);
+        const incomingSlots = Array.isArray(input.slots) ? input.slots : [];
+        const incomingItems = Array.isArray(input.items) ? input.items : [];
+        const offset = await timezoneOffsetMinutes(env);
+        for (const slot of incomingSlots) {
+            const start = Number(slot.startMinutes);
+            const end = Number(slot.endMinutes);
+            if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end > 1440 || end <= start)
+                return fail("BAD_REQUEST", "时段时间不合法", 400);
+        }
+        for (let i = 0; i < incomingSlots.length; i++) {
+            for (let j = i + 1; j < incomingSlots.length; j++) {
+                const a1 = Number(incomingSlots[i].startMinutes), b1 = Number(incomingSlots[i].endMinutes);
+                const a2 = Number(incomingSlots[j].startMinutes), b2 = Number(incomingSlots[j].endMinutes);
+                if (a1 < b2 && a2 < b1)
+                    return fail("BAD_REQUEST", "时段不能重叠", 400);
+            }
+        }
+        const taskIds = [...new Set(incomingItems.map((item) => String(item.taskId || "").trim()).filter(Boolean))];
+        if (taskIds.length) {
+            const placeholders = taskIds.map(() => "?").join(",");
+            const valid = await env.DB.prepare(`SELECT id FROM tasks t
+JOIN task_assignees ta ON ta.task_id=t.id
+WHERE t.id IN (${placeholders}) AND ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL`)
+                .bind(...taskIds, a.id, a.parent_id).all();
+            const validSet = new Set(valid.results.map((r) => r.id));
+            const invalid = taskIds.filter((id) => !validSet.has(id));
+            if (invalid.length) return fail("FORBIDDEN", `任务未分配给当前孩子: ${invalid.join(", ")}`, 403);
+        }
+        const itemTaskIds = new Set(incomingItems.map((item) => item.taskId));
+        const slotIdsInItems = new Set(incomingItems.map((item) => item.slotId));
+        const incomingSlotIds = new Set(incomingSlots.filter((s) => s.id).map((s) => s.id));
+        for (const slotId of slotIdsInItems) {
+            if (!incomingSlotIds.has(slotId) && slotId)
+                return fail("BAD_REQUEST", "日程项引用了不存在的时段", 400);
+        }
+        const now = nowIso();
+        await env.DB.transaction(async () => {
+            await env.DB.prepare("DELETE FROM child_schedule_items WHERE child_id=?").bind(a.id).run();
+            await env.DB.prepare("DELETE FROM child_schedule_slots WHERE child_id=?").bind(a.id).run();
+            for (let i = 0; i < incomingSlots.length; i++) {
+                const slot = incomingSlots[i];
+                const slotId = slot.id || id();
+                await env.DB.prepare("INSERT INTO child_schedule_slots (id, child_id, title, start_minutes, end_minutes, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+                    .bind(slotId, a.id, String(slot.title || "").slice(0, 100), Number(slot.startMinutes), Number(slot.endMinutes), i, now, now)
+                    .run();
+                const itemsForSlot = incomingItems.filter((item) => (item.slotId || item.slot_id) === slot.id);
+                for (let j = 0; j < itemsForSlot.length; j++) {
+                    const item = itemsForSlot[j];
+                    const itemId = item.id || id();
+                    await env.DB.prepare("INSERT INTO child_schedule_items (id, slot_id, child_id, task_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+                        .bind(itemId, slotId, a.id, String(item.taskId || "").trim(), j, now, now)
+                        .run();
+                }
+            }
+        });
+        return ok(true);
     }
     return null;
 }

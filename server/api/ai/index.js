@@ -16,7 +16,7 @@ export {
 } from "./cache.js";
 
 export {
-    generateParentAiGreeting, generateReportCommentary, generateCartoonReportImage, generatePrintChecklistImage,
+    generateParentAiGreeting, generateReportCommentary, generateCartoonReportImage, generatePrintChecklistImage, generateScheduleImage,
     previousCompletedReportRange, collectReportData, buildCartoonReportPrompt,
 } from "./orchestrator.js";
 
@@ -33,4 +33,6 @@ export {
     publicCartoonJob, processCartoonReportJobs,
     ensureAiPrintChecklistImageJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob,
     publicPrintChecklistJob, processPrintChecklistImageJobs,
+    ensureAiScheduleImageJobs, enqueueScheduleImageJob, loadScheduleImageJob,
+    publicScheduleImageJob, processScheduleImageJobs,
 } from "./cartoon-queue.js";

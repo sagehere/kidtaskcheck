@@ -1,6 +1,6 @@
 ﻿import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema } from "../utils.js";
-import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs } from "../ai/index.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema } from "../utils.js";
+import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs, enqueueScheduleImageJob, loadScheduleImageJob, publicScheduleImageJob, processScheduleImageJobs } from "../ai/index.js";
 
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
@@ -108,6 +108,7 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
             imageModel: config.imageModel,
             imagePrompt: config.imagePrompt,
             checklistImagePrompt: config.checklistImagePrompt,
+            scheduleImagePrompt: config.scheduleImagePrompt,
             imageSize: config.imageSize,
             imageQuality: config.imageQuality,
             imageFormat: config.imageFormat,
@@ -130,6 +131,7 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
         const nextImageModel = input.imageModel !== undefined ? String(input.imageModel).trim() : (current.imageModel || "gpt-image-2");
         const nextImagePrompt = input.imagePrompt !== undefined ? String(input.imagePrompt).trim() : (current.imagePrompt || "");
         const nextChecklistImagePrompt = input.checklistImagePrompt !== undefined ? String(input.checklistImagePrompt).trim() : (current.checklistImagePrompt || "");
+        const nextScheduleImagePrompt = input.scheduleImagePrompt !== undefined ? String(input.scheduleImagePrompt).trim() : (current.scheduleImagePrompt || "");
         const nextImageSize = input.imageSize !== undefined ? String(input.imageSize).trim() : (current.imageSize || "1248x1760");
         const nextImageQuality = input.imageQuality !== undefined ? String(input.imageQuality).trim() : (current.imageQuality || "low");
         const nextImageFormat = input.imageFormat !== undefined ? String(input.imageFormat).trim() : (current.imageFormat || "jpeg");
@@ -152,12 +154,12 @@ export async function handleParentRoutes(path, method, request, env, actor, url,
         const nextApiKey = input.apiKey !== undefined && String(input.apiKey).trim() ? String(input.apiKey).trim() : current.apiKey;
         const nextImageApiKey = input.imageApiKey !== undefined && String(input.imageApiKey).trim() ? String(input.imageApiKey).trim() : current.imageApiKey;
         const updatedAt = nowIso();
-        await env.DB.prepare(`INSERT INTO parent_ai_service_settings (parent_id, base_url, api_key, model, prompt, report_prompt, monthly_prompt, image_base_url, image_api_key, image_model, image_prompt, checklist_image_prompt, image_size, image_quality, image_format, image_n, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, prompt=excluded.prompt, report_prompt=excluded.report_prompt, monthly_prompt=excluded.monthly_prompt, image_base_url=excluded.image_base_url, image_api_key=excluded.image_api_key, image_model=excluded.image_model, image_prompt=excluded.image_prompt, checklist_image_prompt=excluded.checklist_image_prompt, image_size=excluded.image_size, image_quality=excluded.image_quality, image_format=excluded.image_format, image_n=excluded.image_n, updated_at=excluded.updated_at`)
-            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, nextReportPrompt, nextMonthlyPrompt, nextImageBaseUrl, nextImageApiKey, nextImageModel, nextImagePrompt, nextChecklistImagePrompt, nextImageSize, nextImageQuality, nextImageFormat, nextImageN, updatedAt)
+        await env.DB.prepare(`INSERT INTO parent_ai_service_settings (parent_id, base_url, api_key, model, prompt, report_prompt, monthly_prompt, image_base_url, image_api_key, image_model, image_prompt, checklist_image_prompt, schedule_image_prompt, image_size, image_quality, image_format, image_n, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model, prompt=excluded.prompt, report_prompt=excluded.report_prompt, monthly_prompt=excluded.monthly_prompt, image_base_url=excluded.image_base_url, image_api_key=excluded.image_api_key, image_model=excluded.image_model, image_prompt=excluded.image_prompt, checklist_image_prompt=excluded.checklist_image_prompt, schedule_image_prompt=excluded.schedule_image_prompt, image_size=excluded.image_size, image_quality=excluded.image_quality, image_format=excluded.image_format, image_n=excluded.image_n, updated_at=excluded.updated_at`)
+            .bind(a.id, nextBaseUrl, nextApiKey, nextModel, nextPrompt, nextReportPrompt, nextMonthlyPrompt, nextImageBaseUrl, nextImageApiKey, nextImageModel, nextImagePrompt, nextChecklistImagePrompt, nextScheduleImagePrompt, nextImageSize, nextImageQuality, nextImageFormat, nextImageN, updatedAt)
             .run();
-        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, reportPrompt: nextReportPrompt, monthlyPrompt: nextMonthlyPrompt, imageBaseUrl: nextImageBaseUrl, imageModel: nextImageModel, imagePrompt: nextImagePrompt, checklistImagePrompt: nextChecklistImagePrompt, imageSize: nextImageSize, imageQuality: nextImageQuality, imageFormat: nextImageFormat, imageN: nextImageN, hasKey: !!nextApiKey, hasImageKey: !!nextImageApiKey, updatedAt });
+        return ok({ baseUrl: nextBaseUrl, model: nextModel, prompt: nextPrompt, reportPrompt: nextReportPrompt, monthlyPrompt: nextMonthlyPrompt, imageBaseUrl: nextImageBaseUrl, imageModel: nextImageModel, imagePrompt: nextImagePrompt, checklistImagePrompt: nextChecklistImagePrompt, scheduleImagePrompt: nextScheduleImagePrompt, imageSize: nextImageSize, imageQuality: nextImageQuality, imageFormat: nextImageFormat, imageN: nextImageN, hasKey: !!nextApiKey, hasImageKey: !!nextImageApiKey, updatedAt });
     }
     if (path === "/parent/ai-service/models" && method === "POST") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
@@ -467,6 +469,87 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         if (!job || job.child_id !== child.id)
             return fail("NOT_FOUND", "打印清单绘图任务不存在", 404);
         return ok(publicPrintChecklistJob(job));
+    }
+    const childSchedulePrint = path.match(/^\/children\/([^/]+)\/schedule-print$/);
+    if (childSchedulePrint && method === "GET") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        await ensureChildScheduleSchema(env);
+        const child = await env.DB.prepare("SELECT id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(childSchedulePrint[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const slots = (await env.DB.prepare("SELECT * FROM child_schedule_slots WHERE child_id=? ORDER BY sort_order, created_at")
+            .bind(child.id).all()).results;
+        const slotIds = slots.map((s) => s.id);
+        let items = [];
+        if (slotIds.length) {
+            const placeholders = slotIds.map(() => "?").join(",");
+            items = (await env.DB.prepare(`SELECT csi.*, t.title, t.points, t.period, t.limit_count, t.is_required, t.required_count, t.description, tc.name category_name
+FROM child_schedule_items csi
+JOIN tasks t ON t.id=csi.task_id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE csi.slot_id IN (${placeholders}) AND csi.child_id=?
+ORDER BY csi.sort_order, csi.created_at`).bind(...slotIds, child.id).all()).results;
+        }
+        const scheduledTaskIds = new Set(items.map((item) => item.task_id));
+        const unscheduled = (await env.DB.prepare(`SELECT t.id, t.title, t.points, t.period, t.limit_count, t.description, tc.name category_name
+FROM tasks t
+JOIN task_assignees ta ON ta.task_id=t.id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL AND t.is_active=1
+ORDER BY tc.name, t.created_at DESC`).bind(child.id, a.id).all()).results
+            .filter((t) => !scheduledTaskIds.has(t.id));
+        const offset = await timezoneOffsetMinutes(env);
+        const fmtTime = (m) => {
+            const h = Math.floor(m / 60);
+            const min = m % 60;
+            return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+        };
+        const slotRows = slots.map((slot) => {
+            const slotItems = items.filter((item) => item.slot_id === slot.id);
+            return `<tr><td style="white-space:nowrap">${escapeHtml(fmtTime(slot.start_minutes))} - ${escapeHtml(fmtTime(slot.end_minutes))}</td><td>${escapeHtml(slot.title)}</td><td><ul style="margin:0;padding-left:18px">${slotItems.map((item) => `<li>${escapeHtml(item.title)}${item.category_name ? ` (${escapeHtml(item.category_name)})` : ""} - ${item.points}分，${item.period === "daily" ? "每日" : item.period === "weekly" ? "每周" : item.period === "monthly" ? "每月" : "一次性"}${item.is_required ? "，必做" : ""}</li>`).join("")}</ul></td></tr>`;
+        });
+        const unscheduledHtml = unscheduled.length ? `<h2>未安排任务</h2><ul>${unscheduled.map((t) => `<li>${escapeHtml(t.title)}${t.category_name ? ` (${escapeHtml(t.category_name)})` : ""} - ${t.points}分</li>`).join("")}</ul>` : "";
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 日程表</title><style>body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:28px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #999;padding:8px;text-align:left;vertical-align:top}th{background:#f0f0f0}@media print{button{display:none}body{margin:12mm}}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 日程表</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), offset))}</p>${slots.length ? `<table><thead><tr><th>时间</th><th>时段</th><th>任务</th></tr></thead><tbody>${slotRows.join("")}</tbody></table>` : "<p>暂无日程安排</p>"}${unscheduledHtml}</body></html>`;
+        return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
+    const childScheduleImage = path.match(/^\/children\/([^/]+)\/schedule-image$/);
+    if (childScheduleImage && method === "POST") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const input = await body(request);
+        const child = await env.DB.prepare("SELECT id, parent_id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(childScheduleImage[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const config = await getParentAiServiceConfig(env, a.id);
+        if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.scheduleImagePrompt)
+            return fail("BAD_REQUEST", "请先完整保存日程表绘图配置", 400);
+        const imageUrlErr = validateHttpsUrl(config.imageBaseUrl, "绘图 AI Base URL");
+        if (imageUrlErr)
+            return fail("BAD_REQUEST", imageUrlErr, 400);
+        const job = await enqueueScheduleImageJob(env, {
+            parentId: a.id,
+            childId: child.id,
+            resetFailed: !!input.retry,
+            force: !!input.force
+        });
+        ctx?.waitUntil?.(processScheduleImageJobs(env, { maxJobs: 1 }));
+        return ok(publicScheduleImageJob(job));
+    }
+    const childScheduleImageJob = path.match(/^\/children\/([^/]+)\/schedule-image\/([^/]+)$/);
+    if (childScheduleImageJob && method === "GET") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const child = await env.DB.prepare("SELECT id FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
+            .bind(childScheduleImageJob[1], a.id)
+            .first();
+        if (!child)
+            return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const job = await loadScheduleImageJob(env, a.id, childScheduleImageJob[2]);
+        if (!job || job.child_id !== child.id)
+            return fail("NOT_FOUND", "日程表绘图任务不存在", 404);
+        return ok(publicScheduleImageJob(job));
     }
     const childReport = path.match(/^\/children\/([^/]+)\/report$/);
     if (childReport && method === "GET") {

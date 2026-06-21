@@ -1,5 +1,5 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
-import { nowIso, balance, timezoneOffsetMinutes } from "../utils.js";
+import { nowIso, balance, timezoneOffsetMinutes, ensureChildScheduleSchema } from "../utils.js";
 import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries } from "./cache.js";
 import { buildDailyGreetingPrompt, buildReportAiPrompt, previousDayReportSummary } from "./prompt.js";
 import { callParentAiService, callParentAiServiceForReport, callParentImageService } from "./providers.js";
@@ -201,6 +201,57 @@ export async function generateCartoonReportImage(env, child, periodType, range) 
         imageUrl,
         format: config.imageFormat || "jpeg",
         filename: `${child.display_name}-${periodType === "monthly" ? "monthly" : "weekly"}-cartoon-report.${config.imageFormat || "jpeg"}`,
+        promptPreview: prompt.slice(0, 240)
+    };
+}
+
+export async function generateScheduleImage(env, child) {
+    const config = await getParentAiServiceConfig(env, child.parent_id);
+    if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.scheduleImagePrompt) {
+        throw new NonRetryableError("ai_schedule_image_config_incomplete");
+    }
+    await ensureChildScheduleSchema(env);
+    const slots = (await env.DB.prepare("SELECT * FROM child_schedule_slots WHERE child_id=? ORDER BY sort_order, created_at")
+        .bind(child.id).all()).results;
+    const items = slots.length
+        ? (await env.DB.prepare(`SELECT csi.*, t.title, t.points, t.period, t.is_required, t.required_count, tc.name category_name
+FROM child_schedule_items csi
+JOIN tasks t ON t.id=csi.task_id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE csi.child_id=? ORDER BY csi.sort_order, csi.created_at`).bind(child.id).all()).results
+        : [];
+    const fmtTime = (m) => {
+        const h = Math.floor(m / 60);
+        const min = m % 60;
+        return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+    };
+    const scheduleLines = slots.map((slot) => {
+        const slotItems = items.filter((item) => item.slot_id === slot.id);
+        const taskDesc = slotItems.map((item) => `${item.title}(${item.category_name || "未分类"},${item.points}分,${item.period === "daily" ? "每日" : item.period === "weekly" ? "每周" : "每月"}${item.is_required ? ",必做" : ""})`).join("；");
+        return `${fmtTime(slot.start_minutes)}-${fmtTime(slot.end_minutes)} ${slot.title}: ${taskDesc || "空闲"}`;
+    }).join("\n");
+    const unscheduled = (await env.DB.prepare(`SELECT t.title, t.points, tc.name category_name
+FROM tasks t
+JOIN task_assignees ta ON ta.task_id=t.id
+LEFT JOIN task_categories tc ON tc.id=t.category_id
+WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL AND t.is_active=1
+ORDER BY tc.name, t.created_at DESC`).bind(child.id, child.parent_id).all()).results;
+    const scheduledTaskIds = new Set(items.map((item) => item.task_id));
+    const unscheduledLines = unscheduled.filter((t) => !scheduledTaskIds.has(t.id))
+        .map((t) => `${t.title}(${t.category_name || "未分类"},${t.points}分)`).join("；");
+    const prompt = truncatePrompt(config.scheduleImagePrompt, [
+        `孩子：${child.display_name}`,
+        `日程表：`,
+        scheduleLines,
+        unscheduledLines ? `未安排任务：${unscheduledLines}` : "",
+        "请画成适合孩子查看的日程表插画，清晰展示各时段安排，积极、避免真实个人隐私文字。"
+    ].join("\n"));
+    if (!prompt) throw new NonRetryableError("ai_schedule_image_prompt_empty");
+    const imageUrl = await callParentImageService(env, prompt, config);
+    return {
+        imageUrl,
+        format: config.imageFormat || "jpeg",
+        filename: `${child.display_name}-schedule-image.${config.imageFormat || "jpeg"}`,
         promptPreview: prompt.slice(0, 240)
     };
 }

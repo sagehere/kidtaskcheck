@@ -1,6 +1,6 @@
 # FEATURE_INDEX
 
-最近更新：2026-06-14
+最近更新：2026-06-21
 
 本文件按“用户可感知功能”组织维护入口。P0 是默认必须读取文件；P1 是实现跨界或需要上下文时再读；P2 是 schema、测试、部署或高风险排查时谨慎读取。
 
@@ -160,20 +160,33 @@
 - 修改注意事项：AI 预览默认不写缓存（`{ cache: false }`）；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure；scheduled 使用管理员时区和已完成周期；模型字段使用 `<input list>` 支持手动输入；预览替换缓存使用 `INSERT OR REPLACE` 只替换当前配置 hash 下的缓存，不触发新 AI 调用。
 - 最近更新时间：2026-06-15
 
-## 13. AI 图片、漫画报告与打印清单图
+## 13. AI 图片、漫画报告、打印清单图与日程表图
 
-- 功能说明：家长配置图片 AI，生成周/月漫画报告图片，生成孩子打印清单图，并轮询异步任务状态。
+- 功能说明：家长配置图片 AI，生成周/月漫画报告图片，生成孩子打印清单图，生成日程表插画图，并轮询异步任务状态。
 - 用户入口：家长 AI 设置/孩子报表或打印相关按钮。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`server/api/ai/cartoon-queue.js`、`server/api/ai/orchestrator.js`、`server/api/ai/providers.js`
-- P1：`server/api/ai/prompt.js`、`server/api/utils.js`、`src/types/api.ts`
-- P2：`migrations/0019_parent_ai_image_settings.sql`、`migrations/0020_parent_delegates_operator_cartoon_jobs.sql`、`migrations/0021_remediable_criticism_daily_greeting_checklist_images.sql`、`tests/ai.test.ts`
-- 主要调用链：`ParentApp.generateCartoonReport` -> `/parent/ai-service/cartoon-report` -> queue -> provider image generation -> polling `/parent/ai-service/cartoon-report/:jobId`; checklist image -> `/children/:id/print-checklist-image` -> polling job endpoint。
-- 相关状态：`parent_ai_service_settings.image_*`、`ai_cartoon_report_jobs`、`ai_print_checklist_image_jobs`
-- 相关接口：`POST /api/parent/ai-service/cartoon-report`、`GET /api/parent/ai-service/cartoon-report/:jobId`、`POST /api/children/:id/print-checklist-image`、`GET /api/children/:id/print-checklist-image/:jobId`
-- 修改注意事项：图片 AI 配置和文本 AI 配置分开；前端轮询有 abort controller；不要把生成结果持久化到新存储，除非用户明确要求。待确认：漫画报告和打印清单图是否应长期复用同一队列策略。
-- 最近更新时间：2026-06-12
+- P1：`server/api/ai/prompt.js`、`server/api/ai/cache.js`、`server/api/ai/index.js`、`server/api/utils.js`、`src/types/api.ts`
+- P2：`migrations/0019_parent_ai_image_settings.sql`、`migrations/0020_parent_delegates_operator_cartoon_jobs.sql`、`migrations/0021_remediable_criticism_daily_greeting_checklist_images.sql`、`migrations/0023_child_schedule.sql`、`tests/ai.test.ts`
+- 主要调用链：`ParentApp.generateCartoonReport` -> `/parent/ai-service/cartoon-report` -> queue -> provider image generation -> polling `/parent/ai-service/cartoon-report/:jobId`; checklist image -> `/children/:id/print-checklist-image` -> polling job endpoint; schedule image -> `/children/:id/schedule-image` -> polling job endpoint。
+- 相关状态：`parent_ai_service_settings.image_*`、`ai_cartoon_report_jobs`、`ai_print_checklist_image_jobs`、`ai_schedule_image_jobs`
+- 相关接口：`POST /api/parent/ai-service/cartoon-report`、`GET /api/parent/ai-service/cartoon-report/:jobId`、`POST /api/children/:id/print-checklist-image`、`GET /api/children/:id/print-checklist-image/:jobId`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
+- 修改注意事项：图片 AI 配置和文本 AI 配置分开；前端轮询有 abort controller；不要把生成结果持久化到新存储，除非用户明确要求。日程表图使用独立 `ai_schedule_image_jobs` 表和独立提示词 `schedule_image_prompt`。
+- 最近更新时间：2026-06-21
 
-## 14. 配置导入导出与开发测试入口
+## 14. 孩子日程表
+
+- 功能说明：孩子编辑每日日程表（时段增删、任务拖入/移除），家长打印日程表、绘制日程表插画。日程表为每日模板结构，独立于清单/报表。日程表绘图有独立提示词。
+- 用户入口：孩子端"日程表"标签页、家长报告弹窗中"打印日程表/绘制日程表"。
+- P0：`src/ChildApp.tsx`、`src/ParentApp.tsx`、`server/api/routes/child.js`、`server/api/routes/parent.js`
+- P1：`server/api/utils.js`、`server/api/ai/cartoon-queue.js`、`server/api/ai/orchestrator.js`、`server/api/ai/cache.js`、`server/api/ai/index.js`、`src/types/api.ts`、`src/styles.css`
+- P2：`migrations/0023_child_schedule.sql`、`tests/migration.test.ts`
+- 主要调用链：`ChildApp.scheduleTab` -> GET/PUT `/children/:id/schedule`; `ParentApp.exportChildSchedulePrint` -> window.open `/children/:id/schedule-print`; `ParentApp.generateScheduleImage` -> POST `/children/:id/schedule-image` -> queue -> polling -> GET `/children/:id/schedule-image/:jobId`
+- 相关状态：`child_schedule_slots`、`child_schedule_items`、`ai_schedule_image_jobs`、`parent_ai_service_settings.schedule_image_prompt`
+- 相关接口：`GET/PUT /api/children/:id/schedule`、`GET /api/children/:id/schedule-print`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
+- 修改注意事项：日程表只有孩子可编辑、家长只读查看；任务拖入日程表不改变积分/任务提交流程；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023 需 bootstrap 运行 ensureChildScheduleSchema。
+- 最近更新时间：2026-06-21
+
+## 15. 配置导入导出与开发测试入口
 
 - 功能说明：家长导出/导入家庭配置，开发模式下重置当前家长进度。导出配置会保留任务/奖励的孩子分配显示名、必做任务规则、奖励前置任务标题和成就指定任务标题，导入时按当前家庭的孩子名、分类名和任务标题重新映射。
 - 用户入口：家长设置中的导入导出按钮和开发隐藏重置入口。

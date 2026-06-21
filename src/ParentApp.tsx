@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users, AlertTriangle
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ParentDelegate, RemedyCriticismItem } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ScheduleImageResponse, ParentDelegate, RemedyCriticismItem } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -12,7 +12,7 @@ import { Shell } from "./components/Shell";
 import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, formatAchievementRule } from "./lib/appHelpers";
 
 type ParentAiServiceStoredConfig = Omit<ParentAiServiceConfig, "apiKey"> & { updatedAt?: string };
-const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, imageBaseUrl: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", imageSize: "1248x1760", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasImageKey: false };
+const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, imageBaseUrl: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", scheduleImagePrompt: "", imageSize: "1248x1760", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasImageKey: false };
 
 export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [children, setChildren] = useState<Child[]>([]);
@@ -47,6 +47,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [cartoonReportResult, setCartoonReportResult] = useState<(CartoonReportResponse & { title: string }) | null>(null);
   const [checklistImageGenerating, setChecklistImageGenerating] = useState(false);
   const [checklistImageResult, setChecklistImageResult] = useState<(ChecklistImageResponse & { title: string }) | null>(null);
+  const [scheduleImageGenerating, setScheduleImageGenerating] = useState(false);
+  const [scheduleImageResult, setScheduleImageResult] = useState<(ScheduleImageResponse & { title: string }) | null>(null);
   const [aiConfigLoaded, setAiConfigLoaded] = useState(false);
   const [profileForm, setProfileForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "", operatorLabel: me.role === "child" ? "" : me.operatorLabel || "" });
   const [message, setMessage] = useState("");
@@ -59,6 +61,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const aiDraftDirtyRef = useRef(false);
   const cartoonAbortRef = useRef<AbortController | null>(null);
   const checklistImageAbortRef = useRef<AbortController | null>(null);
+  const scheduleImageAbortRef = useRef<AbortController | null>(null);
 
   function syncAiDraft(nextConfig: ParentAiServiceStoredConfig) {
     setDraftAiConfig({
@@ -72,6 +75,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       imageModel: nextConfig.imageModel || "gpt-image-2",
       imagePrompt: nextConfig.imagePrompt || "",
       checklistImagePrompt: nextConfig.checklistImagePrompt || "",
+      scheduleImagePrompt: nextConfig.scheduleImagePrompt || "",
       imageSize: nextConfig.imageSize || "1248x1760",
       imageQuality: nextConfig.imageQuality || "low",
       imageFormat: nextConfig.imageFormat || "jpeg",
@@ -363,6 +367,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   function exportChildReport(child: Child, period: "weekly" | "monthly") {
     window.open(`/api/children/${encodeURIComponent(child.id)}/report?period=${period}`, "_blank", "noopener,noreferrer");
   }
+  function exportChildSchedulePrint(child: Child) {
+    window.open(`/api/children/${encodeURIComponent(child.id)}/schedule-print`, "_blank", "noopener,noreferrer");
+  }
 
   async function pollCartoonReport(job: CartoonReportResponse, title: string, signal: AbortSignal): Promise<{ job: CartoonReportResponse; aborted: boolean }> {
     if (!job.id || job.status === "completed" || job.status === "failed") {
@@ -461,6 +468,54 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       if (checklistImageAbortRef.current === controller) {
         checklistImageAbortRef.current = null;
         setChecklistImageGenerating(false);
+      }
+    }
+  }
+
+  async function pollScheduleImage(job: ScheduleImageResponse, title: string, signal: AbortSignal): Promise<{ job: ScheduleImageResponse; aborted: boolean }> {
+    if (!job.id || job.status === "completed" || job.status === "failed") {
+      if (!signal.aborted) setScheduleImageResult({ ...job, title });
+      return { job, aborted: signal.aborted };
+    }
+    let last: ScheduleImageResponse = job;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      if (signal.aborted) return { job: last, aborted: true };
+      await new Promise<void>((resolve) => {
+        const timer = window.setTimeout(resolve, 3000);
+        signal.addEventListener("abort", () => { window.clearTimeout(timer); resolve(); }, { once: true });
+      });
+      if (signal.aborted) return { job: last, aborted: true };
+      const next = await api<ScheduleImageResponse>(`/children/${encodeURIComponent(String(job.childId || ""))}/schedule-image/${job.id}`);
+      last = next;
+      if (signal.aborted) return { job: next, aborted: true };
+      setScheduleImageResult({ ...next, title });
+      if (next.status === "completed" || next.status === "failed") return { job: next, aborted: false };
+    }
+    return { job: last, aborted: signal.aborted };
+  }
+
+  async function generateScheduleImage(child: Child, retry = false, force = false) {
+    scheduleImageAbortRef.current?.abort();
+    const controller = new AbortController();
+    scheduleImageAbortRef.current = controller;
+    setScheduleImageGenerating(true);
+    setError("");
+    const title = `${child.display_name} 日程表绘图`;
+    try {
+      const result = await api<ScheduleImageResponse>(`/children/${encodeURIComponent(child.id)}/schedule-image`, {
+        method: "POST",
+        body: JSON.stringify({ retry, force })
+      });
+      setScheduleImageResult({ ...result, title });
+      const final = await pollScheduleImage(result, title, controller.signal);
+      if (final.aborted) return;
+      if (final.job.status === "failed") setError(`日程表图片生成失败：${final.job.lastError || "未知错误"}`);
+    } catch (err) {
+      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "日程表图片生成失败");
+    } finally {
+      if (scheduleImageAbortRef.current === controller) {
+        scheduleImageAbortRef.current = null;
+        setScheduleImageGenerating(false);
       }
     }
   }
@@ -669,6 +724,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                     imageModel: draftAiConfig.imageModel,
                     imagePrompt: draftAiConfig.imagePrompt,
                     checklistImagePrompt: draftAiConfig.checklistImagePrompt,
+                    scheduleImagePrompt: draftAiConfig.scheduleImagePrompt,
                     imageSize: draftAiConfig.imageSize,
                     imageQuality: draftAiConfig.imageQuality,
                     imageFormat: draftAiConfig.imageFormat,
@@ -686,6 +742,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                   imageModel: response.imageModel ?? draftAiConfig.imageModel,
                   imagePrompt: response.imagePrompt ?? draftAiConfig.imagePrompt,
                   checklistImagePrompt: response.checklistImagePrompt ?? draftAiConfig.checklistImagePrompt,
+                  scheduleImagePrompt: response.scheduleImagePrompt ?? draftAiConfig.scheduleImagePrompt,
                   imageSize: response.imageSize ?? draftAiConfig.imageSize,
                   imageQuality: response.imageQuality ?? draftAiConfig.imageQuality,
                   imageFormat: response.imageFormat ?? draftAiConfig.imageFormat,
@@ -768,6 +825,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                 </Field>
                 <Field label="打印清单绘图提示词">
                   <textarea value={draftAiConfig.checklistImagePrompt || ""} onChange={(e) => updateAiDraft({ checklistImagePrompt: e.target.value })} rows={4} placeholder="为孩子的打印清单绘制一张清晰、温暖、适合贴在墙上的任务奖励海报。" />
+                </Field>
+                <Field label="日程表绘图提示词">
+                  <textarea value={draftAiConfig.scheduleImagePrompt || ""} onChange={(e) => updateAiDraft({ scheduleImagePrompt: e.target.value })} rows={4} placeholder="为孩子的每日日程表绘制一张清晰、温暖的插画，展示各时段安排。" />
                 </Field>
                 <div className="grid two compact-fields">
                   <Field label="尺寸">
@@ -863,8 +923,11 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           onReport={exportChildReport}
           onCartoonReport={(child, period) => void generateCartoonReport(child, period)}
           onChecklistImage={(child) => void generateChecklistImage(child)}
+          onSchedulePrint={exportChildSchedulePrint}
+          onScheduleImage={(child) => void generateScheduleImage(child)}
           generating={cartoonReportGenerating}
           checklistGenerating={checklistImageGenerating}
+          scheduleGenerating={scheduleImageGenerating}
         />
       )}
       {cartoonReportResult && (
@@ -909,6 +972,23 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           onClose={() => {
             checklistImageAbortRef.current?.abort();
             setChecklistImageResult(null);
+          }}
+        />
+      )}
+      {scheduleImageResult && (
+        <CartoonReportDialog
+          result={scheduleImageResult}
+          onRetry={(result) => {
+            const child = children.find((item) => item.id === result.childId);
+            if (child) void generateScheduleImage(child, true, result.status === "completed");
+          }}
+          onRegenerate={(result) => {
+            const child = children.find((item) => item.id === result.childId);
+            if (child) void generateScheduleImage(child, false, true);
+          }}
+          onClose={() => {
+            scheduleImageAbortRef.current?.abort();
+            setScheduleImageResult(null);
           }}
         />
       )}
@@ -1139,7 +1219,7 @@ export function FeedbackRecallDialog({ child, rows, onRecall, onClose }: { child
   );
 }
 
-export function ReportDialog({ child, onPrint, onReport, onCartoonReport, onChecklistImage, generating, checklistGenerating, onClose }: { child: Child; onPrint: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onCartoonReport: (child: Child, period: "weekly" | "monthly") => void; onChecklistImage: (child: Child) => void; generating: "" | "weekly" | "monthly"; checklistGenerating: boolean; onClose: () => void }) {
+export function ReportDialog({ child, onPrint, onReport, onCartoonReport, onChecklistImage, onSchedulePrint, onScheduleImage, generating, checklistGenerating, scheduleGenerating, onClose }: { child: Child; onPrint: (child: Child) => void; onReport: (child: Child, period: "weekly" | "monthly") => void; onCartoonReport: (child: Child, period: "weekly" | "monthly") => void; onChecklistImage: (child: Child) => void; onSchedulePrint: (child: Child) => void; onScheduleImage: (child: Child) => void; generating: "" | "weekly" | "monthly"; checklistGenerating: boolean; scheduleGenerating: boolean; onClose: () => void }) {
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <section className="panel refund-modal">
@@ -1170,6 +1250,15 @@ export function ReportDialog({ child, onPrint, onReport, onCartoonReport, onChec
             </button>
             <button className="secondary" disabled={!!generating} onClick={() => onCartoonReport(child, "monthly")}>
               <Sparkles size={18} />{generating === "monthly" ? "绘制中..." : "绘制卡通月报"}
+            </button>
+          </div>
+          <hr className="report-divider" />
+          <div className="report-action-row">
+            <button className="secondary" onClick={() => { onSchedulePrint(child); onClose(); }}>
+              <Printer size={18} />打印日程表
+            </button>
+            <button className="secondary" disabled={scheduleGenerating} onClick={() => onScheduleImage(child)}>
+              <Sparkles size={18} />{scheduleGenerating ? "绘制中..." : "绘制日程表"}
             </button>
           </div>
         </div>

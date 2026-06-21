@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star } from "lucide-react";
-import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary } from "./types/api";
+import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar } from "lucide-react";
+import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary, ChildScheduleData } from "./types/api";
 import { api } from "./api/client";
 import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle } from "./components/UI";
 import { LedgerModal } from "./components/LedgerModal";
@@ -11,7 +11,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  const [activeTab, setActiveTab] = useState<"tasks" | "rewards" | "warehouse">("tasks");
+  const [activeTab, setActiveTab] = useState<"tasks" | "rewards" | "warehouse" | "schedule">("tasks");
+  const [schedule, setSchedule] = useState<ChildScheduleData>({ slots: [], items: [] });
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [warehouse, setWarehouse] = useState<WarehouseItem[]>([]);
   const [summary, setSummary] = useState<ChildDashboardSummary>({ balance: 0, frozenPoints: 0, aiGreeting: "", aiRefreshPending: false, child: null });
@@ -178,8 +179,71 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     await loadDashboard();
   }
 
-  async function load() {
-    await refreshAll();
+  async function loadSchedule() {
+    const data = await api<ChildScheduleData>("/child-schedule").catch(() => ({ slots: [], items: [] }));
+    setSchedule(data);
+  }
+
+  async function saveSchedule() {
+    const newSlots = schedule.slots.map((s) => ({ id: s.id, title: s.title, startMinutes: s.startMinutes, endMinutes: s.endMinutes }));
+    const newItems = schedule.items.map((item) => ({
+      id: item.id,
+      slotId: item.slotId,
+      taskId: item.taskId
+    }));
+    await run("schedule:save", () => api("/child-schedule", { method: "PUT", body: JSON.stringify({ slots: newSlots, items: newItems }) }), "日程已保存");
+    await loadSchedule();
+  }
+
+  function addScheduleSlot() {
+    const slots = [...schedule.slots];
+    const last = slots.length > 0 ? slots[slots.length - 1] : null;
+    const start = last ? Math.min(last.endMinutes + 30, 1380) : 480;
+    const end = Math.min(start + 60, 1440);
+    slots.push({ title: "", startMinutes: start, endMinutes: end });
+    setSchedule({ ...schedule, slots });
+  }
+
+  function updateScheduleSlot(index: number, field: string, value: any) {
+    const slots = [...schedule.slots];
+    (slots[index] as any)[field] = value;
+    setSchedule({ ...schedule, slots });
+  }
+
+  function removeScheduleSlot(index: number) {
+    const slot = schedule.slots[index];
+    const slots = schedule.slots.filter((_, i) => i !== index);
+    const items = schedule.items.filter((item) => item.slotId !== (slot.id || `_${index}`));
+    setSchedule({ ...schedule, slots, items });
+  }
+
+  function toggleTaskInSlot(taskId: string, slotId: string) {
+    const existing = schedule.items.find((item) => item.taskId === taskId);
+    let items = [...schedule.items];
+    if (existing) {
+      if (existing.slotId === slotId) {
+        items = items.filter((item) => item.taskId !== taskId);
+      } else {
+        items = items.map((item) => item.taskId === taskId ? { ...item, slotId } : item);
+      }
+    } else {
+      items.push({ slotId, taskId });
+    }
+    setSchedule({ ...schedule, items });
+  }
+
+  function removeTaskFromSchedule(taskId: string) {
+    setSchedule({ ...schedule, items: schedule.items.filter((item) => item.taskId !== taskId) });
+  }
+
+  function fmtMinutes(m: number) {
+    const h = Math.floor(m / 60);
+    const min = m % 60;
+    return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  }
+
+  function load() {
+    void Promise.all([refreshAll(), loadSchedule()]);
   }
   useEffect(() => {
     void loadSummary();
@@ -323,7 +387,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         options={[
           { value: "tasks", label: "任务" },
           { value: "rewards", label: "奖励" },
-          { value: "warehouse", label: "仓库" }
+          { value: "warehouse", label: "仓库" },
+          { value: "schedule", label: "日程表" }
         ]}
       />
       {activeTab === "tasks" && (
@@ -414,6 +479,59 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                 <div className="card-meta"><span className="cost"><Coins size={16} />{item.cost_points} 积分</span></div>
               </article>
             )) : <Empty text="仓库暂无奖励" />}
+          </div>
+        </section>
+      )}
+      {activeTab === "schedule" && (
+        <section className="panel child-panel">
+          <div className="panel-title compact-title">
+            <Calendar /><h2>我的日程表</h2>
+            <div className="actions" style={{ gap: "0.5rem" }}>
+              <button className="secondary" onClick={addScheduleSlot}>添加时段</button>
+              <button className="primary" disabled={busy === "schedule:save"} onClick={() => void saveSchedule()}>{busy === "schedule:save" ? "保存中..." : "保存日程"}</button>
+            </div>
+          </div>
+          <div className="schedule-layout">
+            <div className="schedule-slots">
+              {schedule.slots.length === 0 && <Empty text="暂无时段，请添加" />}
+              {schedule.slots.map((slot, index) => {
+                const slotId = slot.id || `_${index}`;
+                const slotItems = schedule.items.filter((item) => item.slotId === slotId);
+                return (
+                  <article className="schedule-slot-card" key={slotId}>
+                    <div className="schedule-slot-header">
+                      <input className="schedule-slot-title-input" placeholder="时段名称" value={slot.title} onChange={(e) => updateScheduleSlot(index, "title", e.target.value)} />
+                      <div className="schedule-time-inputs">
+                        <input type="time" value={fmtMinutes(slot.startMinutes)} onChange={(e) => { const [h, m] = e.target.value.split(":").map(Number); updateScheduleSlot(index, "startMinutes", h * 60 + m); }} />
+                        <span>至</span>
+                        <input type="time" value={fmtMinutes(slot.endMinutes)} onChange={(e) => { const [h, m] = e.target.value.split(":").map(Number); updateScheduleSlot(index, "endMinutes", h * 60 + m); }} />
+                      </div>
+                      <button className="icon" style={{ color: "var(--danger, #e53e3e)" }} onClick={() => removeScheduleSlot(index)} title="删除时段">&times;</button>
+                    </div>
+                    <div className="schedule-slot-items">
+                      {slotItems.length === 0 && <small className="muted">拖拽任务到此处</small>}
+                      {slotItems.map((item) => (
+                        <div className="schedule-slot-task" key={item.taskId}>
+                          <span>{item.title || "加载中..."}</span>
+                          <button className="icon" onClick={() => removeTaskFromSchedule(item.taskId)} title="移除">&times;</button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="schedule-slot-tasks-pool">
+                      {dash.tasks.filter((t: any) => t.is_active !== 0).map((task: any) => (
+                        <button
+                          key={task.id}
+                          className={`schedule-task-chip ${slotItems.some((item) => item.taskId === task.id) ? "is-assigned" : ""}`}
+                          onClick={() => toggleTaskInSlot(task.id, slotId)}
+                        >
+                          {task.title}
+                        </button>
+                      ))}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </div>
         </section>
       )}

@@ -2,6 +2,22 @@
 
 本文件记录 AI/Codex 对项目的维护历史。每次修改都应追加记录，最新记录放在顶部。
 
+## 2026-06-21
+
+- 类型：功能新增
+- 范围：孩子日程表（数据库、API、前端、AI 绘图）
+- 摘要：
+  - 新增 `migrations/0023_child_schedule.sql`：`child_schedule_slots`（时段）和 `child_schedule_items`（任务分配）表，`parent_ai_service_settings` 加 `schedule_image_prompt` 列。
+  - 后端 `ensureChildScheduleSchema(env)` 自愈 schema，bootstrap 调用。
+  - 孩子端 GET/PUT `/children/:id/schedule`：原子替换时段+任务分配，校验不重叠、任务归属。
+  - 家长端 GET `/children/:id/schedule-print`：纯 HTML 打印页。POST/GET `/children/:id/schedule-image`：排队/轮询生成日程表插画（独立 `ai_schedule_image_jobs` 表）。
+  - 前端 `ChildApp.tsx` 新增"日程表"标签页：时段增删改、任务列表点击添加到时段、保存/重置。`ParentApp.tsx` 报表弹窗新增打印/绘制日程表按钮、AI 设置新增日程表绘图提示词。
+  - AI 侧：`cartoon-queue.js` 新增 `ai_schedule_image_jobs` 表及队列函数、`orchestrator.js` 新增 `generateScheduleImage`、`cache.js` 新增 `scheduleImagePrompt`。
+- 业务代码：`src/ChildApp.tsx`、`src/ParentApp.tsx`、`src/styles.css`、`server/api/routes/child.js`、`server/api/routes/parent.js`、`server/api/utils.js`、`server/api/ai/cartoon-queue.js`、`server/api/ai/orchestrator.js`、`server/api/ai/index.js`、`server/api/ai/cache.js`、`src/types/api.ts`
+- 测试：`tests/migration.test.ts` — 更新迁移文件计数 22→23
+- 文档：`docs/ai/FEATURE_INDEX.md`、`docs/ai/CHANGELOG_AI.md`
+- 验证：`npx tsc --noEmit`、`npm test`
+
 ## 2026-06-15
 
 - 类型：缺陷修复

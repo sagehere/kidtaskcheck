@@ -93,6 +93,7 @@ export type AiServiceConfig = {
   imageModel?: string;
   imagePrompt?: string;
   checklistImagePrompt?: string;
+  scheduleImagePrompt?: string;
   imageSize?: string;
   imageQuality?: string;
   imageFormat?: "png" | "jpeg" | "webp" | string;
@@ -104,6 +105,10 @@ export type AiServiceConfig = {
 export type ParentAiServiceConfig = AiServiceConfig;
 export type CartoonReportResponse = { id?: string; childId?: string; period?: "weekly" | "monthly"; periodKey?: string; status?: "pending" | "processing" | "completed" | "failed"; retryCount?: number; lastError?: string; imageUrl?: string; format: string; filename: string; promptPreview?: string; createdAt?: string; updatedAt?: string; completedAt?: string };
 export type ChecklistImageResponse = Omit<CartoonReportResponse, "period" | "periodKey">;
+export type ScheduleImageResponse = Omit<CartoonReportResponse, "period" | "periodKey">;
+export type ChildScheduleSlot = { id?: string; title: string; startMinutes: number; endMinutes: number; sort_order?: number };
+export type ChildScheduleItem = { id?: string; slotId: string; taskId: string; title?: string; points?: number; period?: string; category_name?: string; is_required?: number; required_count?: number; description?: string };
+export type ChildScheduleData = { slots: ChildScheduleSlot[]; items: ChildScheduleItem[] };
 export const REFRESH_INTERVAL_MS = 12000;
 export const DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
 export const WEEKDAY_OPTIONS = [

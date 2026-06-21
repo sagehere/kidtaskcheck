@@ -227,6 +227,7 @@ export async function ensureParentAiServiceSettings(env) {
     await ensureColumn(env, "parent_ai_service_settings", "image_format", "image_format TEXT NOT NULL DEFAULT 'jpeg'");
     await ensureColumn(env, "parent_ai_service_settings", "image_n", "image_n INTEGER NOT NULL DEFAULT 1");
     await ensureColumn(env, "parent_ai_service_settings", "checklist_image_prompt", "checklist_image_prompt TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "parent_ai_service_settings", "schedule_image_prompt", "schedule_image_prompt TEXT NOT NULL DEFAULT ''");
 }
 export async function timezoneOffsetMinutes(env) {
     const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key='timezone_offset_minutes'").first();
@@ -415,6 +416,32 @@ export async function ensureRequiredTaskSchema(env) {
 )`).run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_required_penalties_child ON task_required_penalties(child_id, period_key)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_required_penalties_parent ON task_required_penalties(parent_id, period_key)").run();
+}
+export async function ensureChildScheduleSchema(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_schedule_slots (
+  id TEXT PRIMARY KEY,
+  child_id TEXT NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  title TEXT NOT NULL DEFAULT '',
+  start_minutes INTEGER NOT NULL CHECK(start_minutes>=0 AND start_minutes<1440),
+  end_minutes INTEGER NOT NULL CHECK(end_minutes>0 AND end_minutes<=1440),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK(end_minutes>start_minutes)
+)`).run();
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_schedule_items (
+  id TEXT PRIMARY KEY,
+  slot_id TEXT NOT NULL REFERENCES child_schedule_slots(id) ON DELETE CASCADE,
+  child_id TEXT NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(child_id, task_id)
+)`).run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_slots_child ON child_schedule_slots(child_id, sort_order)").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_slot ON child_schedule_items(slot_id, sort_order)").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_child_task ON child_schedule_items(child_id, task_id)").run();
 }
 export async function ensureRetentionSchema(env) {
     await ensureColumn(env, "point_ledger", "revoked_at", "revoked_at TEXT");
@@ -715,6 +742,7 @@ export async function bootstrap(env) {
         await ensureSystemSettings(env);
         await ensureSystemErrorLogs(env);
         await ensureAdmin(env);
+        await ensureChildScheduleSchema(env);
         await maybeRunMaintenance(env);
     })().catch((error) => {
         bootstrapPromise = null;

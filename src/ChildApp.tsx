@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar } from "lucide-react";
 import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary, ChildScheduleData } from "./types/api";
 import { api } from "./api/client";
@@ -200,7 +200,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     const last = slots.length > 0 ? slots[slots.length - 1] : null;
     const start = last ? Math.min(last.endMinutes + 30, 1380) : 480;
     const end = Math.min(start + 60, 1440);
-    slots.push({ title: "", startMinutes: start, endMinutes: end });
+    slots.push({ id: crypto.randomUUID(), title: "", startMinutes: start, endMinutes: end });
     setSchedule({ ...schedule, slots });
   }
 
@@ -213,27 +213,60 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   function removeScheduleSlot(index: number) {
     const slot = schedule.slots[index];
     const slots = schedule.slots.filter((_, i) => i !== index);
-    const items = schedule.items.filter((item) => item.slotId !== (slot.id || `_${index}`));
+    const items = schedule.items.filter((item) => item.slotId !== slot.id);
     setSchedule({ ...schedule, slots, items });
   }
 
+  function getTaskRequiredCount(taskId: string): number {
+    const task = dash.tasks.find((t: any) => t.id === taskId);
+    return Math.max(1, task?.required_count || 1);
+  }
+
   function toggleTaskInSlot(taskId: string, slotId: string) {
-    const existing = schedule.items.find((item) => item.taskId === taskId);
     let items = [...schedule.items];
-    if (existing) {
-      if (existing.slotId === slotId) {
-        items = items.filter((item) => item.taskId !== taskId);
-      } else {
-        items = items.map((item) => item.taskId === taskId ? { ...item, slotId } : item);
-      }
+    const existingInSlotIdx = items.findIndex((item) => item.taskId === taskId && item.slotId === slotId);
+    const existingElsewhere = items.filter((item) => item.taskId === taskId && item.slotId !== slotId);
+    const maxCount = getTaskRequiredCount(taskId);
+    const totalCount = (existingInSlotIdx >= 0 ? 1 : 0) + existingElsewhere.length;
+
+    if (existingInSlotIdx >= 0) {
+      items.splice(existingInSlotIdx, 1);
+    } else if (existingElsewhere.length > 0 && totalCount >= maxCount) {
+      items = items.map((item) =>
+        item.taskId === taskId && item.id === existingElsewhere[0].id
+          ? { ...item, slotId }
+          : item
+      );
     } else {
-      items.push({ slotId, taskId });
+      items.push({ id: crypto.randomUUID(), slotId, taskId });
     }
     setSchedule({ ...schedule, items });
   }
 
-  function removeTaskFromSchedule(taskId: string) {
-    setSchedule({ ...schedule, items: schedule.items.filter((item) => item.taskId !== taskId) });
+  function removeTaskFromSchedule(itemId: string) {
+    setSchedule({ ...schedule, items: schedule.items.filter((item) => item.id !== itemId) });
+  }
+
+  function handleDragStart(e: DragEvent, taskId: string) {
+    e.dataTransfer.setData("text/plain", taskId);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleSlotDrop(e: DragEvent, slotId: string) {
+    e.preventDefault();
+    const taskId = e.dataTransfer.getData("text/plain");
+    if (taskId) toggleTaskInSlot(taskId, slotId);
+    e.currentTarget.classList.remove("drag-over");
+  }
+
+  function handleSlotDragOver(e: DragEvent) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    e.currentTarget.classList.add("drag-over");
+  }
+
+  function handleSlotDragLeave(e: DragEvent) {
+    e.currentTarget.classList.remove("drag-over");
   }
 
   function fmtMinutes(m: number) {
@@ -495,7 +528,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
             <div className="schedule-slots">
               {schedule.slots.length === 0 && <Empty text="暂无时段，请添加" />}
               {schedule.slots.map((slot, index) => {
-                const slotId = slot.id || `_${index}`;
+                if (!slot.id) return null;
+                const slotId = slot.id;
                 const slotItems = schedule.items.filter((item) => item.slotId === slotId);
                 return (
                   <article className="schedule-slot-card" key={slotId}>
@@ -508,25 +542,50 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                       </div>
                       <button className="icon" style={{ color: "var(--danger, #e53e3e)" }} onClick={() => removeScheduleSlot(index)} title="删除时段">&times;</button>
                     </div>
-                    <div className="schedule-slot-items">
+                    <div
+                      className="schedule-slot-items"
+                      onDragOver={handleSlotDragOver}
+                      onDragLeave={handleSlotDragLeave}
+                      onDrop={(e) => handleSlotDrop(e, slotId)}
+                    >
                       {slotItems.length === 0 && <small className="muted">拖拽任务到此处</small>}
                       {slotItems.map((item) => (
-                        <div className="schedule-slot-task" key={item.taskId}>
+                        <div className="schedule-slot-task" key={item.id}>
                           <span>{item.title || "加载中..."}</span>
-                          <button className="icon" onClick={() => removeTaskFromSchedule(item.taskId)} title="移除">&times;</button>
+                          <button className="icon" onClick={() => item.id && removeTaskFromSchedule(item.id)} title="移除">&times;</button>
                         </div>
                       ))}
                     </div>
                     <div className="schedule-slot-tasks-pool">
-                      {dash.tasks.filter((t: any) => t.is_active !== 0).map((task: any) => (
-                        <button
-                          key={task.id}
-                          className={`schedule-task-chip ${slotItems.some((item) => item.taskId === task.id) ? "is-assigned" : ""}`}
-                          onClick={() => toggleTaskInSlot(task.id, slotId)}
-                        >
-                          {task.title}
-                        </button>
-                      ))}
+                      {dash.tasks.filter((t: any) => t.is_active !== 0).map((task: any) => {
+                        const countInSlot = slotItems.filter((item) => item.taskId === task.id).length;
+                        const assignedElsewhere = schedule.items.some((item) => item.taskId === task.id && item.slotId !== slotId);
+                        const maxCount = getTaskRequiredCount(task.id);
+                        return (
+                          <div
+                            key={task.id}
+                            className={`schedule-task-chip ${countInSlot > 0 ? "is-assigned" : ""}`}
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, task.id)}
+                            onClick={() => toggleTaskInSlot(task.id, slotId)}
+                            title={`${task.title}${countInSlot > 0 ? `（已分配 ${countInSlot}/${maxCount} 次）` : ""}`}
+                          >
+                            {icon(task.icon_type, task.icon_value, task.title)}
+                            <div className="schedule-chip-info">
+                              <span className="schedule-chip-title">{task.title}</span>
+                              <span className="schedule-chip-meta">
+                                <span className={task.point_type === "earn" ? "positive" : "negative"}>
+                                  {task.point_type === "earn" ? "+" : "-"}{task.points}
+                                </span>
+                                {assignedElsewhere && <span className="chip-moved-tag">已排</span>}
+                                {countInSlot > 0 && maxCount > 1 && (
+                                  <span className="chip-count-badge">{countInSlot}/{maxCount}</span>
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </article>
                 );

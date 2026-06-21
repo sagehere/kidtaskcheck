@@ -285,7 +285,7 @@ WHERE t.id IN (${placeholders}) AND ta.child_id=? AND t.parent_id=? AND t.delete
                 await env.DB.prepare("INSERT INTO child_schedule_slots (id, child_id, title, start_minutes, end_minutes, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
                     .bind(slotId, a.id, String(slot.title || "").slice(0, 100), Number(slot.startMinutes), Number(slot.endMinutes), i, now, now)
                     .run();
-                const itemsForSlot = incomingItems.filter((item) => (item.slotId || item.slot_id) === slot.id);
+                const itemsForSlot = incomingItems.filter((item) => (item.slotId || item.slot_id) === (slot.id || slotId));
                 for (let j = 0; j < itemsForSlot.length; j++) {
                     const item = itemsForSlot[j];
                     const itemId = item.id || id();

@@ -436,8 +436,7 @@ export async function ensureChildScheduleSchema(env) {
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(child_id, task_id)
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`).run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_slots_child ON child_schedule_slots(child_id, sort_order)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_slot ON child_schedule_items(slot_id, sort_order)").run();

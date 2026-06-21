@@ -4,6 +4,20 @@
 
 ## 2026-06-21
 
+- 类型：缺陷修复
+- 范围：孩子日程表（BUG 修复 + 拖拽 + 多实例支持）
+- 摘要：
+  - **BUG 1**：`addScheduleSlot()` 未为新时段分配客户端 ID，导致后端验证"日程项引用了不存在的时段"。修复：`addScheduleSlot()` 使用 `crypto.randomUUID()` 生成 ID；后端 item 匹配增加 `(slot.id || slotId)` 兜底。
+  - **BUG 2**：任务在日程表中仅显示文本按钮，无拖拽功能。修复：任务池改为卡片式 chip（显示 emoji、标题、积分）；改为可拖拽（`draggable` + `onDragStart`）；slot 区域可拖放（`onDragOver`/`onDrop`/`onDragLeave`）；添加 `drag-over` 视觉高亮。
+  - **BUG 3**：每日任务无法在日程表中多次出现。修复：新建 `migrations/0024_child_schedule_drop_unique.sql`，删除 `child_schedule_items` 的 `UNIQUE(child_id, task_id)` 约束；`toggleTaskInSlot` 改为支持同一任务多次添加（受 `required_count` 限制）；`removeTaskFromSchedule` 改为按 `item.id` 移除；`ensureChildScheduleSchema` 不再包含 UNIQUE。
+  - 其他：slot 渲染去掉了 `slot.id || `_${index}`` 兜底，直接使用 slot.id（已保证一定有值）。
+- 业务代码：`src/ChildApp.tsx`、`src/styles.css`、`server/api/routes/child.js`、`server/api/utils.js`
+- 测试：`tests/migration.test.ts` — 更新迁移文件计数 23→24
+- 文档：`docs/ai/FEATURE_INDEX.md`、`docs/ai/CHANGELOG_AI.md`
+- 验证：`npm test`、`npx tsc --noEmit`
+
+## 2026-06-21
+
 - 类型：功能新增
 - 范围：孩子日程表（数据库、API、前端、AI 绘图）
 - 摘要：

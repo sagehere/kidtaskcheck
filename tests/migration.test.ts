@@ -7,9 +7,9 @@ import { repairSqlite0002 } from "../scripts/sqlite-repair-0002.mjs";
 const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
 describe("Task 35: Migration Smoke Test", () => {
-  it("all 23 migration files apply sequentially on empty DB without errors", () => {
+  it("all 24 migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(23);
+    expect(files.length).toBe(24);
     const db = new SqliteTestDb();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");

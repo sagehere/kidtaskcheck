@@ -1310,6 +1310,15 @@ button:disabled {
   margin-top: 14px;
 }
 
+.child-tab-list,
+.schedule-slots,
+.schedule-slot-items,
+.schedule-slot-tasks-pool {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
 .wall-card {
   min-height: 240px;
   position: relative;

@@ -497,11 +497,11 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
               </label>
             </div>
             {!showScheduleOnWall ? (
-              <div className="wall-grid scroll-list">
+              <div className="wall-grid child-tab-list">
                 {sortedTasks.length ? sortedTasks.map((task: any) => renderTaskCard(task)) : <Empty text="暂无任务" />}
               </div>
             ) : (
-              <div className="schedule-wall-groups scroll-list">
+              <div className="schedule-wall-groups child-tab-list">
                 {schedule.slots.length === 0 && <Empty text="暂无日程安排，请先到日程表设置中添加时段" />}
                 {schedule.slots.map((slot) => {
                   if (!slot.id) return null;
@@ -543,7 +543,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
       {activeTab === "rewards" && (
         <section className="panel child-panel">
           <div className="panel-title"><Gift /><h2>奖励墙</h2></div>
-          <div className="wall-grid scroll-list">
+          <div className="wall-grid child-tab-list">
             {rewardRows.length ? rewardRows.map((reward: any) => {
               const limited = !reward.canRedeem;
               const disabled = dash.balance < reward.cost_points || limited || busy === `reward:${reward.id}`;
@@ -577,7 +577,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
             <Package /><h2>仓库</h2>
             <button className="secondary" disabled={!warehouse.some((item) => item.status === "redeemed")} onClick={() => void clearRedeemedWarehouse()}>一键清理已核销奖励</button>
           </div>
-          <div className="wall-grid warehouse-grid scroll-list">
+          <div className="wall-grid warehouse-grid child-tab-list">
             {warehouse.length ? warehouse.map((item) => (
               <article className={`mini-card wall-card reward-wall-card warehouse-card ${item.status === "redeemed" ? "is-muted redeemed" : ""}`} key={item.id}>
                 <div className="card-head wall-card-head">

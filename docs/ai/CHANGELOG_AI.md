@@ -1,3 +1,15 @@
+## 2026-06-22
+
+- 类型：缺陷修复 / UI 调整
+- 范围：孩子日程表、登录页
+- 摘要：
+  - 修复孩子端“日程表设置”计划富文本框输入时因 React 重写 contentEditable DOM 导致光标回到开头的问题。
+  - `loadSchedule()` 恢复映射后端 `plan_html` 字段，避免保存后重新拉取日程时丢失计划内容。
+  - 登录页“进入系统”按钮改为在“记住我”下一行独占显示。
+- 业务代码：`src/ChildApp.tsx`、`src/styles.css`
+- 文档：`docs/ai/FEATURE_INDEX.md`、`docs/ai/CHANGELOG_AI.md`
+- 验证：`npm run build`
+
 # CHANGELOG_AI
 
 本文件记录 AI/Codex 对项目的维护历史。每次修改都应追加记录，最新记录放在顶部。

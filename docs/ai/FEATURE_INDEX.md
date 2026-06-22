@@ -14,7 +14,7 @@
 - 主要调用链：`App Login.submit` -> `api("/auth/login")` -> `handleApiRequest` -> `handleAuthRoutes`; `App.loadMe` -> `/auth/me`; `Shell.logout` -> `/auth/logout`
 - 相关状态：`sessions`、`users.status`、`users.role`、浏览器 unauthorized 事件
 - 相关接口：`POST /api/auth/login`、`GET /api/auth/me`、`POST /api/auth/logout`
-- 修改注意事项：登录错误要保留后端凭据错误；生产默认管理员密码限制在 router/bootstrap 路径；角色分流改动会影响三个角色 App；会话默认 180 天；登录页支持“记住我”，选中后使用长期滚动会话（auth.js + utils.js cookie Max-Age 与 sessions.expires_at 同步更新）。
+- 修改注意事项：登录错误要保留后端凭据错误；生产默认管理员密码限制在 router/bootstrap 路径；角色分流改动会影响三个角色 App；会话默认 180 天；登录页支持“记住我”，选中后使用长期滚动会话（auth.js + utils.js cookie Max-Age 与 sessions.expires_at 同步更新）；“进入系统”按钮在“记住我”下一行独占显示。
 - 最近更新时间：2026-06-22
 
 ## 2. 管理员后台
@@ -183,7 +183,7 @@
 - 主要调用链：`ChildApp.scheduleTab` -> GET/PUT `/children/:id/schedule`; `ParentApp.exportChildSchedulePrint` -> window.open `/children/:id/schedule-print`; `ParentApp.generateScheduleImage` -> POST `/children/:id/schedule-image` -> queue -> polling -> GET `/children/:id/schedule-image/:jobId`
 - 相关状态：`child_schedule_slots.plan_html`、`child_schedule_items`、`ai_schedule_image_jobs`、`parent_ai_service_settings.schedule_image_prompt`
 - 相关接口：`GET/PUT /api/children/:id/schedule`、`GET /api/children/:id/schedule-print`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
-- 修改注意事项：日程表只有孩子可编辑、家长只读查看；每个时段包含“计划”和“可完成任务”两行；计划富文本保存为受限 HTML；任务拖入日程表不改变积分/任务提交流程；任务卡片池使用任务自身 `limitCount/limit_count` 作为可安排次数口径，不使用必做 `required_count`；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023/0025 需 bootstrap 运行 ensureChildScheduleSchema。
+- 修改注意事项：日程表只有孩子可编辑、家长只读查看；每个时段包含“计划”和“可完成任务”两行；计划富文本保存为受限 HTML，前端编辑器避免在输入中重写 DOM 以保留光标位置，加载日程时必须映射后端 `plan_html`；任务拖入日程表不改变积分/任务提交流程；任务卡片池使用任务自身 `limitCount/limit_count` 作为可安排次数口径，不使用必做 `required_count`；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023/0025 需 bootstrap 运行 ensureChildScheduleSchema。
 - 最近更新时间：2026-06-22
 
 ## 15. 配置导入导出与开发测试入口

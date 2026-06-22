@@ -1,10 +1,45 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar, Bold, Italic, Underline, List } from "lucide-react";
-import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary, ChildScheduleData } from "./types/api";
+import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary, ChildScheduleData, ChildScheduleSlot } from "./types/api";
 import { api } from "./api/client";
 import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle } from "./components/UI";
 import { LedgerModal } from "./components/LedgerModal";
 import { Shell } from "./components/Shell";
+
+function SchedulePlanEditor({
+  html,
+  onSelect,
+  onChange
+}: {
+  html: ChildScheduleSlot["planHtml"];
+  onSelect: () => void;
+  onChange: (html: string) => void;
+}) {
+  const editorRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const nextHtml = html || "";
+    if (document.activeElement === editor) return;
+    if (editor.innerHTML !== nextHtml) {
+      editor.innerHTML = nextHtml;
+    }
+  }, [html]);
+
+  return (
+    <div
+      ref={editorRef}
+      className="schedule-plan-editor"
+      contentEditable
+      suppressContentEditableWarning
+      data-placeholder="输入这个时段的计划"
+      onClick={(e) => { e.stopPropagation(); onSelect(); }}
+      onFocus={onSelect}
+      onInput={(e) => onChange(e.currentTarget.innerHTML)}
+    />
+  );
+}
 
 export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [dash, setDash] = useState<any>({ tasks: [], rewards: [], achievements: [], balance: 0 });
@@ -200,6 +235,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     const slots: ChildScheduleData["slots"] = (raw.slots || []).map((s: any) => ({
       id: s.id,
       title: s.title ?? "",
+      planHtml: s.plan_html ?? s.planHtml ?? "",
       startMinutes: s.start_minutes ?? s.startMinutes ?? 0,
       endMinutes: s.end_minutes ?? s.endMinutes ?? 0,
       sort_order: s.sort_order,
@@ -663,14 +699,10 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                         <button type="button" className="icon" title="下划线" onMouseDown={(e) => { e.preventDefault(); formatSchedulePlan("underline"); }}><Underline size={15} /></button>
                         <button type="button" className="icon" title="列表" onMouseDown={(e) => { e.preventDefault(); formatSchedulePlan("insertUnorderedList"); }}><List size={15} /></button>
                       </div>
-                      <div
-                        className="schedule-plan-editor"
-                        contentEditable
-                        suppressContentEditableWarning
-                        data-placeholder="输入这个时段的计划"
-                        dangerouslySetInnerHTML={{ __html: slot.planHtml || "" }}
-                        onClick={(e) => { e.stopPropagation(); selectScheduleSlot(slotId); }}
-                        onInput={(e) => updateSchedulePlan(index, e.currentTarget.innerHTML)}
+                      <SchedulePlanEditor
+                        html={slot.planHtml}
+                        onSelect={() => selectScheduleSlot(slotId)}
+                        onChange={(html) => updateSchedulePlan(index, html)}
                       />
                     </div>
                     <div className="schedule-slot-section">

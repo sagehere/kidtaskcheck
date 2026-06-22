@@ -2163,8 +2163,8 @@ button:disabled {
 .schedule-wall-group-title {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 0 2ch;
   padding: 0 2px;
 }
 
@@ -2180,6 +2180,48 @@ button:disabled {
 
 .schedule-wall-grid {
   margin-top: 0;
+}
+
+.schedule-wall-plan {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: start;
+  border-left: 3px solid rgba(21, 127, 111, 0.35);
+  border-radius: 6px;
+  background: rgba(21, 127, 111, 0.06);
+  color: var(--text-color, #1f2937);
+  padding: 0.55rem 0.65rem;
+}
+
+.schedule-wall-plan > span {
+  color: var(--accent, #157f6f);
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.55;
+}
+
+.schedule-wall-plan > div {
+  min-width: 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.schedule-wall-plan p,
+.schedule-wall-plan ul,
+.schedule-wall-plan ol {
+  margin: 0 0 0.35rem;
+}
+
+.schedule-wall-plan p:last-child,
+.schedule-wall-plan ul:last-child,
+.schedule-wall-plan ol:last-child {
+  margin-bottom: 0;
+}
+
+.schedule-wall-plan ul,
+.schedule-wall-plan ol {
+  padding-left: 1.1rem;
 }
 
 .schedule-slot-card.is-active {
@@ -2236,9 +2278,12 @@ button:disabled {
     margin-left: 0;
   }
 
-  .schedule-pool-title,
-  .schedule-wall-group-title {
+  .schedule-pool-title {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .schedule-wall-plan {
+    grid-template-columns: 1fr;
   }
 }

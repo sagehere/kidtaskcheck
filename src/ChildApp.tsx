@@ -390,6 +390,10 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
   }
 
+  function hasSchedulePlan(html: string | undefined) {
+    return Boolean((html || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim());
+  }
+
   function load() {
     void Promise.all([refreshAll(), loadSchedule()]);
   }
@@ -575,6 +579,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                 {schedule.slots.length === 0 && <Empty text="暂无日程安排，请先到日程表设置中添加时段" />}
                 {schedule.slots.map((slot) => {
                   if (!slot.id) return null;
+                  const showPlan = hasSchedulePlan(slot.planHtml);
                   const tasksInSlot = schedule.items
                     .filter((item) => item.slotId === slot.id)
                     .map((item) => taskById.get(item.taskId))
@@ -585,6 +590,12 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                         <strong>{slot.title || "未命名时段"}</strong>
                         <span>{fmtMinutes(slot.startMinutes)} - {fmtMinutes(slot.endMinutes)}</span>
                       </div>
+                      {showPlan && (
+                        <div className="schedule-wall-plan">
+                          <span>计划</span>
+                          <div dangerouslySetInnerHTML={{ __html: slot.planHtml || "" }} />
+                        </div>
+                      )}
                       {tasksInSlot.length ? (
                         <div className="wall-grid schedule-wall-grid">
                           {tasksInSlot.map((task: any) => renderTaskCard(task))}

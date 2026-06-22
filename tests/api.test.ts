@@ -6,7 +6,7 @@ import { handleChildRoutes } from "../server/api/routes/child.js";
 import { handleParentRoutes } from "../server/api/routes/parent.js";
 import { handleSharedRoutes } from "../server/api/routes/shared.js";
 import { ensureAdmin, actorFromRequest, sessionCookie, validateHttpsUrl, isPrivateUrl, id, hashPassword } from "../server/api/utils.js";
-import { truncateAiOutput, stripAiThinking, aiReportConfigHash, processAiGenerationQueue, runScheduledAiRefresh, processCartoonReportJobs, processPrintChecklistImageJobs } from "../server/api/ai/index.js";
+import { truncateAiOutput, stripAiThinking, aiReportConfigHash, processAiGenerationQueue, runScheduledAiRefresh, processCartoonReportJobs, processPrintChecklistImageJobs, processScheduleImageJobs } from "../server/api/ai/index.js";
 import { api } from "../src/api/client";
 import { reportWindowRange } from "../src/lib/domain";
 
@@ -53,6 +53,28 @@ describe("Auth", () => {
     const diff = Date.parse(session.expires_at) - Date.now();
     expect(diff).toBeGreaterThan(179 * 86400000);
     expect(diff).toBeLessThan(181 * 86400000);
+  });
+  it("remember me login creates a long-lived cookie and session", async () => {
+    const r = await safe(handleAuthRoutes, "/auth/login", "POST", makeRequest("POST", "/auth/login", { username: "admin", password: "test-admin-pw", rememberMe: true }), env, null);
+    expect(r!.status).toBe(200);
+    const c = r!.headers.get("set-cookie") || "";
+    expect(c).toContain("Max-Age=315360000");
+    const session = env.DB.prepare("SELECT * FROM sessions ORDER BY created_at DESC LIMIT 1").first() as any;
+    const diff = Date.parse(session.expires_at) - Date.now();
+    expect(diff).toBeGreaterThan(3649 * 86400000);
+    expect(diff).toBeLessThan(3651 * 86400000);
+  });
+  it("auth me renews remembered sessions", async () => {
+    const r = await safe(handleAuthRoutes, "/auth/login", "POST", makeRequest("POST", "/auth/login", { username: "admin", password: "test-admin-pw", rememberMe: true }), env, null);
+    const token = (r!.headers.get("set-cookie") || "").match(/session=([^;]+)/)?.[1] || "";
+    const soon = new Date(Date.now() + 365 * 86400000).toISOString();
+    env.DB.prepare("UPDATE sessions SET expires_at=? WHERE token=?").bind(soon, token).run();
+    const req = makeRequest("GET", "/auth/me", undefined, "session=" + token);
+    const actor = await actorFromRequest(req, env);
+    const me = await safe(handleAuthRoutes, "/auth/me", "GET", req, env, actor);
+    expect(me!.headers.get("set-cookie") || "").toContain("Max-Age=315360000");
+    const session = env.DB.prepare("SELECT * FROM sessions WHERE token=?").bind(token).first() as any;
+    expect(Date.parse(session.expires_at) - Date.now()).toBeGreaterThan(3649 * 86400000);
   });
   it("login cookie includes Secure when request is HTTPS", () => {
     const req = new Request("https://example.com/api/auth/login", { headers: { "x-forwarded-proto": "https" } });
@@ -262,6 +284,53 @@ describe("Input Validation", () => {
     expect(stripAiThinking("<THINK>one</THINK>Keep<think>two</think>")).toBe("Keep");
     expect(stripAiThinking("draft</think>final")).toBe("draftfinal");
     expect(stripAiThinking("visible<think>unfinished")).toBe("visible");
+  });
+});
+
+describe("Child schedule plan text", () => {
+  let env: any;
+  let pid: string;
+  let cid: string;
+  let tid: string;
+  const parentActor = () => ({ type: "user", role: "parent", id: pid, displayName: "Parent" });
+  const childActor = () => ({ type: "child", role: "child", id: cid, parent_id: pid, parentId: pid, displayName: "Child" });
+  beforeEach(async () => {
+    env = resetTestEnv();
+    await ensureAdmin(env);
+    pid = id();
+    cid = id();
+    tid = id();
+    env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, 'sched-parent', ?, 'parent', 'Parent')").bind(pid, await hashPassword("pw")).run();
+    env.DB.prepare("INSERT INTO children (id, parent_id, username, password_hash, display_name, status) VALUES (?, ?, 'sched-child', ?, 'Child', 'active')").bind(cid, pid, await hashPassword("cpw")).run();
+    env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value) VALUES ('sched-cat', ?, 'Reading', 'emoji', '📚')").bind(pid).run();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, points, period, limit_count, point_type, enabled_weekdays, description) VALUES (?, ?, 'sched-cat', 'Read', 5, 'daily', 3, 'earn', '[1,2,3,4,5,6,0]', 'Read quietly')").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+  });
+  it("saves sanitized plan HTML and includes it in schedule print", async () => {
+    const slotId = id();
+    const save = await safe(handleChildRoutes, "/child-schedule", "PUT", makeRequest("PUT", "/child-schedule", { slots: [{ id: slotId, title: "Morning", startMinutes: 480, endMinutes: 540, planHtml: "<p><strong>Read</strong><script>alert(1)</script></p>" }], items: [{ id: id(), slotId, taskId: tid }] }), env, childActor());
+    expect(save!.status).toBe(200);
+    const loaded = await safe(handleChildRoutes, "/child-schedule", "GET", makeRequest("GET", "/child-schedule"), env, childActor());
+    const body = await loaded!.json();
+    expect(body.data.slots[0].plan_html).toBe("<p><strong>Read</strong></p>");
+    const print = await safe(handleParentRoutes, `/children/${cid}/schedule-print`, "GET", makeRequest("GET", `/children/${cid}/schedule-print`), env, parentActor());
+    const html = await print!.text();
+    expect(html).toContain("@page{size:A4");
+    expect(html).toContain("<h3>计划</h3>");
+    expect(html).toContain("<p><strong>Read</strong></p>");
+    expect(html).toContain("print-task-card");
+    expect(html).not.toContain("<script>");
+  });
+  it("includes schedule plans in weekly reports", async () => {
+    const slotId = id();
+    await safe(handleChildRoutes, "/child-schedule", "PUT", makeRequest("PUT", "/child-schedule", { slots: [{ id: slotId, title: "Evening", startMinutes: 1140, endMinutes: 1200, planHtml: "<p>Review notes</p>" }], items: [{ id: id(), slotId, taskId: tid }] }), env, childActor());
+    const req = makeRequest("GET", `/children/${cid}/report?period=weekly&anchor=2026-06-03T00:00:00.000Z`);
+    const report = await safe(handleParentRoutes, `/children/${cid}/report`, "GET", req, env, parentActor(), new URL(req.url));
+    const html = await report!.text();
+    expect(html).toContain("@page{size:A4");
+    expect(html).toContain("日程安排");
+    expect(html).toContain("Review notes");
+    expect(html).toContain("print-task-card");
   });
 });
 
@@ -619,6 +688,32 @@ describe("Parent AI Service Validation", () => {
     const completed = await getRes!.json();
     expect(completed.data.imageUrl).toBe("https://cdn.example.com/checklist.jpeg");
     expect(completed.data.filename).toContain("print-checklist.jpeg");
+  });
+  it("generates a schedule image with plan text", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    const taskId = id();
+    env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value) VALUES ('schedule-ai-cat', ?, 'Cat', 'emoji', '📚')").bind(parentId).run();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, points, period, limit_count, point_type, enabled_weekdays) VALUES (?, ?, 'schedule-ai-cat', 'Read', 5, 'daily', 2, 'earn', '[1,2,3,4,5,6,0]')").bind(taskId, parentId).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(taskId, childId).run();
+    await safe(handleChildRoutes, "/child-schedule", "PUT", makeRequest("PUT", "/child-schedule", { slots: [{ id: "slot-ai", title: "Morning", startMinutes: 480, endMinutes: 540, planHtml: "<p><strong>Read plan</strong></p>" }], items: [{ id: "item-ai", slotId: "slot-ai", taskId }] }), env, { type: "child", role: "child", id: childId, parent_id: parentId, parentId, displayName: "AI Child" });
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test", imageBaseUrl: "https://image.example.com/v1", imageModel: "gpt-image-2", imagePrompt: "cartoon style", scheduleImagePrompt: "schedule poster style", imageApiKey: "img-key", imageSize: "1024x1024", imageQuality: "low", imageFormat: "jpeg", imageN: 1 }), env, actor);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://image.example.com/v1/images/generations");
+      const body = JSON.parse(String(init?.body || "{}"));
+      expect(body.prompt).toContain("schedule poster style");
+      expect(body.prompt).toContain("Read plan");
+      expect(body.prompt).toContain("Read");
+      return new Response(JSON.stringify({ data: [{ url: "https://cdn.example.com/schedule.jpeg" }] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const r = await safe(handleParentRoutes, `/children/${childId}/schedule-image`, "POST", makeRequest("POST", `/children/${childId}/schedule-image`, {}), env, actor);
+    expect(r!.status).toBe(200);
+    const data = await r!.json();
+    await processScheduleImageJobs(env, { maxJobs: 1 } as any);
+    const getRes = await safe(handleParentRoutes, `/children/${childId}/schedule-image/${data.data.id}`, "GET", makeRequest("GET", `/children/${childId}/schedule-image/${data.data.id}`), env, actor);
+    const completed = await getRes!.json();
+    expect(completed.data.imageUrl).toBe("https://cdn.example.com/schedule.jpeg");
   });
   it("force=true re-enqueues a completed cartoon job and clears the cached image", async () => {
     const actor = { type: "user", role: "parent", id: parentId };

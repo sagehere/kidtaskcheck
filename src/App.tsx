@@ -14,12 +14,13 @@ function Login({ onDone }: { onDone: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
     try {
-      await api("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+      await api("/auth/login", { method: "POST", body: JSON.stringify({ username, password, rememberMe }) });
       onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");
@@ -43,6 +44,10 @@ function Login({ onDone }: { onDone: () => void }) {
         <Field label="密码">
           <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" />
         </Field>
+        <label className="remember-login">
+          <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} />
+          <span>记住我</span>
+        </label>
         {error && <div className="error">{error}</div>}
         <button className="primary" type="submit">
           <Shield size={18} />

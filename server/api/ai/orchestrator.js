@@ -1,5 +1,5 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
-import { nowIso, balance, timezoneOffsetMinutes, ensureChildScheduleSchema } from "../utils.js";
+import { nowIso, balance, timezoneOffsetMinutes, ensureChildScheduleSchema, schedulePlanHtmlToText } from "../utils.js";
 import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries } from "./cache.js";
 import { buildDailyGreetingPrompt, buildReportAiPrompt, previousDayReportSummary } from "./prompt.js";
 import { callParentAiService, callParentAiServiceForReport, callParentImageService } from "./providers.js";
@@ -228,7 +228,8 @@ WHERE csi.child_id=? ORDER BY csi.sort_order, csi.created_at`).bind(child.id).al
     const scheduleLines = slots.map((slot) => {
         const slotItems = items.filter((item) => item.slot_id === slot.id);
         const taskDesc = slotItems.map((item) => `${item.title}(${item.category_name || "未分类"},${item.points}分,${item.period === "daily" ? "每日" : item.period === "weekly" ? "每周" : "每月"}${item.is_required ? ",必做" : ""})`).join("；");
-        return `${fmtTime(slot.start_minutes)}-${fmtTime(slot.end_minutes)} ${slot.title}: ${taskDesc || "空闲"}`;
+        const planText = schedulePlanHtmlToText(slot.plan_html || "");
+        return `${fmtTime(slot.start_minutes)}-${fmtTime(slot.end_minutes)} ${slot.title || "未命名时段"}: 计划=${planText || "暂无"}; 可完成任务=${taskDesc || "空闲"}`;
     }).join("\n");
     const unscheduled = (await env.DB.prepare(`SELECT t.title, t.points, tc.name category_name
 FROM tasks t

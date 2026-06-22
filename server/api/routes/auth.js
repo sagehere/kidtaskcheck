@@ -1,8 +1,17 @@
-import { json, ok, fail, body, cookie, id, nowIso, checkLoginRateLimit, verifyPassword, hashPassword, actorFromRequest, sessionCookie, ensureParentDelegatesSchema } from "../utils.js";
+import { json, ok, fail, body, cookie, id, nowIso, checkLoginRateLimit, verifyPassword, hashPassword, actorFromRequest, sessionCookie, ensureParentDelegatesSchema, sessionDurationDays, sessionExpiresAt, isRememberedSession, renewRememberedSession } from "../utils.js";
 
 export async function handleAuthRoutes(path, method, request, env, actor) {
-    if (path === "/auth/me" && method === "GET")
+    if (path === "/auth/me" && method === "GET") {
+        const token = cookie(request, "session");
+        if (actor && token) {
+            const session = await env.DB.prepare("SELECT * FROM sessions WHERE token=? AND expires_at > ?").bind(token, nowIso()).first();
+            if (session && isRememberedSession(session)) {
+                await renewRememberedSession(env, session);
+                return json({ data: actor }, { headers: { "set-cookie": sessionCookie(token, env, request, sessionDurationDays(true)) } });
+            }
+        }
         return ok(actor);
+    }
     if (path === "/auth/logout" && method === "POST") {
         const token = cookie(request, "session");
         if (token)
@@ -43,13 +52,14 @@ export async function handleAuthRoutes(path, method, request, env, actor) {
         if (!passwordOk)
             return fail("BAD_CREDENTIALS", "账号或密码错误", 401);
         const token = id();
-        const expires = new Date(Date.now() + 180 * 86400000).toISOString();
+        const rememberMe = input.rememberMe === true;
+        const expires = sessionExpiresAt(rememberMe);
         const actorType = child ? "child" : "user";
         const actorId = delegate ? `delegate:${account.id}` : account.id;
         await env.DB.prepare("INSERT INTO sessions (token, actor_type, actor_id, expires_at) VALUES (?, ?, ?, ?)")
             .bind(token, actorType, actorId, expires)
             .run();
-        return json({ data: { role: user ? user.role : child ? "child" : "parent_delegate", displayName: account.display_name, operatorLabel: account.operator_label || account.display_name } }, { headers: { "set-cookie": sessionCookie(token, env, request) } });
+        return json({ data: { role: user ? user.role : child ? "child" : "parent_delegate", displayName: account.display_name, operatorLabel: account.operator_label || account.display_name } }, { headers: { "set-cookie": sessionCookie(token, env, request, sessionDurationDays(rememberMe)) } });
     }
     return null;
 }

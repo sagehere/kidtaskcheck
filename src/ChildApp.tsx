@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar } from "lucide-react";
+import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar, Bold, Italic, Underline, List } from "lucide-react";
 import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary, ChildScheduleData } from "./types/api";
 import { api } from "./api/client";
 import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle } from "./components/UI";
@@ -220,7 +220,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   }
 
   async function saveSchedule() {
-    const newSlots = schedule.slots.map((s) => ({ id: s.id, title: s.title, startMinutes: s.startMinutes, endMinutes: s.endMinutes }));
+    const newSlots = schedule.slots.map((s) => ({ id: s.id, title: s.title, planHtml: s.planHtml || "", startMinutes: s.startMinutes, endMinutes: s.endMinutes }));
     const newItems = schedule.items.map((item) => ({
       id: item.id,
       slotId: item.slotId,
@@ -235,7 +235,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     const last = slots.length > 0 ? slots[slots.length - 1] : null;
     const start = last ? Math.min(last.endMinutes + 30, 1380) : 480;
     const end = Math.min(start + 60, 1440);
-    slots.push({ id: crypto.randomUUID(), title: "", startMinutes: start, endMinutes: end });
+    slots.push({ id: crypto.randomUUID(), title: "", planHtml: "", startMinutes: start, endMinutes: end });
     setSchedule({ ...schedule, slots });
   }
 
@@ -312,6 +312,40 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
 
   function handleSlotDragLeave(e: DragEvent) {
     e.currentTarget.classList.remove("drag-over");
+  }
+
+  function updateSchedulePlan(index: number, html: string) {
+    const slots = [...schedule.slots];
+    slots[index] = { ...slots[index], planHtml: html };
+    setSchedule({ ...schedule, slots });
+  }
+
+  function formatSchedulePlan(command: "bold" | "italic" | "underline" | "insertUnorderedList") {
+    document.execCommand(command);
+  }
+
+  function renderScheduleTaskCard(item: ChildScheduleData["items"][number]) {
+    const task = taskById.get(item.taskId) as any;
+    const title = task?.title || item.title || "加载中...";
+    const points = task ? (task.point_type === "earn" ? "+" : "-") + task.points : item.points;
+    return (
+      <article className={["task-card", "wall-card", "schedule-slot-task-card", task?.is_required === 1 ? "required-card" : ""].filter(Boolean).join(" " )} key={item.id}>
+        <div className="card-head wall-card-head">
+          {task ? icon(task.icon_type, task.icon_value, title) : null}
+          <div>
+            <strong>{title}</strong>
+            <small>{formatPeriod(task?.period || item.period || "daily")}</small>
+          </div>
+          <button className="icon" onClick={(e) => { e.stopPropagation(); if (item.id) removeTaskFromSchedule(item.id); }} title="移除">&times;</button>
+        </div>
+        {task?.description || item.description ? <small className="card-description">{task?.description || item.description}</small> : null}
+        <div className="card-meta">
+          {points !== undefined && <span className={task?.point_type === "spend" ? "negative" : "positive"}>{points} 积分</span>}
+          {task && <span>{scheduledCountForTask(task.id)}/{getTaskScheduleLimit(task.id)} 次</span>}
+          {(task?.is_required === 1 || item.is_required) && <span className="required-tag">须完成{task?.required_count || item.required_count || 1}次</span>}
+        </div>
+      </article>
+    );
   }
 
   function fmtMinutes(m: number) {
@@ -621,22 +655,35 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                       </div>
                       <button className="icon" style={{ color: "var(--danger, #e53e3e)" }} onClick={(e) => { e.stopPropagation(); removeScheduleSlot(index); }} title="删除时段">&times;</button>
                     </div>
-                    <div
-                      className="schedule-slot-items"
-                      onDragOver={handleSlotDragOver}
-                      onDragLeave={handleSlotDragLeave}
-                      onDrop={(e) => handleSlotDrop(e, slotId)}
-                    >
-                      {slotItems.length === 0 && <small className="muted">拖拽任务到此处</small>}
-                      {slotItems.map((item) => {
-                        const task = taskById.get(item.taskId) as any;
-                        return (
-                          <div className="schedule-slot-task" key={item.id}>
-                            <span>{task?.title || item.title || "加载中..."}</span>
-                            <button className="icon" onClick={(e) => { e.stopPropagation(); if (item.id) removeTaskFromSchedule(item.id); }} title="移除">&times;</button>
-                          </div>
-                        );
-                      })}
+                    <div className="schedule-slot-section">
+                      <div className="schedule-slot-section-title">计划</div>
+                      <div className="schedule-rich-toolbar" onClick={(e) => e.stopPropagation()}>
+                        <button type="button" className="icon" title="加粗" onMouseDown={(e) => { e.preventDefault(); formatSchedulePlan("bold"); }}><Bold size={15} /></button>
+                        <button type="button" className="icon" title="斜体" onMouseDown={(e) => { e.preventDefault(); formatSchedulePlan("italic"); }}><Italic size={15} /></button>
+                        <button type="button" className="icon" title="下划线" onMouseDown={(e) => { e.preventDefault(); formatSchedulePlan("underline"); }}><Underline size={15} /></button>
+                        <button type="button" className="icon" title="列表" onMouseDown={(e) => { e.preventDefault(); formatSchedulePlan("insertUnorderedList"); }}><List size={15} /></button>
+                      </div>
+                      <div
+                        className="schedule-plan-editor"
+                        contentEditable
+                        suppressContentEditableWarning
+                        data-placeholder="输入这个时段的计划"
+                        dangerouslySetInnerHTML={{ __html: slot.planHtml || "" }}
+                        onClick={(e) => { e.stopPropagation(); selectScheduleSlot(slotId); }}
+                        onInput={(e) => updateSchedulePlan(index, e.currentTarget.innerHTML)}
+                      />
+                    </div>
+                    <div className="schedule-slot-section">
+                      <div className="schedule-slot-section-title">可完成任务</div>
+                      <div
+                        className="schedule-slot-items"
+                        onDragOver={handleSlotDragOver}
+                        onDragLeave={handleSlotDragLeave}
+                        onDrop={(e) => handleSlotDrop(e, slotId)}
+                      >
+                        {slotItems.length === 0 && <small className="muted">拖拽或点击任务到此处</small>}
+                        {slotItems.map((item) => renderScheduleTaskCard(item))}
+                      </div>
                     </div>
                   </article>
                 );

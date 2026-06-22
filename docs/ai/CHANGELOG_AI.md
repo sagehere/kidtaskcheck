@@ -2,6 +2,19 @@
 
 本文件记录 AI/Codex 对项目的维护历史。每次修改都应追加记录，最新记录放在顶部。
 
+## 2026-06-22
+
+- 类型：功能增强
+- 范围：记住我、日程计划富文本与 A4 报表
+- 摘要：
+  - 登录页新增“记住我”，选中后使用长期滚动会话，默认登录仍保持 180 天。
+  - 孩子日程表每个时段新增“计划”富文本行，并保留“可完成任务”任务卡片行；计划保存为受限 HTML。
+  - 日程表打印、周/月报表和日程表绘图 prompt 同步计划文本与任务卡片信息，打印输出统一 A4 适配。
+- 业务代码：`src/App.tsx`、`src/ChildApp.tsx`、`src/styles.css`、`src/types/api.ts`、`server/api/routes/auth.js`、`server/api/routes/child.js`、`server/api/routes/parent.js`、`server/api/ai/orchestrator.js`、`server/api/utils.js`
+- 数据库：`migrations/0025_child_schedule_plan_html.sql`
+- 测试：`tests/api.test.ts`、`tests/migration.test.ts`
+- 验证：`rtk npm test`；`rtk npm run build`；`rtk git diff --check`
+
 ## 2026-06-21
 
 - 类型：UI 布局调整

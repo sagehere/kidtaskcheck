@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, ensureChildScheduleSchema } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, ensureChildScheduleSchema, sanitizeSchedulePlanHtml } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -282,8 +282,8 @@ WHERE t.id IN (${placeholders}) AND ta.child_id=? AND t.parent_id=? AND t.delete
             for (let i = 0; i < incomingSlots.length; i++) {
                 const slot = incomingSlots[i];
                 const slotId = slot.id || id();
-                await env.DB.prepare("INSERT INTO child_schedule_slots (id, child_id, title, start_minutes, end_minutes, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-                    .bind(slotId, a.id, String(slot.title || "").slice(0, 100), Number(slot.startMinutes), Number(slot.endMinutes), i, now, now)
+                await env.DB.prepare("INSERT INTO child_schedule_slots (id, child_id, title, plan_html, start_minutes, end_minutes, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                    .bind(slotId, a.id, String(slot.title || "").slice(0, 100), sanitizeSchedulePlanHtml(slot.planHtml ?? slot.plan_html ?? ""), Number(slot.startMinutes), Number(slot.endMinutes), i, now, now)
                     .run();
                 const itemsForSlot = incomingItems.filter((item) => (item.slotId || item.slot_id) === (slot.id || slotId));
                 for (let j = 0; j < itemsForSlot.length; j++) {

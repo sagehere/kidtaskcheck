@@ -429,6 +429,7 @@ export async function ensureChildScheduleSchema(env) {
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CHECK(end_minutes>start_minutes)
 )`).run();
+    await ensureColumn(env, "child_schedule_slots", "plan_html", "plan_html TEXT NOT NULL DEFAULT ''");
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_schedule_items (
   id TEXT PRIMARY KEY,
   slot_id TEXT NOT NULL REFERENCES child_schedule_slots(id) ON DELETE CASCADE,
@@ -442,6 +443,62 @@ export async function ensureChildScheduleSchema(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_slot ON child_schedule_items(slot_id, sort_order)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_child_task ON child_schedule_items(child_id, task_id)").run();
 }
+const SESSION_DAYS = 180;
+const REMEMBER_SESSION_DAYS = 3650;
+const REMEMBER_SESSION_RENEW_AFTER_MS = 30 * 86400000;
+
+export function sessionDurationDays(rememberMe = false) {
+    return rememberMe ? REMEMBER_SESSION_DAYS : SESSION_DAYS;
+}
+
+export function sessionExpiresAt(rememberMe = false) {
+    return new Date(Date.now() + sessionDurationDays(rememberMe) * 86400000).toISOString();
+}
+
+export function isRememberedSession(session) {
+    return Date.parse(session?.expires_at || "") - Date.now() > (SESSION_DAYS + 30) * 86400000;
+}
+
+export async function renewRememberedSession(env, session) {
+    if (!isRememberedSession(session)) return false;
+    const remaining = Date.parse(session.expires_at) - Date.now();
+    if (remaining > (REMEMBER_SESSION_DAYS * 86400000) - REMEMBER_SESSION_RENEW_AFTER_MS) return false;
+    await env.DB.prepare("UPDATE sessions SET expires_at=? WHERE token=?")
+        .bind(sessionExpiresAt(true), session.token)
+        .run();
+    return true;
+}
+
+export function sanitizeSchedulePlanHtml(value) {
+    let html = String(value || "").slice(0, 5000);
+    html = html.replace(/<\s*(script|style|iframe|object|embed|svg|math)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "");
+    html = html.replace(/<!--[\s\S]*?-->/g, "");
+    html = html.replace(/<\s*\/?\s*([a-z0-9-]+)(?:\s[^>]*)?>/gi, (match, rawTag) => {
+        const tag = String(rawTag || "").toLowerCase();
+        const allowed = new Set(["p", "br", "strong", "b", "em", "i", "u", "ul", "ol", "li"]);
+        if (!allowed.has(tag)) return "";
+        const closing = /^<\s*\//.test(match);
+        if (tag === "br") return "<br>";
+        return closing ? `</${tag}>` : `<${tag}>`;
+    });
+    return html.trim();
+}
+
+export function schedulePlanHtmlToText(value) {
+    return String(value || "")
+        .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+        .replace(/<\s*\/\s*(p|li)\s*>/gi, "\n")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
 export async function ensureRetentionSchema(env) {
     await ensureColumn(env, "point_ledger", "revoked_at", "revoked_at TEXT");
     await ensureColumn(env, "point_ledger", "revoke_ledger_id", "revoke_ledger_id TEXT REFERENCES point_ledger(id)");
@@ -1547,12 +1604,12 @@ export async function withLedgerSources(env, rows, offset) {
         ...(await ledgerSource(env, row))
     })));
 }
-export function sessionCookie(value, env, request) {
+export function sessionCookie(value, env, request, maxAgeDays = SESSION_DAYS) {
     const proto = request?.headers?.get("x-forwarded-proto")
         || (request?.url ? new URL(request.url).protocol.replace(":", "") : "")
         || (env.APP_URL ? new URL(env.APP_URL).protocol.replace(":", "") : "http");
     const secure = proto === "https" ? "; Secure" : "";
-    return `session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${180 * 86400}${secure}`;
+    return `session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeDays * 86400}${secure}`;
 }
 export function validateNonGetRequest(request, env) {
     if (request.method === "GET" || request.method === "HEAD") return;

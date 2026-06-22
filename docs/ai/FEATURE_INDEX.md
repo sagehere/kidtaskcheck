@@ -1,6 +1,6 @@
 # FEATURE_INDEX
 
-最近更新：2026-06-21
+最近更新：2026-06-22
 
 本文件按“用户可感知功能”组织维护入口。P0 是默认必须读取文件；P1 是实现跨界或需要上下文时再读；P2 是 schema、测试、部署或高风险排查时谨慎读取。
 
@@ -14,8 +14,8 @@
 - 主要调用链：`App Login.submit` -> `api("/auth/login")` -> `handleApiRequest` -> `handleAuthRoutes`; `App.loadMe` -> `/auth/me`; `Shell.logout` -> `/auth/logout`
 - 相关状态：`sessions`、`users.status`、`users.role`、浏览器 unauthorized 事件
 - 相关接口：`POST /api/auth/login`、`GET /api/auth/me`、`POST /api/auth/logout`
-- 修改注意事项：登录错误要保留后端凭据错误；生产默认管理员密码限制在 router/bootstrap 路径；角色分流改动会影响三个角色 App；会话过期时间已从 7 天延长到 180 天（auth.js + utils.js cookie Max-Age 同步更新）。
-- 最近更新时间：2026-06-14
+- 修改注意事项：登录错误要保留后端凭据错误；生产默认管理员密码限制在 router/bootstrap 路径；角色分流改动会影响三个角色 App；会话默认 180 天；登录页支持“记住我”，选中后使用长期滚动会话（auth.js + utils.js cookie Max-Age 与 sessions.expires_at 同步更新）。
+- 最近更新时间：2026-06-22
 
 ## 2. 管理员后台
 
@@ -119,19 +119,19 @@
 - 相关状态：`task_submissions`、`point_ledger`、`child_pins`、`ai_child_greetings`
 - 相关接口：`GET /api/dashboard/child-summary`、`GET /api/dashboard/child`、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`GET /api/points/ledger`
 - 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；`.required-card::before` 覆盖默认渐变色为琥珀/红色。
-- 最近更新时间：2026-06-21
+- 最近更新时间：2026-06-22
 
 ## 10. 积分账本、报表、打印与归档
 
 - 功能说明：家长/孩子查看积分账本，家长导出孩子打印清单和周/月报表，系统保留活动归档。
-- 用户入口：家长孩子卡片中的账本/打印/报表按钮，孩子积分账本。
+- 用户入口：家长孩子卡片中的账本/打印/报表按钮，孩子积分账本；周/月报表与打印输出包含日程计划并适配 A4。
 - P0：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`server/api/routes/parent.js`、`server/api/routes/shared.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`server/api/ai/cache.js`、`src/types/api.ts`
 - P2：`migrations/0010_retention_reports_feedback_recall.sql`、`migrations/0015_ai_report_commentaries.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
 - 主要调用链：ledger modal -> `/points/ledger`; print -> `/children/:id/export-print`; report -> `/children/:id/report?period=weekly|monthly`; report may read cached AI commentary.
 - 相关状态：`point_ledger`、`activity_archives`、`ai_report_commentaries`、`system_settings.timezone_offset_minutes`
 - 相关接口：`GET /api/points/ledger`、`GET /api/children/:id/export-print`、`GET /api/children/:id/report`
-- 修改注意事项：报表应使用已完成周期语义；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口；`ledgerSource` 支持 `task_required_penalty` 来源类型，展示"必做扣分 / 任务：{title}"；`/points/ledger` 按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序，报表账本窗口用 `datetime(created_at)` 过滤，`localTimeText` 将旧 `YYYY-MM-DD HH:mm:ss` 视为 UTC 后再应用系统时区；积分清单 UI 使用共享 `LedgerModal`，默认按今天/昨天/日期分组，支持收入、支出、冻结/补救、任务、奖励、反馈、必做扣分筛选，不显示顶部汇总卡片。
+- 修改注意事项：报表应使用已完成周期语义；所有报表打印应适配 A4；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口；`ledgerSource` 支持 `task_required_penalty` 来源类型，展示"必做扣分 / 任务：{title}"；`/points/ledger` 按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序，报表账本窗口用 `datetime(created_at)` 过滤，`localTimeText` 将旧 `YYYY-MM-DD HH:mm:ss` 视为 UTC 后再应用系统时区；积分清单 UI 使用共享 `LedgerModal`，默认按今天/昨天/日期分组，支持收入、支出、冻结/补救、任务、奖励、反馈、必做扣分筛选，不显示顶部汇总卡片。
 - 最近更新时间：2026-06-13
 
 ## 11. 通知中心
@@ -162,29 +162,29 @@
 
 ## 13. AI 图片、漫画报告、打印清单图与日程表图
 
-- 功能说明：家长配置图片 AI，生成周/月漫画报告图片，生成孩子打印清单图，生成日程表插画图，并轮询异步任务状态。
+- 功能说明：家长配置图片 AI，生成周/月漫画报告图片，生成孩子打印清单图，生成日程表插画图，并轮询异步任务状态；日程图 prompt 会包含每个时段的计划文本和可完成任务。
 - 用户入口：家长 AI 设置/孩子报表或打印相关按钮。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`server/api/ai/cartoon-queue.js`、`server/api/ai/orchestrator.js`、`server/api/ai/providers.js`
 - P1：`server/api/ai/prompt.js`、`server/api/ai/cache.js`、`server/api/ai/index.js`、`server/api/utils.js`、`src/types/api.ts`
-- P2：`migrations/0019_parent_ai_image_settings.sql`、`migrations/0020_parent_delegates_operator_cartoon_jobs.sql`、`migrations/0021_remediable_criticism_daily_greeting_checklist_images.sql`、`migrations/0023_child_schedule.sql`、`tests/ai.test.ts`
+- P2：`migrations/0019_parent_ai_image_settings.sql`、`migrations/0020_parent_delegates_operator_cartoon_jobs.sql`、`migrations/0021_remediable_criticism_daily_greeting_checklist_images.sql`、`migrations/0023_child_schedule.sql`、`migrations/0025_child_schedule_plan_html.sql`、`tests/ai.test.ts`、`tests/api.test.ts`
 - 主要调用链：`ParentApp.generateCartoonReport` -> `/parent/ai-service/cartoon-report` -> queue -> provider image generation -> polling `/parent/ai-service/cartoon-report/:jobId`; checklist image -> `/children/:id/print-checklist-image` -> polling job endpoint; schedule image -> `/children/:id/schedule-image` -> polling job endpoint。
 - 相关状态：`parent_ai_service_settings.image_*`、`ai_cartoon_report_jobs`、`ai_print_checklist_image_jobs`、`ai_schedule_image_jobs`
 - 相关接口：`POST /api/parent/ai-service/cartoon-report`、`GET /api/parent/ai-service/cartoon-report/:jobId`、`POST /api/children/:id/print-checklist-image`、`GET /api/children/:id/print-checklist-image/:jobId`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
-- 修改注意事项：图片 AI 配置和文本 AI 配置分开；前端轮询有 abort controller；不要把生成结果持久化到新存储，除非用户明确要求。日程表图使用独立 `ai_schedule_image_jobs` 表和独立提示词 `schedule_image_prompt`。
-- 最近更新时间：2026-06-21
+- 修改注意事项：图片 AI 配置和文本 AI 配置分开；前端轮询有 abort controller；不要把生成结果持久化到新存储，除非用户明确要求。日程表图使用独立 `ai_schedule_image_jobs` 表和独立提示词 `schedule_image_prompt`；生成 prompt 时将 `plan_html` 转为纯文本，避免把 HTML 标签直接交给图片模型。
+- 最近更新时间：2026-06-22
 
 ## 14. 孩子日程表
 
-- 功能说明：孩子编辑每日日程表设置（时段增删、任务拖入/移除），所有时段共用一个任务卡片池；任务达到本周期可完成次数上限后从任务池移除。家长打印日程表、绘制日程表插画。日程表为每日模板结构，独立于清单/报表。日程表绘图有独立提示词。
+- 功能说明：孩子编辑每日日程表设置（时段增删、每个时段的“计划”富文本、任务拖入/移除），所有时段共用一个任务卡片池；任务达到本周期可完成次数上限后从任务池移除。家长打印日程表、绘制日程表插画。日程表为每日模板结构，独立于清单/报表。日程表绘图有独立提示词。
 - 用户入口：孩子端"日程表设置"标签页、任务墙右上角"日程表显示"开关、家长报告弹窗中"打印日程表/绘制日程表"。
 - P0：`src/ChildApp.tsx`、`src/ParentApp.tsx`、`server/api/routes/child.js`、`server/api/routes/parent.js`
 - P1：`server/api/utils.js`、`server/api/ai/cartoon-queue.js`、`server/api/ai/orchestrator.js`、`server/api/ai/cache.js`、`server/api/ai/index.js`、`src/types/api.ts`、`src/styles.css`
-- P2：`migrations/0023_child_schedule.sql`、`migrations/0024_child_schedule_drop_unique.sql`、`tests/migration.test.ts`
+- P2：`migrations/0023_child_schedule.sql`、`migrations/0024_child_schedule_drop_unique.sql`、`migrations/0025_child_schedule_plan_html.sql`、`tests/migration.test.ts`、`tests/api.test.ts`
 - 主要调用链：`ChildApp.scheduleTab` -> GET/PUT `/children/:id/schedule`; `ParentApp.exportChildSchedulePrint` -> window.open `/children/:id/schedule-print`; `ParentApp.generateScheduleImage` -> POST `/children/:id/schedule-image` -> queue -> polling -> GET `/children/:id/schedule-image/:jobId`
-- 相关状态：`child_schedule_slots`、`child_schedule_items`、`ai_schedule_image_jobs`、`parent_ai_service_settings.schedule_image_prompt`
+- 相关状态：`child_schedule_slots.plan_html`、`child_schedule_items`、`ai_schedule_image_jobs`、`parent_ai_service_settings.schedule_image_prompt`
 - 相关接口：`GET/PUT /api/children/:id/schedule`、`GET /api/children/:id/schedule-print`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
-- 修改注意事项：日程表只有孩子可编辑、家长只读查看；任务拖入日程表不改变积分/任务提交流程；任务卡片池使用任务自身 `limitCount/limit_count` 作为可安排次数口径，不使用必做 `required_count`；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023 需 bootstrap 运行 ensureChildScheduleSchema。
-- 最近更新时间：2026-06-21
+- 修改注意事项：日程表只有孩子可编辑、家长只读查看；每个时段包含“计划”和“可完成任务”两行；计划富文本保存为受限 HTML；任务拖入日程表不改变积分/任务提交流程；任务卡片池使用任务自身 `limitCount/limit_count` 作为可安排次数口径，不使用必做 `required_count`；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023/0025 需 bootstrap 运行 ensureChildScheduleSchema。
+- 最近更新时间：2026-06-22
 
 ## 15. 配置导入导出与开发测试入口
 

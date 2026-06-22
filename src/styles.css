@@ -1313,6 +1313,16 @@ button:disabled {
 .child-tab-list,
 .schedule-slots,
 .schedule-slot-items,
+.schedule-slot-task-card {
+  min-height: 0;
+  padding: 0.65rem;
+}
+.schedule-slot-task-card .card-head {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.schedule-slot-task-card .card-action {
+  display: none;
+}
 .schedule-slot-tasks-pool {
   max-height: none;
   overflow: visible;
@@ -1913,6 +1923,22 @@ button:disabled {
 .success-text { color: var(--success-color, #22c55e); }
 .error-text { color: var(--error-color, #ef4444); }
 
+
+.remember-login {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted, #64748b);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.remember-login input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent, #157f6f);
+}
+
 .report-divider {
   border: none;
   border-top: 1px solid var(--border-color, #ddd);
@@ -1967,10 +1993,45 @@ button:disabled {
   width: auto;
   font-size: 0.9em;
 }
-.schedule-slot-items {
+.schedule-slot-section {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+.schedule-slot-section-title {
+  color: var(--muted, #64748b);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.schedule-rich-toolbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 0.25rem;
+}
+.schedule-rich-toolbar .icon {
+  width: 30px;
+  height: 30px;
+}
+.schedule-plan-editor {
+  min-height: 76px;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 6px;
+  padding: 0.55rem 0.65rem;
+  background: #fff;
+  outline: none;
+  line-height: 1.5;
+}
+.schedule-plan-editor:focus {
+  border-color: var(--accent, #157f6f);
+  box-shadow: 0 0 0 2px rgba(21, 127, 111, 0.12);
+}
+.schedule-plan-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted, #94a3b8);
+}
+.schedule-slot-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.5rem;
   padding: 0.4rem 0;
   min-height: 2rem;
 }

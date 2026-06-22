@@ -8,7 +8,7 @@
   - 调整日程时段标题布局，使时间文本紧靠时段名称，并通过 `2ch` 间距保持约两格字符距离。
 - 业务代码：`src/ChildApp.tsx`、`src/styles.css`
 - 文档：`docs/ai/FEATURE_INDEX.md`、`docs/ai/CHANGELOG_AI.md`
-- 验证：`rtk npm run build`、`rtk git diff --check`
+- 验证：`rtk npx tsc --noEmit`、`rtk npx vite build --config vite.config.mjs --configLoader runner`、`rtk npm test`、`rtk git diff --check`
 ## 2026-06-22
 
 - 类型：缺陷修复 / UI 调整

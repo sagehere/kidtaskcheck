@@ -250,6 +250,20 @@ export async function ensureColumn(env, table, name, ddl) {
         await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${ddl}`).run();
     }
 }
+export async function ensureConfigGroupsSchema(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS config_groups (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT NOT NULL REFERENCES users(id),
+  name TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 0,
+  activated_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(parent_id, name)
+)`).run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_config_groups_parent ON config_groups(parent_id, updated_at DESC)").run();
+}
 export function weekdayJson(value) {
     return JSON.stringify(normalizeWeekdays(value));
 }
@@ -1315,6 +1329,254 @@ export async function insertTaskFromConfig(env, parentId, item, categoryMap, chi
     await replaceAssignees(env, parentId, "task_assignees", "task_id", taskId, requestedAssignees.map((name) => childMap.get(name)).filter(Boolean));
     return { created: true, ignoredAssignments: requestedAssignees.filter((name) => !childMap.get(name)).length };
 }
+const CONFIG_GROUP_LIMIT = 5;
+
+function configGroupName(input) {
+    return String(input || "").trim().slice(0, 40);
+}
+
+function configSnapshotSummary(snapshot) {
+    return {
+        categories: Array.isArray(snapshot?.categories) ? snapshot.categories.length : 0,
+        tasks: Array.isArray(snapshot?.tasks) ? snapshot.tasks.length : 0,
+        rewards: Array.isArray(snapshot?.rewards) ? snapshot.rewards.length : 0,
+        achievements: Array.isArray(snapshot?.achievements) ? snapshot.achievements.length : 0,
+        feedbackTemplates: Array.isArray(snapshot?.feedbackTemplates) ? snapshot.feedbackTemplates.length : 0
+    };
+}
+
+function parseConfigSnapshot(value) {
+    try {
+        const parsed = JSON.parse(value || "{}");
+        return parsed && typeof parsed === "object" ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+
+async function activeChildrenForSnapshot(env, parentId) {
+    const rows = (await env.DB.prepare("SELECT id, display_name FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(parentId).all()).results;
+    return {
+        ids: new Set(rows.map((row) => row.id)),
+        byName: new Map(rows.map((row) => [row.display_name, row.id]))
+    };
+}
+
+function configSnapshotPayload(config, childNames) {
+    const childName = (childId) => childNames.get(childId) || "";
+    return {
+        version: 1,
+        capturedAt: nowIso(),
+        categories: config.categories.map((item) => ({ ...item })),
+        tasks: config.tasks.map((item) => ({
+            ...item,
+            assignee_names: (item.assignees || []).map(childName).filter(Boolean)
+        })),
+        rewards: config.rewards.map((item) => ({
+            ...item,
+            assignee_names: (item.assignees || []).map(childName).filter(Boolean)
+        })),
+        achievements: config.achievements.map((item) => ({ ...item })),
+        feedbackTemplates: config.feedbackTemplates.map((item) => ({ ...item }))
+    };
+}
+
+export async function captureConfigGroupSnapshot(env, parentId) {
+    await ensureConfigGroupsSchema(env);
+    await ensureCategorySchema(env);
+    await ensureRewardOnceSchema(env);
+    await ensureAchievementSchema(env);
+    await ensureFeedbackSchema(env);
+    await ensureCriticismRemedySchema(env);
+    const config = await listConfig(env, parentId);
+    const children = (await env.DB.prepare("SELECT id, display_name FROM children WHERE parent_id=? AND deleted_at IS NULL").bind(parentId).all()).results;
+    const childNames = new Map(children.map((child) => [child.id, child.display_name]));
+    return configSnapshotPayload(config, childNames);
+}
+
+function configGroupSummaryRow(row) {
+    return {
+        id: row.id,
+        name: row.name,
+        is_active: Number(row.is_active || 0),
+        activated_at: row.activated_at || null,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        summary: configSnapshotSummary(parseConfigSnapshot(row.snapshot_json))
+    };
+}
+
+export async function listConfigGroups(env, parentId) {
+    await ensureConfigGroupsSchema(env);
+    const rows = (await env.DB.prepare("SELECT * FROM config_groups WHERE parent_id=? ORDER BY is_active DESC, updated_at DESC, created_at DESC").bind(parentId).all()).results;
+    return rows.map(configGroupSummaryRow);
+}
+
+export async function createConfigGroup(env, parentId, nameInput) {
+    await ensureConfigGroupsSchema(env);
+    const name = configGroupName(nameInput);
+    if (!name) throw fail("BAD_REQUEST", "请输入配置组名称");
+    const count = await env.DB.prepare("SELECT COUNT(*) v FROM config_groups WHERE parent_id=?").bind(parentId).first();
+    if (Number(count?.v || 0) >= CONFIG_GROUP_LIMIT) throw fail("CONFIG_GROUP_LIMIT", "每个家长最多保存 5 个配置组", 409);
+    const exists = await env.DB.prepare("SELECT id FROM config_groups WHERE parent_id=? AND name=?").bind(parentId, name).first();
+    if (exists) throw fail("NAME_EXISTS", "配置组名称已存在", 409);
+    const snapshot = await captureConfigGroupSnapshot(env, parentId);
+    const groupId = id();
+    const now = nowIso();
+    await env.DB.prepare("INSERT INTO config_groups (id, parent_id, name, snapshot_json, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)")
+        .bind(groupId, parentId, name, JSON.stringify(snapshot), now, now)
+        .run();
+    return configGroupSummaryRow(await env.DB.prepare("SELECT * FROM config_groups WHERE id=? AND parent_id=?").bind(groupId, parentId).first());
+}
+
+export async function renameConfigGroup(env, parentId, groupId, nameInput) {
+    await ensureConfigGroupsSchema(env);
+    const name = configGroupName(nameInput);
+    if (!name) throw fail("BAD_REQUEST", "请输入配置组名称");
+    const group = await env.DB.prepare("SELECT id FROM config_groups WHERE id=? AND parent_id=?").bind(groupId, parentId).first();
+    if (!group) throw fail("NOT_FOUND", "配置组不存在", 404);
+    const exists = await env.DB.prepare("SELECT id FROM config_groups WHERE parent_id=? AND name=? AND id<>?").bind(parentId, name, groupId).first();
+    if (exists) throw fail("NAME_EXISTS", "配置组名称已存在", 409);
+    await env.DB.prepare("UPDATE config_groups SET name=?, updated_at=? WHERE id=? AND parent_id=?").bind(name, nowIso(), groupId, parentId).run();
+    return configGroupSummaryRow(await env.DB.prepare("SELECT * FROM config_groups WHERE id=? AND parent_id=?").bind(groupId, parentId).first());
+}
+
+export async function refreshConfigGroupSnapshot(env, parentId, groupId) {
+    await ensureConfigGroupsSchema(env);
+    const group = await env.DB.prepare("SELECT id FROM config_groups WHERE id=? AND parent_id=?").bind(groupId, parentId).first();
+    if (!group) throw fail("NOT_FOUND", "配置组不存在", 404);
+    const snapshot = await captureConfigGroupSnapshot(env, parentId);
+    await env.DB.prepare("UPDATE config_groups SET snapshot_json=?, updated_at=? WHERE id=? AND parent_id=?")
+        .bind(JSON.stringify(snapshot), nowIso(), groupId, parentId)
+        .run();
+    return configGroupSummaryRow(await env.DB.prepare("SELECT * FROM config_groups WHERE id=? AND parent_id=?").bind(groupId, parentId).first());
+}
+
+function snapshotAssignees(item, children) {
+    const rawIds = Array.isArray(item.assignees) ? item.assignees : [];
+    const rawNames = Array.isArray(item.assignee_names || item.assigneeNames) ? (item.assignee_names || item.assigneeNames) : [];
+    const ids = [...rawIds, ...rawNames.map((name) => children.byName.get(name)).filter(Boolean)];
+    const unique = [...new Set(ids)];
+    return { valid: unique.filter((childId) => children.ids.has(childId)), skipped: unique.filter((childId) => !children.ids.has(childId)).length };
+}
+
+export async function applyConfigGroupSnapshot(env, parentId, snapshot) {
+    await ensureCategorySchema(env);
+    await ensureRewardOnceSchema(env);
+    await ensureRequiredTaskSchema(env);
+    await ensureAchievementSchema(env);
+    await ensureFeedbackSchema(env);
+    await ensureCriticismRemedySchema(env);
+    const stats = { categories: 0, tasks: 0, rewards: 0, achievements: 0, feedbackTemplates: 0, skippedAssignments: 0 };
+    const children = await activeChildrenForSnapshot(env, parentId);
+    await env.DB.transaction(async () => {
+        const now = nowIso();
+        await env.DB.prepare("UPDATE tasks SET deleted_at=?, updated_at=? WHERE parent_id=? AND deleted_at IS NULL").bind(now, now, parentId).run();
+        await env.DB.prepare("UPDATE rewards SET deleted_at=?, updated_at=? WHERE parent_id=? AND deleted_at IS NULL").bind(now, now, parentId).run();
+        await env.DB.prepare("UPDATE achievements SET deleted_at=?, updated_at=? WHERE parent_id=? AND deleted_at IS NULL").bind(now, now, parentId).run();
+        await env.DB.prepare("UPDATE feedback_templates SET deleted_at=?, updated_at=? WHERE parent_id=? AND deleted_at IS NULL").bind(now, now, parentId).run();
+        await env.DB.prepare("UPDATE task_categories SET is_active=0 WHERE owner_id=? AND is_system=0 AND is_active=1").bind(parentId).run();
+        const categoryMap = new Map();
+        for (const item of snapshot.categories || []) {
+            if (Number(item.is_system || 0) === 1) {
+                const system = await env.DB.prepare("SELECT id FROM task_categories WHERE id=? AND is_system=1 AND is_active=1").bind(item.id).first();
+                if (system) {
+                    categoryMap.set(item.id, system.id);
+                    continue;
+                }
+            }
+            const categoryId = id();
+            await env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value, is_system, is_active) VALUES (?, ?, ?, ?, ?, 0, 1)")
+                .bind(categoryId, parentId, String(item.name || "未命名分类").trim() || "未命名分类", item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "⭐")
+                .run();
+            categoryMap.set(item.id, categoryId);
+            stats.categories += 1;
+        }
+        const fallbackCategoryId = categoryMap.values().next().value;
+        const taskMap = new Map();
+        for (const item of snapshot.tasks || []) {
+            const categoryId = categoryMap.get(item.category_id || item.categoryId) || fallbackCategoryId;
+            if (!categoryId) continue;
+            const period = item.period || "daily";
+            const taskId = id();
+            const isRequired = period !== "once" && Number(item.is_required ?? item.isRequired ?? 0) ? 1 : 0;
+            const requiredCount = isRequired ? Math.max(1, Number(item.required_count ?? item.requiredCount ?? 1)) : 0;
+            const requiredPenaltyPoints = isRequired ? Math.max(0, Number(item.required_penalty_points ?? item.requiredPenaltyPoints ?? 0)) : 0;
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, parentId, categoryId, String(item.title || "未命名任务").trim() || "未命名任务", item.description || "", period, Number(item.points || 0), item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "✅", Math.max(1, Number(item.limit_count ?? item.limitCount ?? 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints)
+                .run();
+            const assigned = snapshotAssignees(item, children);
+            stats.skippedAssignments += assigned.skipped;
+            await replaceAssignees(env, parentId, "task_assignees", "task_id", taskId, assigned.valid);
+            taskMap.set(item.id, taskId);
+            stats.tasks += 1;
+        }
+        const achievementMap = new Map();
+        for (const item of snapshot.achievements || []) {
+            const rule = normalizeAchievementInput({
+                ...item,
+                targetTaskId: taskMap.get(item.target_task_id || item.targetTaskId) || "",
+                targetCategoryId: categoryMap.get(item.target_category_id || item.targetCategoryId) || ""
+            });
+            const achievementId = id();
+            await env.DB.prepare("INSERT INTO achievements (id, parent_id, title, description, metric, threshold, icon_type, icon_value, rule_type, window_type, window_start, window_end, target_task_id, target_category_id, unlock_reward_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(achievementId, parentId, String(item.title || "未命名成就").trim() || "未命名成就", item.description || "", rule.metric, rule.threshold, item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "🏅", rule.ruleType, rule.windowType, rule.windowStart, rule.windowEnd, rule.targetTaskId, rule.targetCategoryId, null)
+                .run();
+            achievementMap.set(item.id, achievementId);
+            stats.achievements += 1;
+        }
+        for (const item of snapshot.rewards || []) {
+            const rewardId = id();
+            await env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, stock, limit_period, limit_count, redeem_weekdays, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(rewardId, parentId, String(item.title || "未命名奖励").trim() || "未命名奖励", item.description || "", Number(item.cost_points ?? item.costPoints ?? 0), item.stock ?? null, item.limit_period || item.limitPeriod || "daily", (item.limit_period || item.limitPeriod) === "once" ? 1 : item.limit_count ?? item.limitCount ?? 1, weekdayJson(item.redeemWeekdays || item.redeem_weekdays), item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "🎁", Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1)
+                .run();
+            const assigned = snapshotAssignees(item, children);
+            stats.skippedAssignments += assigned.skipped;
+            await replaceAssignees(env, parentId, "reward_assignees", "reward_id", rewardId, assigned.valid);
+            const prerequisites = (item.prerequisites || []).map((prerequisite) => ({
+                ...prerequisite,
+                task_id: taskMap.get(prerequisite.task_id || prerequisite.taskId)
+            })).filter((prerequisite) => prerequisite.task_id);
+            await replaceRewardPrerequisites(env, parentId, rewardId, prerequisites);
+            const requiredAchievementId = achievementMap.get(item.requiredAchievementId || item.required_achievement_id);
+            if (requiredAchievementId) await replaceRewardAchievementRequirement(env, parentId, rewardId, requiredAchievementId);
+            stats.rewards += 1;
+        }
+        for (const item of snapshot.feedbackTemplates || snapshot.feedback_templates || []) {
+            const kind = item.kind === "criticism" ? "criticism" : "praise";
+            const points = Math.max(0, Number(item.points || 0));
+            const isRemediable = kind === "criticism" && Number(item.is_remediable ?? item.isRemediable ?? 0) === 1 ? 1 : 0;
+            const remedyPoints = isRemediable ? Math.max(0, Math.min(points, Number(item.remedy_points ?? item.remedyPoints ?? 0))) : 0;
+            const remedyDeadlineHours = isRemediable ? Math.max(1, Number(item.remedy_deadline_hours ?? item.remedyDeadlineHours ?? 24)) : 24;
+            await env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(id(), parentId, kind, String(item.title || "未命名条款").trim() || "未命名条款", item.description || "", points, item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || (kind === "praise" ? "✨" : "⚠️"), Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1, isRemediable, isRemediable ? String(item.remedy_condition ?? item.remedyCondition ?? "").trim() : "", remedyPoints, remedyDeadlineHours)
+                .run();
+            stats.feedbackTemplates += 1;
+        }
+    });
+    return stats;
+}
+
+export async function activateConfigGroup(env, parentId, groupId) {
+    await ensureConfigGroupsSchema(env);
+    const group = await env.DB.prepare("SELECT * FROM config_groups WHERE id=? AND parent_id=?").bind(groupId, parentId).first();
+    if (!group) throw fail("NOT_FOUND", "配置组不存在", 404);
+    const snapshot = parseConfigSnapshot(group.snapshot_json);
+    const stats = await applyConfigGroupSnapshot(env, parentId, snapshot);
+    const now = nowIso();
+    await env.DB.prepare("UPDATE config_groups SET is_active=0 WHERE parent_id=?").bind(parentId).run();
+    await env.DB.prepare("UPDATE config_groups SET is_active=1, activated_at=?, updated_at=? WHERE id=? AND parent_id=?").bind(now, now, groupId, parentId).run();
+    return { ...configGroupSummaryRow(await env.DB.prepare("SELECT * FROM config_groups WHERE id=? AND parent_id=?").bind(groupId, parentId).first()), applied: stats };
+}
+
+export async function deleteConfigGroup(env, parentId, groupId) {
+    await ensureConfigGroupsSchema(env);
+    const result = await env.DB.prepare("DELETE FROM config_groups WHERE id=? AND parent_id=?").bind(groupId, parentId).run();
+    if ((result?.meta?.changes || 0) < 1) throw fail("NOT_FOUND", "配置组不存在", 404);
+    return true;
+}
+
 export async function importConfig(env, parentId, input) {
     await ensureFeedbackSchema(env);
     await ensureCriticismRemedySchema(env);

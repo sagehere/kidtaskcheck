@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users, AlertTriangle
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ScheduleImageResponse, ParentDelegate, RemedyCriticismItem } from "./types/api";
+import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ScheduleImageResponse, ParentDelegate, RemedyCriticismItem, ConfigGroupSummary } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -21,6 +21,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [achievements, setAchievements] = useState<any[]>([]);
   const [feedbackTemplates, setFeedbackTemplates] = useState<FeedbackTemplate[]>([]);
+  const [configGroups, setConfigGroups] = useState<ConfigGroupSummary[]>([]);
   const [delegates, setDelegates] = useState<ParentDelegate[]>([]);
   const [dashboard, setDashboard] = useState<any>({ children: [], pendingSubmissions: [], pendingRedemptions: [] });
   const [activeTab, setActiveTab] = useState<"pending" | "children" | "settings">("pending");
@@ -156,13 +157,14 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     loadLockRef.current = true;
     let hasError = false;
     try {
-      const [childRows, categoryRows, taskRows, rewardRows, achievementRows, feedbackRows, delegateRows, dash, aiRows] = await Promise.all([
+      const [childRows, categoryRows, taskRows, rewardRows, achievementRows, feedbackRows, groupRows, delegateRows, dash, aiRows] = await Promise.all([
         api<Child[]>("/children").catch(() => { hasError = true; return [] as Child[]; }),
         api<Category[]>("/task-categories").catch(() => { hasError = true; return [] as Category[]; }),
         api<Task[]>("/tasks").catch(() => { hasError = true; return [] as Task[]; }),
         api<Reward[]>("/rewards").catch(() => { hasError = true; return [] as Reward[]; }),
         api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
         api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; }),
+        api<ConfigGroupSummary[]>("/config-groups").catch(() => { hasError = true; return [] as ConfigGroupSummary[]; }),
         me.role === "parent" ? api<ParentDelegate[]>("/parent/delegates").catch(() => []) : Promise.resolve([] as ParentDelegate[]),
         api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; }),
         api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ ...EMPTY_AI_DRAFT, updatedAt: "" }))
@@ -173,6 +175,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       setRewards(rewardRows);
       setAchievements(achievementRows);
       setFeedbackTemplates(feedbackRows);
+      setConfigGroups(groupRows);
       setDelegates(delegateRows);
       setDashboard(dash);
       storeSavedAiConfig(aiRows as ParentAiServiceStoredConfig);
@@ -209,6 +212,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     if (activeTab !== "settings") return;
     const frame = window.requestAnimationFrame(() => {
       document.querySelectorAll<HTMLElement>(".settings-surface > .setting-group").forEach((section, index) => {
+        if (section.classList.contains("config-groups-panel")) { section.classList.add("is-open"); return; }
         const title = section.querySelector<HTMLElement>(":scope > .panel-title");
         if (!title || title.querySelector(".settings-collapse-toggle")) return;
         section.classList.add("is-collapsed");
@@ -270,6 +274,29 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   async function remove(path: string, note: string, confirmText: string) {
     if (!window.confirm(confirmText)) return;
     await run(() => api(path, { method: "DELETE" }), note);
+  }
+
+  async function createConfigGroup(name: string) {
+    await run(() => api("/config-groups", { method: "POST", body: JSON.stringify({ name }) }), "配置组已保存");
+  }
+
+  async function renameConfigGroup(group: ConfigGroupSummary, name: string) {
+    await run(() => api(`/config-groups/${group.id}`, { method: "PATCH", body: JSON.stringify({ name }) }), "配置组已重命名");
+  }
+
+  async function refreshConfigGroup(group: ConfigGroupSummary) {
+    if (!window.confirm(`确认用当前设置覆盖配置组「${group.name}」的内容？`)) return;
+    await run(() => api(`/config-groups/${group.id}/refresh`, { method: "POST", body: JSON.stringify({}) }), "配置组内容已更新");
+  }
+
+  async function activateConfigGroup(group: ConfigGroupSummary) {
+    if (!window.confirm(`确认激活配置组「${group.name}」？当前任务、奖励、成就称号和条款会被该配置组覆盖，历史记录会保留。`)) return;
+    await run(() => api(`/config-groups/${group.id}/activate`, { method: "POST", body: JSON.stringify({}) }), "配置组已激活");
+  }
+
+  async function deleteConfigGroup(group: ConfigGroupSummary) {
+    if (!window.confirm(`确认删除配置组「${group.name}」？配置组内保存的内容会一并删除，当前已应用的设置不受影响。`)) return;
+    await run(() => api(`/config-groups/${group.id}`, { method: "DELETE" }), "配置组已删除");
   }
 
   async function review(id: string, approved: boolean) {
@@ -645,6 +672,14 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
 
       {activeTab === "settings" && (
         <div className="settings-surface">
+          <ConfigGroupsPanel
+            groups={configGroups}
+            onCreate={(name) => void createConfigGroup(name)}
+            onRename={(group, name) => void renameConfigGroup(group, name)}
+            onRefresh={(group) => void refreshConfigGroup(group)}
+            onActivate={(group) => void activateConfigGroup(group)}
+            onDelete={(group) => void deleteConfigGroup(group)}
+          />
           <section className="panel setting-group">
             <div className="panel-title"><Star /><h2>任务配置</h2></div>
             <div className="grid two">
@@ -1667,6 +1702,79 @@ export function DelegateManager({ delegates, onCreate, onUpdate, onDelete }: { d
             </article>
           );
         }) : <Empty text="暂无协同管理账号" />}
+      </div>
+    </section>
+  );
+}
+
+function configGroupSummaryText(group: ConfigGroupSummary) {
+  const s = group.summary;
+  return `分类 ${s.categories} / 任务 ${s.tasks} / 奖励 ${s.rewards} / 成就 ${s.achievements} / 条款 ${s.feedbackTemplates}`;
+}
+
+function configGroupTime(value?: string | null) {
+  if (!value) return "尚未激活";
+  const time = new Date(value).getTime();
+  if (Number.isNaN(time)) return value;
+  return new Date(time).toLocaleString();
+}
+
+export function ConfigGroupsPanel({ groups, onCreate, onRename, onRefresh, onActivate, onDelete }: { groups: ConfigGroupSummary[]; onCreate: (name: string) => void; onRename: (group: ConfigGroupSummary, name: string) => void; onRefresh: (group: ConfigGroupSummary) => void; onActivate: (group: ConfigGroupSummary) => void; onDelete: (group: ConfigGroupSummary) => void }) {
+  const [name, setName] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [editingName, setEditingName] = useState("");
+  function submitCreate(event: React.FormEvent) {
+    event.preventDefault();
+    const nextName = name.trim();
+    if (!nextName) return;
+    onCreate(nextName);
+    setName("");
+  }
+  function startRename(group: ConfigGroupSummary) {
+    setEditingId(group.id);
+    setEditingName(group.name);
+  }
+  function submitRename(group: ConfigGroupSummary) {
+    const nextName = editingName.trim();
+    if (!nextName) return;
+    onRename(group, nextName);
+    setEditingId("");
+    setEditingName("");
+  }
+  const full = groups.length >= 5;
+  return (
+    <section className="panel setting-group config-groups-panel is-open">
+      <div className="panel-title"><BadgeCheck /><h2>配置组</h2><span className="pill">{groups.length}/5</span></div>
+      <form className="config-group-create" onSubmit={submitCreate}>
+        <Field label="配置组名称">
+          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={40} placeholder="例如：上学日配置" disabled={full} />
+        </Field>
+        <button type="submit" disabled={full || !name.trim()}><Plus size={18} />保存当前设置</button>
+      </form>
+      {full && <div className="info">最多保存 5 个配置组。删除不需要的配置组后可以继续保存。</div>}
+      <div className="config-group-list">
+        {groups.length ? groups.map((group) => (
+          <article className={`config-group-card ${group.is_active ? "active" : ""}`} key={group.id}>
+            <div className="config-group-main">
+              {editingId === group.id ? (
+                <div className="config-group-edit">
+                  <input value={editingName} onChange={(event) => setEditingName(event.target.value)} maxLength={40} autoFocus />
+                  <button className="icon" type="button" title="保存名称" aria-label="保存名称" onClick={() => submitRename(group)}><Check size={18} /></button>
+                </div>
+              ) : (
+                <h3>{group.name}</h3>
+              )}
+              <small>{configGroupSummaryText(group)}</small>
+              <small>{group.is_active ? `已激活：${configGroupTime(group.activated_at)}` : `更新：${configGroupTime(group.updated_at)}`}</small>
+            </div>
+            <div className="config-group-actions">
+              {group.is_active ? <span className="status-badge">当前</span> : <button className="secondary" type="button" onClick={() => onActivate(group)}><BadgeCheck size={16} />激活</button>}
+              <button className="icon" type="button" title="重命名" aria-label="重命名" onClick={() => startRename(group)}><Edit3 size={18} /></button>
+              <button className="icon" type="button" title="用当前设置更新" aria-label="用当前设置更新" onClick={() => onRefresh(group)}><RotateCcw size={18} /></button>
+              <button className="icon danger" type="button" title="删除" aria-label="删除" onClick={() => onDelete(group)}><Trash2 size={18} /></button>
+            </div>
+          </article>
+        )) : <Empty text="暂无配置组" />}
       </div>
     </section>
   );

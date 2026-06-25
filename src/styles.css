@@ -86,6 +86,83 @@ button:disabled {
   display: none;
 }
 
+.config-groups-panel {
+  border-color: #8bd3c7;
+}
+
+.config-group-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.config-group-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.config-group-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.config-group-card.active {
+  border-color: #15a38d;
+  background: #f1fffb;
+}
+
+.config-group-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.config-group-main h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.config-group-main small {
+  color: var(--muted);
+}
+
+.config-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.config-group-edit {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.config-group-edit input {
+  min-width: 0;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #dff8f2;
+  color: #0d7466;
+  font-weight: 800;
+}
+
 .collapsible-title {
   padding-right: 44px;
 }
@@ -1736,6 +1813,15 @@ button:disabled {
   .grid.two,
   .grid.three {
     grid-template-columns: 1fr;
+  }
+
+  .config-group-create,
+  .config-group-card {
+    grid-template-columns: 1fr;
+  }
+
+  .config-group-actions {
+    justify-content: flex-start;
   }
 
   .cards,

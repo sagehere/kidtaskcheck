@@ -1,3 +1,13 @@
+# 2026-06-23
+
+- 类型：文档新增
+- 范围：AI 项目理解说明
+- 摘要：
+  - 新增 `docs/ai/PROJECT_BRIEF_FOR_AI.md`，用叙事化方式说明产品心智模型、角色、技术栈、关键入口文件、主要业务域、数据不变量、维护工作流、验证命令和部署形态。
+  - 明确该文件不替代 `PROJECT_INDEX.md` / `FEATURE_INDEX.md`，后续具体维护任务仍需按功能索引定位 P0/P1/P2 文件。
+- 业务代码：未修改
+- 验证：文档结构检查
+
 ## 2026-06-22
 
 - 类型：缺陷修复 / UI 调整
@@ -256,3 +266,17 @@
 - 摘要：初始化 AI 功能索引驱动维护模式，建立项目总览、按用户可感知功能拆分的读取索引、后续 Codex 任务规则和 AI 修改日志。
 - 业务代码：未修改
 - 验证：文档结构检查
+
+
+## 2026-06-25
+
+- 类型：功能新增
+- 范围：家长设置配置组
+- 摘要：
+  - 新增配置组持久化表和 API，支持保存当前任务配置、奖励配置、成就称号、表扬与批评条款为命名配置组。
+  - 设置页顶部新增配置组面板，支持新建、重命名、用当前设置更新、激活覆盖和删除，限制每个家长最多 5 个配置组。
+  - 激活配置组时事务化软删除/停用当前四块设置并按快照重建，保留历史任务提交、兑换、积分和已解锁记录。
+- 业务代码：`server/api/utils.js`、`server/api/routes/shared.js`、`src/ParentApp.tsx`、`src/types/api.ts`、`src/styles.css`
+- 迁移：`migrations/0026_config_groups.sql`
+- 测试：`tests/api.test.ts`、`tests/migration.test.ts`
+- 验证：`rtk npm test -- --run tests/api.test.ts tests/migration.test.ts`

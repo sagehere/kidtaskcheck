@@ -9,7 +9,7 @@ const MIGRATIONS_DIR = join(__dirname, "../migrations");
 describe("Task 35: Migration Smoke Test", () => {
   it("all 25 migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(25);
+    expect(files.length).toBe(26);
     const db = new SqliteTestDb();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
@@ -39,6 +39,7 @@ describe("Task 35: Migration Smoke Test", () => {
     expect(tableNames).toContain("child_pins");
     expect(tableNames).toContain("reward_prerequisites");
     expect(tableNames).toContain("system_settings");
+    expect(tableNames).toContain("config_groups");
     expect(tableNames).toContain("activity_archives");
     expect(tableNames).toContain("ai_child_greetings");
     expect(tableNames).toContain("ai_report_commentaries");

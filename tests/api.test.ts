@@ -252,6 +252,73 @@ describe("Parent delegate accounts", () => {
   });
 });
 
+describe("Config groups", () => {
+  let env: any;
+  let pid: string, cid: string, tid: string, rid: string, aid: string;
+  const parentActor = () => ({ type: "user", role: "parent", id: pid, displayName: "Parent A", operatorLabel: "妈妈" });
+
+  beforeEach(async () => {
+    env = resetTestEnv();
+    await ensureAdmin(env);
+    pid = id();
+    cid = id();
+    tid = id();
+    rid = id();
+    aid = id();
+    env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, 'cg-parent', 'x', 'parent', 'Parent A')").bind(pid).run();
+    env.DB.prepare("INSERT INTO children (id, parent_id, username, password_hash, display_name, status) VALUES (?, ?, 'cg-child', 'x', 'Child A', 'active')").bind(cid, pid).run();
+    env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value) VALUES ('cg-cat', ?, 'Study', 'emoji', '📚')").bind(pid).run();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, points, period, limit_count, point_type, enabled_weekdays, is_required, required_count, required_penalty_points) VALUES (?, ?, 'cg-cat', 'Read', 'Read book', 6, 'daily', 2, 'earn', '[1,2,3,4,5]', 1, 2, 3)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, limit_period, limit_count, redeem_weekdays, icon_type, icon_value, is_active) VALUES (?, ?, 'Snack', 'Cookie', 8, 'daily', 1, '[1,2,3,4,5]', 'emoji', '🎁', 1)").bind(rid, pid).run();
+    env.DB.prepare("INSERT INTO achievements (id, parent_id, title, description, metric, threshold, rule_type, target_task_id, icon_type, icon_value, unlock_reward_id) VALUES (?, ?, 'Reader', 'Read twice', 'tasks_completed', 2, 'specific_task_completed', ?, 'emoji', '🏅', ?)").bind(aid, pid, tid, rid).run();
+    env.DB.prepare("INSERT INTO reward_assignees (reward_id, child_id) VALUES (?, ?)").bind(rid, cid).run();
+    env.DB.prepare("INSERT INTO reward_prerequisites (reward_id, task_id, required_count) VALUES (?, ?, 2)").bind(rid, tid).run();
+    env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, description, points, icon_type, icon_value, is_active, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours) VALUES (?, ?, 'criticism', 'Late', 'Try again', 5, 'emoji', '⚠️', 1, 1, 'Apologize', 2, 12)").bind(id(), pid).run();
+  });
+
+  it("saves and activates a config group as an overwrite snapshot", async () => {
+    const create = await safe(handleSharedRoutes, "/config-groups", "POST", makeRequest("POST", "/config-groups", { name: "上学日" }), env, parentActor(), new URL("http://localhost/api/config-groups"));
+    expect(create!.status).toBe(200);
+    const created = await create!.json();
+    expect(created.data.summary).toMatchObject({ tasks: 1, rewards: 1, achievements: 1, feedbackTemplates: 1 });
+
+    env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value) VALUES ('cg-cat-2', ?, 'Play', 'emoji', '🎮')").bind(pid).run();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, points, period, limit_count, point_type, enabled_weekdays) VALUES (?, ?, 'cg-cat-2', 'Game', 1, 'daily', 1, 'earn', '[1]')").bind(id(), pid).run();
+    env.DB.prepare("INSERT INTO feedback_templates (id, parent_id, kind, title, points, icon_type, icon_value) VALUES (?, ?, 'praise', 'Nice', 1, 'emoji', '✨')").bind(id(), pid).run();
+
+    const activatePath = "/config-groups/" + created.data.id + "/activate";
+    const activated = await safe(handleSharedRoutes, activatePath, "POST", makeRequest("POST", activatePath, {}), env, parentActor(), new URL("http://localhost/api" + activatePath));
+    expect(activated!.status).toBe(200);
+    const activePayload = await activated!.json();
+    expect(activePayload.data.is_active).toBe(1);
+    expect(activePayload.data.applied).toMatchObject({ tasks: 1, rewards: 1, achievements: 1, feedbackTemplates: 1 });
+
+    const tasks = env.DB.prepare("SELECT id, title, is_required, required_count, required_penalty_points FROM tasks WHERE parent_id=? AND deleted_at IS NULL").bind(pid).all().results as any[];
+    expect(tasks.map((task) => task.title)).toEqual(["Read"]);
+    expect(tasks[0]).toMatchObject({ is_required: 1, required_count: 2, required_penalty_points: 3 });
+    const assigned = env.DB.prepare("SELECT COUNT(*) v FROM task_assignees WHERE task_id=? AND child_id=?").bind(tasks[0].id, cid).first() as any;
+    expect(Number(assigned.v)).toBe(1);
+    const prerequisite = env.DB.prepare("SELECT t.title, rp.required_count FROM reward_prerequisites rp JOIN tasks t ON t.id=rp.task_id JOIN rewards r ON r.id=rp.reward_id WHERE r.parent_id=? AND r.deleted_at IS NULL").bind(pid).first() as any;
+    expect(prerequisite).toMatchObject({ title: "Read", required_count: 2 });
+    const achievement = env.DB.prepare("SELECT a.title, t.title target_title FROM achievements a JOIN tasks t ON t.id=a.target_task_id WHERE a.parent_id=? AND a.deleted_at IS NULL").bind(pid).first() as any;
+    expect(achievement).toMatchObject({ title: "Reader", target_title: "Read" });
+    const required = env.DB.prepare("SELECT a.title achievement_title, r.title reward_title FROM achievements a JOIN rewards r ON r.id=a.unlock_reward_id WHERE a.parent_id=? AND a.deleted_at IS NULL").bind(pid).first() as any;
+    expect(required).toMatchObject({ achievement_title: "Reader", reward_title: "Snack" });
+    const feedback = env.DB.prepare("SELECT title, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL").bind(pid).first() as any;
+    expect(feedback).toMatchObject({ title: "Late", is_remediable: 1, remedy_condition: "Apologize", remedy_points: 2, remedy_deadline_hours: 12 });
+  });
+
+  it("limits each parent to five config groups", async () => {
+    for (let index = 1; index <= 5; index += 1) {
+      const response = await safe(handleSharedRoutes, "/config-groups", "POST", makeRequest("POST", "/config-groups", { name: "配置 " + index }), env, parentActor(), new URL("http://localhost/api/config-groups"));
+      expect(response!.status).toBe(200);
+    }
+    const blocked = await safe(handleSharedRoutes, "/config-groups", "POST", makeRequest("POST", "/config-groups", { name: "第六个" }), env, parentActor(), new URL("http://localhost/api/config-groups"));
+    expect(blocked!.status).toBe(409);
+  });
+});
+
 describe("Input Validation", () => {
   it("validateHttpsUrl rejects localhost", () => {
     expect(validateHttpsUrl("http://localhost:8080", "URL")).not.toBeNull();

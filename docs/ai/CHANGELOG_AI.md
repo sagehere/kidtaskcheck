@@ -280,3 +280,15 @@
 - 迁移：`migrations/0026_config_groups.sql`
 - 测试：`tests/api.test.ts`、`tests/migration.test.ts`
 - 验证：`rtk npm test -- --run tests/api.test.ts tests/migration.test.ts`
+
+## 2026-06-25
+
+- 类型：功能增强
+- 范围：家长设置配置清空
+- 摘要：
+  - 配置组面板新增“清空当前配置”按钮，可一键清空任务配置、奖励配置、成就称号、批评与奖励条款。
+  - 新增 `POST /api/config/clear-current`，按当前家长作用域软删除/停用四类当前配置，保留历史记录和配置组快照。
+  - 扩展配置组 API 测试，覆盖清空统计、跨家长隔离、快照保留和历史关联记录保留。
+- 业务代码：`server/api/utils.js`、`server/api/routes/shared.js`、`src/ParentApp.tsx`、`src/styles.css`
+- 测试：`tests/api.test.ts`
+- 验证：`rtk npm test -- --run tests/api.test.ts`

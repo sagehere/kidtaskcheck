@@ -309,6 +309,36 @@ describe("Config groups", () => {
     expect(feedback).toMatchObject({ title: "Late", is_remediable: 1, remedy_condition: "Apologize", remedy_points: 2, remedy_deadline_hours: 12 });
   });
 
+  it("clears current configurable content while preserving history and other parents", async () => {
+    const groupResponse = await safe(handleSharedRoutes, "/config-groups", "POST", makeRequest("POST", "/config-groups", { name: "清空前快照" }), env, parentActor(), new URL("http://localhost/api/config-groups"));
+    expect(groupResponse!.status).toBe(200);
+    const groupPayload = await groupResponse!.json();
+
+    const otherParentId = id();
+    const otherCategoryId = id();
+    const otherTaskId = id();
+    env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, 'cg-other-parent', 'x', 'parent', 'Other Parent')").bind(otherParentId).run();
+    env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value) VALUES (?, ?, 'Other Study', 'emoji', '📘')").bind(otherCategoryId, otherParentId).run();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, points, period, limit_count, point_type, enabled_weekdays) VALUES (?, ?, ?, 'Other Read', '', 1, 'daily', 1, 'earn', '[1]')").bind(otherTaskId, otherParentId, otherCategoryId).run();
+
+    const response = await safe(handleSharedRoutes, "/config/clear-current", "POST", makeRequest("POST", "/config/clear-current", {}), env, parentActor(), new URL("http://localhost/api/config/clear-current"));
+    expect(response!.status).toBe(200);
+    const payload = await response!.json();
+    expect(payload.data).toMatchObject({ categories: 1, tasks: 1, rewards: 1, achievements: 1, feedbackTemplates: 1 });
+
+    expect(Number((env.DB.prepare("SELECT COUNT(*) v FROM tasks WHERE parent_id=? AND deleted_at IS NULL").bind(pid).first() as any).v)).toBe(0);
+    expect(Number((env.DB.prepare("SELECT COUNT(*) v FROM rewards WHERE parent_id=? AND deleted_at IS NULL").bind(pid).first() as any).v)).toBe(0);
+    expect(Number((env.DB.prepare("SELECT COUNT(*) v FROM achievements WHERE parent_id=? AND deleted_at IS NULL").bind(pid).first() as any).v)).toBe(0);
+    expect(Number((env.DB.prepare("SELECT COUNT(*) v FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL").bind(pid).first() as any).v)).toBe(0);
+    expect(Number((env.DB.prepare("SELECT COUNT(*) v FROM task_categories WHERE owner_id=? AND is_system=0 AND is_active=1").bind(pid).first() as any).v)).toBe(0);
+
+    expect(Number((env.DB.prepare("SELECT COUNT(*) v FROM task_assignees WHERE task_id=? AND child_id=?").bind(tid, cid).first() as any).v)).toBe(1);
+    const savedGroup = env.DB.prepare("SELECT snapshot_json FROM config_groups WHERE id=? AND parent_id=?").bind(groupPayload.data.id, pid).first() as any;
+    expect(JSON.parse(savedGroup.snapshot_json).tasks).toHaveLength(1);
+    expect(Number((env.DB.prepare("SELECT COUNT(*) v FROM tasks WHERE parent_id=? AND deleted_at IS NULL").bind(otherParentId).first() as any).v)).toBe(1);
+    expect(Number((env.DB.prepare("SELECT COUNT(*) v FROM task_categories WHERE owner_id=? AND is_active=1").bind(otherParentId).first() as any).v)).toBe(1);
+  });
+
   it("limits each parent to five config groups", async () => {
     for (let index = 1; index <= 5; index += 1) {
       const response = await safe(handleSharedRoutes, "/config-groups", "POST", makeRequest("POST", "/config-groups", { name: "配置 " + index }), env, parentActor(), new URL("http://localhost/api/config-groups"));

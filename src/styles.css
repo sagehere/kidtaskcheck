@@ -103,6 +103,12 @@ button:disabled {
   margin-top: 12px;
 }
 
+.config-group-danger-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
 .config-group-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

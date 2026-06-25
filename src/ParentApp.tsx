@@ -299,6 +299,11 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     await run(() => api(`/config-groups/${group.id}`, { method: "DELETE" }), "配置组已删除");
   }
 
+  async function clearCurrentConfig() {
+    if (!window.confirm("确认清空当前任务配置、奖励配置、成就称号和批评与奖励条款？历史记录会保留，配置组快照不受影响。")) return;
+    await run(() => api("/config/clear-current", { method: "POST", body: JSON.stringify({}) }), "当前配置已清空");
+  }
+
   async function review(id: string, approved: boolean) {
     if (!approved) {
       const note = window.prompt("请输入驳回原因，孩子会看到这条说明", "");
@@ -679,6 +684,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             onRefresh={(group) => void refreshConfigGroup(group)}
             onActivate={(group) => void activateConfigGroup(group)}
             onDelete={(group) => void deleteConfigGroup(group)}
+            onClearCurrent={() => void clearCurrentConfig()}
           />
           <section className="panel setting-group">
             <div className="panel-title"><Star /><h2>任务配置</h2></div>
@@ -1719,7 +1725,7 @@ function configGroupTime(value?: string | null) {
   return new Date(time).toLocaleString();
 }
 
-export function ConfigGroupsPanel({ groups, onCreate, onRename, onRefresh, onActivate, onDelete }: { groups: ConfigGroupSummary[]; onCreate: (name: string) => void; onRename: (group: ConfigGroupSummary, name: string) => void; onRefresh: (group: ConfigGroupSummary) => void; onActivate: (group: ConfigGroupSummary) => void; onDelete: (group: ConfigGroupSummary) => void }) {
+export function ConfigGroupsPanel({ groups, onCreate, onRename, onRefresh, onActivate, onDelete, onClearCurrent }: { groups: ConfigGroupSummary[]; onCreate: (name: string) => void; onRename: (group: ConfigGroupSummary, name: string) => void; onRefresh: (group: ConfigGroupSummary) => void; onActivate: (group: ConfigGroupSummary) => void; onDelete: (group: ConfigGroupSummary) => void; onClearCurrent: () => void }) {
   const [name, setName] = useState("");
   const [editingId, setEditingId] = useState("");
   const [editingName, setEditingName] = useState("");
@@ -1751,6 +1757,9 @@ export function ConfigGroupsPanel({ groups, onCreate, onRename, onRefresh, onAct
         </Field>
         <button type="submit" disabled={full || !name.trim()}><Plus size={18} />保存当前设置</button>
       </form>
+      <div className="config-group-danger-row">
+        <button className="secondary danger" type="button" onClick={onClearCurrent}><Trash2 size={18} />清空当前配置</button>
+      </div>
       {full && <div className="info">最多保存 5 个配置组。删除不需要的配置组后可以继续保存。</div>}
       <div className="config-group-list">
         {groups.length ? groups.map((group) => (

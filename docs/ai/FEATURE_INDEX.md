@@ -202,13 +202,13 @@
 
 ## 16. 配置组
 
-- 功能说明：家长在设置页保存、重命名、更新、删除和激活配置组；配置组快照包含任务配置、奖励配置、成就称号、表扬与批评条款，最多保存 5 个。
+- 功能说明：家长在设置页保存、重命名、更新、删除和激活配置组，并可一键清空当前任务配置、奖励配置、成就称号、表扬与批评条款；配置组快照包含四类配置，最多保存 5 个。
 - 用户入口：家长设置页顶部“配置组”面板。
 - P0：`src/ParentApp.tsx`、`server/api/routes/shared.js`、`server/api/utils.js`
 - P1：`src/types/api.ts`、`src/styles.css`
 - P2：`migrations/0026_config_groups.sql`、`tests/api.test.ts`、`tests/migration.test.ts`
-- 主要调用链：`ParentApp.load` -> `/config-groups`；保存/重命名/更新/激活/删除 -> `handleSharedRoutes` -> config group helpers；激活使用事务覆盖四类设置并保留历史记录。
+- 主要调用链：`ParentApp.load` -> `/config-groups`；保存/重命名/更新/激活/删除/清空当前配置 -> `handleSharedRoutes` -> config group helpers；激活使用事务覆盖四类设置并保留历史记录；清空当前配置复用同一软删除/停用语义但不删除配置组快照。
 - 相关状态：`config_groups`、`task_categories`、`tasks`、`rewards`、`achievements`、`feedback_templates`。
-- 相关接口：`GET/POST /api/config-groups`、`PATCH/DELETE /api/config-groups/:id`、`POST /api/config-groups/:id/refresh`、`POST /api/config-groups/:id/activate`。
-- 修改注意事项：配置组激活是覆盖当前四块设置而非普通导入；当前业务配置采用软删除/停用以保留历史记录；配置组删除只删除保存的快照；每个家长最多 5 个配置组。
+- 相关接口：`GET/POST /api/config-groups`、`PATCH/DELETE /api/config-groups/:id`、`POST /api/config-groups/:id/refresh`、`POST /api/config-groups/:id/activate`、`POST /api/config/clear-current`。
+- 修改注意事项：配置组激活是覆盖当前四块设置而非普通导入；当前业务配置采用软删除/停用以保留历史记录；配置组删除只删除保存的快照；一键清空只清当前可编辑四块配置，不清孩子账号、历史提交、兑换、积分账本或配置组快照；每个家长最多 5 个配置组。
 - 最近更新时间：2026-06-25

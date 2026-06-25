@@ -1,4 +1,4 @@
-﻿import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup } from "../utils.js";
+﻿import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup, clearCurrentConfig } from "../utils.js";
 import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes, activeRemedyCriticisms } from "../utils.js";
 
 export async function handleSharedRoutes(path, method, request, env, actor, url) {
@@ -119,6 +119,10 @@ LIMIT 50`)
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         await ensureRewardOnceSchema(env);
         return ok(await importConfig(env, a.id, await body(request)));
+    }
+    if (path === "/config/clear-current" && method === "POST") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        return ok(await clearCurrentConfig(env, a.id));
     }
     if (path === "/config-groups" && method === "GET") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);

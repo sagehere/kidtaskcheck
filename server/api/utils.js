@@ -1558,6 +1558,25 @@ export async function applyConfigGroupSnapshot(env, parentId, snapshot) {
     return stats;
 }
 
+export async function clearCurrentConfig(env, parentId) {
+    const current = await listConfig(env, parentId);
+    const cleared = {
+        categories: current.categories.filter((item) => Number(item.is_system || 0) === 0).length,
+        tasks: current.tasks.length,
+        rewards: current.rewards.length,
+        achievements: current.achievements.length,
+        feedbackTemplates: current.feedbackTemplates.length
+    };
+    await applyConfigGroupSnapshot(env, parentId, {
+        categories: [],
+        tasks: [],
+        rewards: [],
+        achievements: [],
+        feedbackTemplates: []
+    });
+    return cleared;
+}
+
 export async function activateConfigGroup(env, parentId, groupId) {
     await ensureConfigGroupsSchema(env);
     const group = await env.DB.prepare("SELECT * FROM config_groups WHERE id=? AND parent_id=?").bind(groupId, parentId).first();

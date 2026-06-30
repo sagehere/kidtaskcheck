@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
-import { AlertTriangle, Image, KeyRound, Plus, RefreshCw, Settings, Shield, Trash2, UserRound, Users } from "lucide-react";
-import { Me, Gallery, SystemErrorLog, SystemSettings } from "./types/api";
+import { AlertTriangle, Database, Image, KeyRound, Plus, RefreshCw, Settings, Shield, Trash2, UserRound, Users } from "lucide-react";
+import { Me, Gallery, MaintenanceStats, SystemErrorLog, SystemSettings } from "./types/api";
 import { api } from "./api/client";
 import { Field, FeedbackToast } from "./components/UI";
 import { Shell } from "./components/Shell";
@@ -16,21 +16,24 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [imageForm, setImageForm] = useState({ name: "", url: "", usage: "general" });
   const [settings, setSettings] = useState<SystemSettings>({ timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" });
   const [systemLogs, setSystemLogs] = useState<SystemErrorLog[]>([]);
+  const [maintenanceStats, setMaintenanceStats] = useState<MaintenanceStats | null>(null);
   const [expandedLogId, setExpandedLogId] = useState("");
 
   async function load() {
     let hasError = false;
     try {
-      const [userRows, galleryRows, settingRows, logRows] = await Promise.all([
+      const [userRows, galleryRows, settingRows, logRows, maintenanceRows] = await Promise.all([
         api<any[]>("/admin/users").catch(() => { hasError = true; return []; }),
         api<Gallery[]>("/admin/gallery-images").catch(() => { hasError = true; return []; }),
         api<SystemSettings>("/admin/system-settings").catch(() => { hasError = true; return { timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00" }; }),
-        api<SystemErrorLog[]>("/admin/system-error-logs").catch(() => { hasError = true; return []; })
+        api<SystemErrorLog[]>("/admin/system-error-logs").catch(() => { hasError = true; return []; }),
+        api<MaintenanceStats>("/admin/maintenance-stats").catch(() => { hasError = true; return null; })
       ]);
       setUsers(userRows as any[]);
       setGallery(galleryRows as Gallery[]);
       setSettings(settingRows as SystemSettings);
       setSystemLogs(logRows as SystemErrorLog[]);
+      setMaintenanceStats(maintenanceRows as MaintenanceStats | null);
       if (hasError) setError("部分数据加载失败，可点击重试");
     } catch (err) {
       setError("加载数据失败，可点击重试");
@@ -110,6 +113,19 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     }, "系统设置已更新");
   }
 
+  function formatDateTime(value?: string) {
+    return value ? new Date(value).toLocaleString() : "尚未运行";
+  }
+
+  function formatPercent(value: number) {
+    return `${Math.round(value * 100)}%`;
+  }
+
+  const lastCleanup = maintenanceStats?.lastRunStats || {};
+  const lastAiCleanup = Object.values((lastCleanup.aiJobHistory || {}) as Record<string, number>).reduce((sum, value) => sum + Number(value || 0), 0);
+  const aiTerminalRecent = maintenanceStats?.aiJobs.terminalRecent || 0;
+  const aiFailedRecent = maintenanceStats?.aiJobs.failedRecent || 0;
+  const aiFailureRate = aiTerminalRecent > 0 ? aiFailedRecent / aiTerminalRecent : 0;
   async function refreshSystemLogs() {
     await run(async () => {
       const rows = await api<SystemErrorLog[]>("/admin/system-error-logs");
@@ -176,6 +192,53 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           </div>
           <button className="primary"><Settings size={18} />保存系统设置</button>
         </form>
+      </section>
+      <section className="panel setting-group">
+        <div className="panel-title">
+          <Database />
+          <h2>维护与 AI 队列</h2>
+          <button type="button" className="icon" title="刷新" aria-label="刷新维护统计" onClick={() => void load()}>
+            <RefreshCw size={18} />
+          </button>
+        </div>
+        <div className="maintenance-metrics">
+          <div>
+            <span>最近维护</span>
+            <strong>{formatDateTime(maintenanceStats?.lastRunAt)}</strong>
+          </div>
+          <div>
+            <span>AI 作业保留</span>
+            <strong>{maintenanceStats?.retentionDays.aiJob ?? 92} 天</strong>
+          </div>
+          <div>
+            <span>上次清理 AI 作业</span>
+            <strong>{lastAiCleanup}</strong>
+          </div>
+          <div>
+            <span>AI 队列积压</span>
+            <strong>{maintenanceStats?.aiJobs.totalBacklog ?? 0}</strong>
+          </div>
+          <div>
+            <span>近 7 天失败率</span>
+            <strong>{formatPercent(aiFailureRate)}</strong>
+          </div>
+        </div>
+        <div className="list maintenance-queue-list">
+          {(maintenanceStats?.aiJobs.queues || []).map((queue) => (
+            <article className="row maintenance-queue-row" key={queue.key}>
+              <div>
+                <strong>{queue.label}</strong>
+                <span>待处理 {queue.pending} · 处理中 {queue.processing} · 总量 {queue.total}</span>
+              </div>
+              <div className="maintenance-queue-values">
+                <span>积压 {queue.backlog}</span>
+                <span>近 7 天失败 {queue.failedRecent}/{queue.terminalRecent}</span>
+                <strong>{formatPercent(queue.failureRate)}</strong>
+              </div>
+            </article>
+          ))}
+          {!maintenanceStats && <div className="empty">维护统计加载中...</div>}
+        </div>
       </section>
       <section className="panel setting-group">
         <div className="panel-title">

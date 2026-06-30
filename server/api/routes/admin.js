@@ -1,5 +1,5 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES } from "../../../src/lib/domain.js";
-import { ok, fail, json, body, id, nowIso, requireRole, hashPassword, verifyPassword, usernameExists, clampTimezoneOffset, timezoneOffsetMinutes, timezoneLabel, updateSetting, validateInput, INPUT_RULES, validateEnum, ensureSystemErrorLogs, cleanupSystemErrorLogs } from "../utils.js";
+import { ok, fail, json, body, id, nowIso, requireRole, hashPassword, verifyPassword, usernameExists, clampTimezoneOffset, timezoneOffsetMinutes, timezoneLabel, updateSetting, validateInput, INPUT_RULES, validateEnum, ensureSystemErrorLogs, cleanupSystemErrorLogs, getMaintenanceStats } from "../utils.js";
 
 function parseMetadata(value) {
     if (!value) return null;
@@ -38,6 +38,10 @@ export async function handleAdminRoutes(path, method, request, env, actor) {
             .bind(username, displayName, passwordHash, nowIso(), admin.id)
             .run();
         return ok({ id: admin.id, username, displayName, role: "admin" });
+    }
+    if (path === "/admin/maintenance-stats" && method === "GET") {
+        requireRole(actor, ["admin"]);
+        return ok(await getMaintenanceStats(env));
     }
     if (path === "/admin/system-settings") {
         requireRole(actor, ["admin"]);

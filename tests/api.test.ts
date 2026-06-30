@@ -949,6 +949,28 @@ describe("Parent AI Service Validation", () => {
     const r = await safe(handleAdminRoutes, "/admin/gallery-images", "POST", makeRequest("POST", "/admin/gallery-images", { name: "test", url: "file:///etc/passwd" }), env, actor);
     expect(r!.status).toBe(400);
   });
+  it("allows only admins to read maintenance stats and AI queue health", async () => {
+    const { actor } = await asAdmin();
+    const childId = await seedAiChild(1);
+    const recent = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    env.DB.prepare("INSERT INTO ai_generation_queue (id, parent_id, child_id, type, period_key, status, created_at) VALUES ('q-pending', ?, ?, 'greeting', 'p1', 'pending', ?)").bind(parentId, childId, recent).run();
+    env.DB.prepare("INSERT INTO ai_generation_queue (id, parent_id, child_id, type, period_key, status, created_at, completed_at) VALUES ('q-failed', ?, ?, 'report_weekly', 'p2', 'failed', ?, ?)").bind(parentId, childId, recent, recent).run();
+    env.DB.prepare("INSERT INTO ai_generation_queue (id, parent_id, child_id, type, period_key, status, created_at, completed_at) VALUES ('q-completed', ?, ?, 'report_monthly', 'p3', 'completed', ?, ?)").bind(parentId, childId, recent, recent).run();
+
+    const okRes = await safe(handleAdminRoutes, "/admin/maintenance-stats", "GET", makeRequest("GET", "/admin/maintenance-stats"), env, actor);
+    expect(okRes!.status).toBe(200);
+    const data = await okRes!.json();
+    expect(data.data.retentionDays.aiJob).toBe(92);
+    expect(data.data.aiJobs.totalBacklog).toBeGreaterThanOrEqual(1);
+    const queue = data.data.aiJobs.queues.find((item: any) => item.key === "generationQueue");
+    expect(queue.backlog).toBe(1);
+    expect(queue.failedRecent).toBe(1);
+    expect(queue.terminalRecent).toBe(2);
+    expect(queue.failureRate).toBe(0.5);
+
+    const denied = await safe(handleAdminRoutes, "/admin/maintenance-stats", "GET", makeRequest("GET", "/admin/maintenance-stats"), env, { type: "user", role: "parent", id: parentId });
+    expect(denied!.status).toBe(403);
+  });
   it("allows only admins to read system error logs", async () => {
     const { actor } = await asAdmin();
     env.DB.prepare("INSERT INTO system_error_logs (id, source, message, created_at) VALUES ('log-1', 'api', 'boom', '2026-06-01T00:00:00.000Z')").run();

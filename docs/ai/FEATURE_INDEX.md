@@ -1,6 +1,6 @@
 # FEATURE_INDEX
 
-最近更新：2026-06-22
+最近更新：2026-06-30
 
 本文件按“用户可感知功能”组织维护入口。P0 是默认必须读取文件；P1 是实现跨界或需要上下文时再读；P2 是 schema、测试、部署或高风险排查时谨慎读取。
 
@@ -19,15 +19,15 @@
 
 ## 2. 管理员后台
 
-- 功能说明：管理员管理家长账号、图库、系统时区、系统错误日志和管理员自身资料。
+- 功能说明：管理员管理家长账号、图库、系统时区、系统错误日志、维护统计、AI 队列健康度和管理员自身资料。
 - 用户入口：管理员登录后的后台页面。
 - P0：`src/AdminApp.tsx`、`server/api/routes/admin.js`、`server/api/utils.js`
 - P1：`src/types/api.ts`、`src/components/UI.tsx`、`server/api/router.mjs`
 - P2：`migrations/0001_initial.sql`、`migrations/0018_system_error_logs_and_ai_queue_controls.sql`、`tests/api.test.ts`
-- 主要调用链：`AdminApp.load` -> `/admin/users`、`/admin/gallery-images`、`/admin/system-settings`、`/admin/system-error-logs` -> `handleAdminRoutes`
-- 相关状态：`users`、`gallery_images`、`system_settings.timezone_offset_minutes`、`system_error_logs`
-- 相关接口：`GET/POST /api/admin/users`、`PATCH/DELETE /api/admin/users/:id`、`PATCH /api/admin/profile`、`GET/POST /api/admin/gallery-images`、`GET/PATCH /api/admin/system-settings`、`GET/POST /api/admin/system-error-logs`
-- 修改注意事项：删除家长是归档/停用而非硬删；生产图片 URL 协议限制不同；时区影响报表和 scheduled AI。
+- 主要调用链：`AdminApp.load` -> `/admin/users`、`/admin/gallery-images`、`/admin/system-settings`、`/admin/system-error-logs`、`/admin/maintenance-stats` -> `handleAdminRoutes`
+- 相关状态：`users`、`gallery_images`、`system_settings.timezone_offset_minutes`、`system_settings.cleanup_last_*`、`system_error_logs`、AI job tables
+- 相关接口：`GET/POST /api/admin/users`、`PATCH/DELETE /api/admin/users/:id`、`PATCH /api/admin/profile`、`GET/POST /api/admin/gallery-images`、`GET/PATCH /api/admin/system-settings`、`GET /api/admin/maintenance-stats`、`GET/POST /api/admin/system-error-logs`
+- 修改注意事项：删除家长是归档/停用而非硬删；生产图片 URL 协议限制不同；时区影响报表和 scheduled AI；维护统计只读展示最近清理数量、AI 队列积压和 7 天失败率。
 - 最近更新时间：2026-06-12
 
 ## 3. 家长待办审核
@@ -58,7 +58,7 @@
 
 ## 5. 任务与分类配置
 
-- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制和展示图标。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算。现有任务列表中显示必做规则摘要。
+- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制和展示图标。Emoji vendor 数据仅在 `EmojiSelect` 打开选择器时动态加载。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算。现有任务列表中显示必做规则摘要。
 - 用户入口：家长设置/配置区域中的任务和分类表单。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/EmojiSelect.tsx`
@@ -127,12 +127,14 @@
 - 用户入口：家长孩子卡片中的账本/打印/报表按钮，孩子积分账本；周/月报表与打印输出包含日程计划并适配 A4。
 - P0：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`server/api/routes/parent.js`、`server/api/routes/shared.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`server/api/ai/cache.js`、`src/types/api.ts`
-- P2：`migrations/0010_retention_reports_feedback_recall.sql`、`migrations/0015_ai_report_commentaries.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
+- P2：`migrations/0010_retention_reports_feedback_recall.sql`、`migrations/0015_ai_report_commentaries.sql`、`migrations/0028_report_window_indexes.sql`、`migrations/0028_report_window_indexes.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
 - 主要调用链：ledger modal -> `/points/ledger`; print -> `/children/:id/export-print`; report -> `/children/:id/report?period=weekly|monthly`; report may read cached AI commentary.
 - 相关状态：`point_ledger`、`activity_archives`、`ai_report_commentaries`、`system_settings.timezone_offset_minutes`
 - 相关接口：`GET /api/points/ledger`、`GET /api/children/:id/export-print`、`GET /api/children/:id/report`
 - 修改注意事项：报表应使用已完成周期语义；所有报表打印应适配 A4；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口；`ledgerSource` 支持 `task_required_penalty` 来源类型，展示"必做扣分 / 任务：{title}"；`/points/ledger` 按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序，报表账本窗口用 `datetime(created_at)` 过滤，`localTimeText` 将旧 `YYYY-MM-DD HH:mm:ss` 视为 UTC 后再应用系统时区；积分清单 UI 使用共享 `LedgerModal`，默认按今天/昨天/日期分组，支持收入、支出、冻结/补救、任务、奖励、反馈、必做扣分筛选，不显示顶部汇总卡片。
 - 最近更新时间：2026-06-13
+
+- Maintenance note (2026-06-30): long-running SQLite cleanup keeps detailed ledger/submission/redemption rows for `detail_retention_days` (default 365) and summarizes old ledger rows into `activity_archives`. `archiveOldActivity` must update existing monthly archives and the matching `activity_archive` ledger row when late old rows appear, because `point_ledger` remains the balance source of truth. `db:compact` is the low-frequency maintenance-window command for shrinking the SQLite file after cleanup; do not run VACUUM on the normal request/bootstrap path. Report/ledger window queries are supported by `idx_ledger_child_parent_created`, `idx_submissions_child_parent_submitted`, `idx_redemptions_child_parent_requested`, and `idx_child_achievements_child_unlocked`; keep runtime `ensureReportWindowIndexes` in sync with migration 0028.
 
 ## 11. 通知中心
 
@@ -155,9 +157,9 @@
 - P1：`server/api/ai/cache.js`、`server/api/ai/queue.js`、`server/api/ai/scheduled.js`、`server/scheduler-tick.mjs`、`server/scheduler.mjs`、`server/api/utils.js`、`src/types/api.ts`
 - P2：`migrations/0011_ai_service_and_child_fields.sql`、`migrations/0014_parent_ai_service_settings.sql`、`migrations/0015_ai_report_commentaries.sql`、`migrations/0016_ai_generation_queue.sql`、`migrations/0017_ai_scheduled_refresh_runs.sql`、`migrations/0018_system_error_logs_and_ai_queue_controls.sql`、`tests/ai.test.ts`、`tests/api.test.ts`
 - 主要调用链：settings load/save -> `/parent/ai-service`; model/test -> `/parent/ai-service/models|test`; preview -> `/parent/ai-service/preview`; preview/cache -> `/parent/ai-service/preview/cache`; scheduler -> `server/api/ai/scheduled.js` -> queue/orchestrator/cache。
-- 相关状态：`parent_ai_service_settings`、`ai_child_greetings`、`ai_report_commentaries`、`ai_generation_queue`、`ai_scheduled_refresh_runs`、`system_error_logs`
+- 相关状态：`parent_ai_service_settings`、`ai_child_greetings`、`ai_report_commentaries`、`ai_generation_queue`、`ai_scheduled_refresh_runs`、`system_error_logs`、`system_settings.cleanup_last_stats_json`
 - 相关接口：`GET/PATCH /api/parent/ai-service`、`POST /api/parent/ai-service/models`、`POST /api/parent/ai-service/test`、`POST /api/parent/ai-service/preview`、`POST /api/parent/ai-service/preview/cache`
-- 修改注意事项：AI 预览默认不写缓存（`{ cache: false }`）；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure；scheduled 使用管理员时区和已完成周期；模型字段使用 `<input list>` 支持手动输入；预览替换缓存使用 `INSERT OR REPLACE` 只替换当前配置 hash 下的缓存，不触发新 AI 调用。
+- 修改注意事项：AI 预览默认不写缓存（`{ cache: false }`）；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure；scheduled 使用管理员时区和已完成周期；模型字段使用 `<input list>` 支持手动输入；预览替换缓存使用 `INSERT OR REPLACE` 只替换当前配置 hash 下的缓存，不触发新 AI 调用；管理员维护统计读取 AI 队列 pending/processing 积压和近 7 天终态失败率，不触发 AI 生成。
 - 最近更新时间：2026-06-15
 
 ## 13. AI 图片、漫画报告、打印清单图与日程表图
@@ -168,10 +170,12 @@
 - P1：`server/api/ai/prompt.js`、`server/api/ai/cache.js`、`server/api/ai/index.js`、`server/api/utils.js`、`src/types/api.ts`
 - P2：`migrations/0019_parent_ai_image_settings.sql`、`migrations/0020_parent_delegates_operator_cartoon_jobs.sql`、`migrations/0021_remediable_criticism_daily_greeting_checklist_images.sql`、`migrations/0023_child_schedule.sql`、`migrations/0025_child_schedule_plan_html.sql`、`tests/ai.test.ts`、`tests/api.test.ts`
 - 主要调用链：`ParentApp.generateCartoonReport` -> `/parent/ai-service/cartoon-report` -> queue -> provider image generation -> polling `/parent/ai-service/cartoon-report/:jobId`; checklist image -> `/children/:id/print-checklist-image` -> polling job endpoint; schedule image -> `/children/:id/schedule-image` -> polling job endpoint。
-- 相关状态：`parent_ai_service_settings.image_*`、`ai_cartoon_report_jobs`、`ai_print_checklist_image_jobs`、`ai_schedule_image_jobs`
+- 相关状态：`parent_ai_service_settings.image_*`、`ai_cartoon_report_jobs`、`ai_print_checklist_image_jobs`、`ai_schedule_image_jobs`、`system_settings.cleanup_last_stats_json`
 - 相关接口：`POST /api/parent/ai-service/cartoon-report`、`GET /api/parent/ai-service/cartoon-report/:jobId`、`POST /api/children/:id/print-checklist-image`、`GET /api/children/:id/print-checklist-image/:jobId`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
 - 修改注意事项：图片 AI 配置和文本 AI 配置分开；前端轮询有 abort controller；不要把生成结果持久化到新存储，除非用户明确要求。日程表图使用独立 `ai_schedule_image_jobs` 表和独立提示词 `schedule_image_prompt`；生成 prompt 时将 `plan_html` 转为纯文本，避免把 HTML 标签直接交给图片模型。
 - 最近更新时间：2026-06-22
+
+- Maintenance note (2026-06-30): AI queue/job history uses `ai_job_retention_days` (default 92). Daily maintenance deletes only completed/failed rows older than the cutoff from `ai_generation_queue`, `ai_scheduled_refresh_runs`, `ai_cartoon_report_jobs`, `ai_print_checklist_image_jobs`, and `ai_schedule_image_jobs`; pending/processing rows and user-visible AI content caches are retained. Admin `/admin/maintenance-stats` surfaces latest cleanup counts, backlog, and recent failure rate across these tables.
 
 ## 14. 孩子日程表
 

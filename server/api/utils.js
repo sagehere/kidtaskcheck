@@ -9,6 +9,7 @@ export const nowIso = () => new Date().toISOString();
 export const id = () => crypto.randomUUID();
 export const PBKDF2_ITERATIONS = 100000;
 export const DAY_MS = 86400000;
+export const DEFAULT_AI_JOB_RETENTION_DAYS = 92;
 export let bootstrapPromise = null;
 export const LOGIN_MAX_ATTEMPTS = 5;
 export const LOGIN_WINDOW_MS = 60000;
@@ -249,6 +250,10 @@ export async function ensureColumn(env, table, name, ddl) {
     if (!columns.includes(name)) {
         await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${ddl}`).run();
     }
+}
+async function tableExists(env, table) {
+    const row = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(table).first();
+    return !!row;
 }
 export async function ensureConfigGroupsSchema(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS config_groups (
@@ -541,7 +546,16 @@ export async function ensureRetentionSchema(env) {
     await env.DB.prepare(`INSERT OR IGNORE INTO system_settings (key, value) VALUES
 ('detail_retention_days', '365'),
 ('short_record_retention_days', '7'),
-('cleanup_last_run_at', '')`).run();
+('ai_job_retention_days', '92'),
+('cleanup_last_run_at', ''),
+('cleanup_last_stats_json', '{}')`).run();
+}
+export async function ensureReportWindowIndexes(env) {
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_ledger_child_parent_created ON point_ledger(child_id, parent_id, created_at)").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_ledger_child_parent_created_id ON point_ledger(child_id, parent_id, created_at, id)").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_submissions_child_parent_submitted ON task_submissions(child_id, parent_id, submitted_at)").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_redemptions_child_parent_requested ON reward_redemptions(child_id, parent_id, requested_at)").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_child_achievements_child_unlocked ON child_achievements(child_id, unlocked_at)").run();
 }
 export async function settingNumber(env, key, fallback) {
     const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key=?").bind(key).first();
@@ -704,6 +718,7 @@ export async function cleanupShortRetention(env, cutoffIso) {
         await env.DB.prepare("DELETE FROM notifications WHERE related_type='point_ledger' AND related_id IN (?, ?)").bind(row.id, row.revoke_ledger_id || "").run();
         await env.DB.prepare("DELETE FROM point_ledger WHERE id IN (?, ?)").bind(row.id, row.revoke_ledger_id || "").run();
     }
+    return { refundedRedemptions: refunded.length, recalledLedgerEntries: recalled.length };
 }
 export async function archiveOldActivity(env, cutoffIso, timezoneOffsetMinutes = 480) {
     const rows = (await env.DB.prepare("SELECT child_id, parent_id, created_at, amount FROM point_ledger WHERE created_at<? AND source_type!='activity_archive'")
@@ -738,52 +753,228 @@ export async function archiveOldActivity(env, cutoffIso, timezoneOffsetMinutes =
             env.DB.prepare("SELECT COUNT(*) v FROM point_ledger WHERE child_id=? AND source_type='criticism' AND revoked_at IS NULL AND created_at>=? AND created_at<?").bind(group.child_id, monthStart, monthEnd).first(),
             env.DB.prepare("SELECT COUNT(*) v FROM child_achievements WHERE child_id=? AND unlocked_at>=? AND unlocked_at<?").bind(group.child_id, monthStart, monthEnd).first()
         ]);
-        await env.DB.prepare(`INSERT OR IGNORE INTO activity_archives (
+        await env.DB.prepare(`INSERT INTO activity_archives (
   id, parent_id, child_id, month_key, net_points, tasks_approved, tasks_rejected,
   rewards_requested, rewards_redeemed, rewards_cancelled, praise_count, criticism_count, achievements_unlocked, archived_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(parent_id, child_id, month_key) DO UPDATE SET
+  net_points=activity_archives.net_points + excluded.net_points,
+  tasks_approved=activity_archives.tasks_approved + excluded.tasks_approved,
+  tasks_rejected=activity_archives.tasks_rejected + excluded.tasks_rejected,
+  rewards_requested=activity_archives.rewards_requested + excluded.rewards_requested,
+  rewards_redeemed=activity_archives.rewards_redeemed + excluded.rewards_redeemed,
+  rewards_cancelled=activity_archives.rewards_cancelled + excluded.rewards_cancelled,
+  praise_count=activity_archives.praise_count + excluded.praise_count,
+  criticism_count=activity_archives.criticism_count + excluded.criticism_count,
+  achievements_unlocked=activity_archives.achievements_unlocked + excluded.achievements_unlocked,
+  archived_at=excluded.archived_at`)
             .bind(archiveId, group.parent_id, group.child_id, group.month_key, Number(group.net_points || 0), Number(tasksApproved?.v || 0), Number(tasksRejected?.v || 0), Number(rewardsRequested?.v || 0), Number(rewardsRedeemed?.v || 0), Number(rewardsCancelled?.v || 0), Number(praiseCount?.v || 0), Number(criticismCount?.v || 0), Number(achievementsUnlocked?.v || 0), nowIso())
             .run();
         const ledger = await env.DB.prepare("SELECT id FROM point_ledger WHERE source_type='activity_archive' AND source_id=?").bind(archiveId).first();
-        if (!ledger && Number(group.net_points || 0) !== 0) {
+        if (ledger && Number(group.net_points || 0) !== 0) {
+            await env.DB.prepare("UPDATE point_ledger SET amount=amount + ? WHERE id=?")
+                .bind(Number(group.net_points || 0), ledger.id)
+                .run();
+        } else if (!ledger && Number(group.net_points || 0) !== 0) {
             await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, created_at) VALUES (?, ?, ?, ?, 'activity_archive', ?, ?, ?, ?)")
-                .bind(id(), group.child_id, group.parent_id, Number(group.net_points || 0), archiveId, group.month_key, "月度历史汇总", monthEnd)
+                .bind(id(), group.child_id, group.parent_id, Number(group.net_points || 0), archiveId, group.month_key, "Monthly activity archive", monthEnd)
                 .run();
         }
     }
-    await env.DB.prepare("DELETE FROM point_ledger WHERE created_at<? AND source_type!='activity_archive'").bind(cutoffIso).run();
-    await env.DB.prepare("DELETE FROM task_submissions WHERE submitted_at<? AND status!='pending'").bind(cutoffIso).run();
-    await env.DB.prepare("DELETE FROM reward_redemptions WHERE requested_at<? AND status!='pending'").bind(cutoffIso).run();
-    await env.DB.prepare("DELETE FROM notifications WHERE created_at<? AND read_at IS NOT NULL").bind(cutoffIso).run();
+    const ledgerDelete = await env.DB.prepare("DELETE FROM point_ledger WHERE created_at<? AND source_type!='activity_archive'").bind(cutoffIso).run();
+    const submissionDelete = await env.DB.prepare("DELETE FROM task_submissions WHERE submitted_at<? AND status!='pending'").bind(cutoffIso).run();
+    const redemptionDelete = await env.DB.prepare("DELETE FROM reward_redemptions WHERE requested_at<? AND status!='pending'").bind(cutoffIso).run();
+    const notificationDelete = await env.DB.prepare("DELETE FROM notifications WHERE created_at<? AND read_at IS NOT NULL").bind(cutoffIso).run();
+    return {
+        archiveGroups: groups.length,
+        archivedLedgerEntries: rows.length,
+        deletedLedgerEntries: ledgerDelete?.meta?.changes || 0,
+        deletedSubmissions: submissionDelete?.meta?.changes || 0,
+        deletedRedemptions: redemptionDelete?.meta?.changes || 0,
+        deletedNotifications: notificationDelete?.meta?.changes || 0
+    };
 }
 export async function hardDeleteSoftDeleted(env, cutoffIso) {
-    await env.DB.prepare("DELETE FROM sessions WHERE expires_at<?").bind(nowIso()).run();
-    await env.DB.prepare("DELETE FROM task_assignees WHERE task_id IN (SELECT id FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at<?)").bind(cutoffIso).run();
-    await env.DB.prepare("DELETE FROM reward_assignees WHERE reward_id IN (SELECT id FROM rewards WHERE deleted_at IS NOT NULL AND deleted_at<?)").bind(cutoffIso).run();
-    await env.DB.prepare("DELETE FROM reward_prerequisites WHERE reward_id IN (SELECT id FROM rewards WHERE deleted_at IS NOT NULL AND deleted_at<?)").bind(cutoffIso).run();
-    await env.DB.prepare("DELETE FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at<?").bind(cutoffIso).run();
-    await env.DB.prepare("DELETE FROM rewards WHERE deleted_at IS NOT NULL AND deleted_at<?").bind(cutoffIso).run();
-    await env.DB.prepare("DELETE FROM achievements WHERE deleted_at IS NOT NULL AND deleted_at<?").bind(cutoffIso).run();
-    await env.DB.prepare("DELETE FROM feedback_templates WHERE deleted_at IS NOT NULL AND deleted_at<?").bind(cutoffIso).run();
+    const expiredSessions = await env.DB.prepare("DELETE FROM sessions WHERE expires_at<?").bind(nowIso()).run();
+    const taskCandidateSql = `SELECT id FROM tasks
+WHERE deleted_at IS NOT NULL AND deleted_at<?
+  AND NOT EXISTS (SELECT 1 FROM task_submissions WHERE task_id=tasks.id)
+  AND NOT EXISTS (SELECT 1 FROM reward_prerequisites WHERE task_id=tasks.id)
+  AND NOT EXISTS (SELECT 1 FROM achievements WHERE target_task_id=tasks.id)
+  AND NOT EXISTS (SELECT 1 FROM task_required_penalties WHERE task_id=tasks.id)
+  AND NOT EXISTS (SELECT 1 FROM child_schedule_items WHERE task_id=tasks.id)`;
+    const taskAssignees = await env.DB.prepare(`DELETE FROM task_assignees WHERE task_id IN (${taskCandidateSql})`).bind(cutoffIso).run();
+    const tasks = await env.DB.prepare(`DELETE FROM tasks WHERE id IN (${taskCandidateSql})`).bind(cutoffIso).run();
+    const rewardCandidateSql = `SELECT id FROM rewards
+WHERE deleted_at IS NOT NULL AND deleted_at<?
+  AND NOT EXISTS (SELECT 1 FROM reward_redemptions WHERE reward_id=rewards.id)
+  AND NOT EXISTS (SELECT 1 FROM achievements WHERE unlock_reward_id=rewards.id)`;
+    const rewardAssignees = await env.DB.prepare(`DELETE FROM reward_assignees WHERE reward_id IN (${rewardCandidateSql})`).bind(cutoffIso).run();
+    const rewardPrerequisites = await env.DB.prepare(`DELETE FROM reward_prerequisites WHERE reward_id IN (${rewardCandidateSql})`).bind(cutoffIso).run();
+    const rewards = await env.DB.prepare(`DELETE FROM rewards WHERE id IN (${rewardCandidateSql})`).bind(cutoffIso).run();
+    const achievements = await env.DB.prepare(`DELETE FROM achievements
+WHERE deleted_at IS NOT NULL AND deleted_at<?
+  AND NOT EXISTS (SELECT 1 FROM child_achievements WHERE achievement_id=achievements.id)`).bind(cutoffIso).run();
+    const feedbackTemplates = await env.DB.prepare(`DELETE FROM feedback_templates
+WHERE deleted_at IS NOT NULL AND deleted_at<?
+  AND NOT EXISTS (SELECT 1 FROM point_ledger WHERE source_id=feedback_templates.id AND source_type IN ('praise', 'criticism', 'feedback_recall'))`).bind(cutoffIso).run();
+    return {
+        expiredSessions: expiredSessions?.meta?.changes || 0,
+        taskAssignees: taskAssignees?.meta?.changes || 0,
+        tasks: tasks?.meta?.changes || 0,
+        rewardAssignees: rewardAssignees?.meta?.changes || 0,
+        rewardPrerequisites: rewardPrerequisites?.meta?.changes || 0,
+        rewards: rewards?.meta?.changes || 0,
+        achievements: achievements?.meta?.changes || 0,
+        feedbackTemplates: feedbackTemplates?.meta?.changes || 0
+    };
+}
+export async function cleanupAiJobHistory(env, cutoffIso) {
+    const cleanupJobs = [
+        {
+            table: "ai_generation_queue",
+            sql: "DELETE FROM ai_generation_queue WHERE status IN ('completed', 'failed') AND COALESCE(completed_at, created_at)<?"
+        },
+        {
+            table: "ai_scheduled_refresh_runs",
+            sql: "DELETE FROM ai_scheduled_refresh_runs WHERE status IN ('completed', 'completed_with_errors', 'failed') AND COALESCE(completed_at, triggered_at)<?"
+        },
+        {
+            table: "ai_cartoon_report_jobs",
+            sql: "DELETE FROM ai_cartoon_report_jobs WHERE status IN ('completed', 'failed') AND COALESCE(completed_at, updated_at, created_at)<?"
+        },
+        {
+            table: "ai_print_checklist_image_jobs",
+            sql: "DELETE FROM ai_print_checklist_image_jobs WHERE status IN ('completed', 'failed') AND COALESCE(completed_at, updated_at, created_at)<?"
+        },
+        {
+            table: "ai_schedule_image_jobs",
+            sql: "DELETE FROM ai_schedule_image_jobs WHERE status IN ('completed', 'failed') AND COALESCE(completed_at, updated_at, created_at)<?"
+        }
+    ];
+    const deleted = {};
+    for (const job of cleanupJobs) {
+        deleted[job.table] = 0;
+        if (await tableExists(env, job.table)) {
+            const result = await env.DB.prepare(job.sql).bind(cutoffIso).run();
+            deleted[job.table] = result?.meta?.changes || 0;
+        }
+    }
+    return deleted;
+}
+const AI_JOB_STAT_TABLES = [
+    { key: "generationQueue", table: "ai_generation_queue", label: "AI text queue", createdColumn: "created_at", failureStatuses: ["failed"], terminalStatuses: ["completed", "failed"] },
+    { key: "scheduledRefreshRuns", table: "ai_scheduled_refresh_runs", label: "Scheduled AI refresh", createdColumn: "triggered_at", failureStatuses: ["failed", "completed_with_errors"], terminalStatuses: ["completed", "completed_with_errors", "failed"] },
+    { key: "cartoonReportJobs", table: "ai_cartoon_report_jobs", label: "Cartoon report images", createdColumn: "created_at", failureStatuses: ["failed"], terminalStatuses: ["completed", "failed"] },
+    { key: "printChecklistImageJobs", table: "ai_print_checklist_image_jobs", label: "Print checklist images", createdColumn: "created_at", failureStatuses: ["failed"], terminalStatuses: ["completed", "failed"] },
+    { key: "scheduleImageJobs", table: "ai_schedule_image_jobs", label: "Schedule images", createdColumn: "created_at", failureStatuses: ["failed"], terminalStatuses: ["completed", "failed"] }
+];
+
+function sqlStringList(values) {
+    return values.map((value) => `'${String(value).replace(/'/g, "''")}'`).join(", ");
+}
+
+async function aiJobTableStats(env, spec, sinceIso) {
+    if (!(await tableExists(env, spec.table))) {
+        return { ...spec, exists: false, total: 0, backlog: 0, pending: 0, processing: 0, failedRecent: 0, terminalRecent: 0, failureRate: 0, statusCounts: {} };
+    }
+    const rows = (await env.DB.prepare(`SELECT status, COUNT(*) count FROM ${spec.table} GROUP BY status`).all()).results;
+    const statusCounts = {};
+    for (const row of rows) statusCounts[row.status] = Number(row.count || 0);
+    const terminalList = sqlStringList(spec.terminalStatuses);
+    const failureList = sqlStringList(spec.failureStatuses);
+    const recent = await env.DB.prepare(`SELECT COUNT(*) terminal_count,
+  COALESCE(SUM(CASE WHEN status IN (${failureList}) THEN 1 ELSE 0 END), 0) failed_count
+FROM ${spec.table}
+WHERE ${spec.createdColumn}>=? AND status IN (${terminalList})`).bind(sinceIso).first();
+    const terminalRecent = Number(recent?.terminal_count || 0);
+    const failedRecent = Number(recent?.failed_count || 0);
+    const pending = Number(statusCounts.pending || 0);
+    const processing = Number(statusCounts.processing || 0);
+    return {
+        ...spec,
+        exists: true,
+        total: Object.values(statusCounts).reduce((sum, value) => sum + Number(value || 0), 0),
+        backlog: pending + processing,
+        pending,
+        processing,
+        failedRecent,
+        terminalRecent,
+        failureRate: terminalRecent > 0 ? failedRecent / terminalRecent : 0,
+        statusCounts
+    };
+}
+
+export async function getMaintenanceStats(env) {
+    await ensureRetentionSchema(env);
+    await ensureReportWindowIndexes(env);
+    const [detailDays, shortDays, aiJobDays, lastRun, lastStats] = await Promise.all([
+        settingNumber(env, "detail_retention_days", 365),
+        settingNumber(env, "short_record_retention_days", 7),
+        settingNumber(env, "ai_job_retention_days", DEFAULT_AI_JOB_RETENTION_DAYS),
+        env.DB.prepare("SELECT value FROM system_settings WHERE key='cleanup_last_run_at'").first(),
+        env.DB.prepare("SELECT value FROM system_settings WHERE key='cleanup_last_stats_json'").first()
+    ]);
+    let parsedLastStats = {};
+    try {
+        parsedLastStats = lastStats?.value ? JSON.parse(lastStats.value) : {};
+    } catch {
+        parsedLastStats = {};
+    }
+    const sinceIso = new Date(Date.now() - 7 * DAY_MS).toISOString();
+    const queues = [];
+    for (const spec of AI_JOB_STAT_TABLES) {
+        queues.push(await aiJobTableStats(env, spec, sinceIso));
+    }
+    return {
+        retentionDays: { detail: detailDays, shortRecord: shortDays, aiJob: aiJobDays },
+        lastRunAt: lastRun?.value || "",
+        lastRunStats: parsedLastStats,
+        aiJobs: {
+            since: sinceIso,
+            queues,
+            totalBacklog: queues.reduce((sum, item) => sum + Number(item.backlog || 0), 0),
+            failedRecent: queues.reduce((sum, item) => sum + Number(item.failedRecent || 0), 0),
+            terminalRecent: queues.reduce((sum, item) => sum + Number(item.terminalRecent || 0), 0)
+        }
+    };
 }
 export async function maybeRunMaintenance(env) {
+    await ensureRetentionSchema(env);
+    await ensureReportWindowIndexes(env);
     const last = await env.DB.prepare("SELECT value FROM system_settings WHERE key='cleanup_last_run_at'").first();
     const now = nowIso();
     if (last?.value && Date.parse(now) - Date.parse(last.value) < DAY_MS)
         return;
     const detailDays = await settingNumber(env, "detail_retention_days", 365);
     const shortDays = await settingNumber(env, "short_record_retention_days", 7);
+    const aiJobDays = await settingNumber(env, "ai_job_retention_days", DEFAULT_AI_JOB_RETENTION_DAYS);
     const detailCutoff = new Date(Date.now() - detailDays * DAY_MS).toISOString();
     const shortCutoff = new Date(Date.now() - shortDays * DAY_MS).toISOString();
+    const aiJobCutoff = new Date(Date.now() - aiJobDays * DAY_MS).toISOString();
     try {
-        await cleanupShortRetention(env, shortCutoff);
-        await settleExpiredCriticismFreezes(env, now);
-        await settleRequiredTaskPenalties(env, now);
+        const shortRetention = await cleanupShortRetention(env, shortCutoff);
+        const expiredCriticisms = await settleExpiredCriticismFreezes(env, now);
+        const requiredPenalties = await settleRequiredTaskPenalties(env, now);
         const offset = await timezoneOffsetMinutes(env);
-        await archiveOldActivity(env, detailCutoff, offset);
-        await hardDeleteSoftDeleted(env, detailCutoff);
+        const activityArchive = await archiveOldActivity(env, detailCutoff, offset);
+        const softDeleted = await hardDeleteSoftDeleted(env, detailCutoff);
+        const aiJobHistory = await cleanupAiJobHistory(env, aiJobCutoff);
         await cleanupSystemErrorLogs(env);
+        const stats = {
+            ranAt: now,
+            retentionDays: { detail: detailDays, shortRecord: shortDays, aiJob: aiJobDays },
+            cutoffs: { detail: detailCutoff, shortRecord: shortCutoff, aiJob: aiJobCutoff },
+            shortRetention,
+            expiredCriticisms,
+            requiredPenalties,
+            activityArchive,
+            softDeleted,
+            aiJobHistory
+        };
+        await updateSetting(env, "cleanup_last_stats_json", JSON.stringify(stats));
         await updateSetting(env, "cleanup_last_run_at", now);
+        return stats;
     } catch (error) {
         await logSystemError(env, {
             source: "maintenance",

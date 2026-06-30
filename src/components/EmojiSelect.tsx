@@ -42,12 +42,17 @@ export function EmojiSelect({ value, onChange }: { value: string; onChange: (val
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!open || options.length > 0) return;
+    let cancelled = false;
     setLoading(true);
     buildEmojiOptions().then((result) => {
+      if (cancelled) return;
       setOptions(result);
-      setLoading(false);
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
     });
-  }, []);
+    return () => { cancelled = true; };
+  }, [open, options.length]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {

@@ -1,3 +1,21 @@
+# 2026-06-30
+
+- Type: bug fix / maintenance hardening
+- Scope: SQLite retention, activity archives, AI job cleanup, admin maintenance visibility, report indexes, emoji lazy loading
+- Summary:
+  - Fixed old-ledger archive consistency so late old `point_ledger` rows update existing monthly `activity_archives` and the matching `activity_archive` ledger row instead of losing balance after detail cleanup.
+  - Added `ai_job_retention_days=92` and daily cleanup for completed/failed AI queue, scheduled-run, cartoon-report, checklist-image, and schedule-image job records while keeping pending/processing jobs.
+  - Hardened soft-deleted task/reward/achievement/template cleanup so rows with history or pending references are skipped instead of causing maintenance/bootstrap failures.
+  - Added `db:compact` for low-frequency SQLite VACUUM/optimization during a maintenance window.
+  - Added admin maintenance stats showing latest cleanup counts, AI queue backlog, and 7-day AI job failure rate.
+  - Added report/ledger window indexes and runtime ensure coverage for long-running query performance.
+  - Delayed loading the emoji vendor data until the emoji picker is opened.
+- Business code: `server/api/utils.js`, `server/api/routes/admin.js`, `src/AdminApp.tsx`, `src/components/EmojiSelect.tsx`, `src/styles.css`, `src/types/api.ts`, `scripts/sqlite-compact.mjs`, `package.json`
+- Database: `migrations/0027_ai_job_retention_setting.sql`, `migrations/0028_report_window_indexes.sql`
+- Tests: `tests/maintenance.test.ts`, `tests/api.test.ts`, `tests/migration.test.ts`
+- Docs: `docs/operations/SQLITE_MAINTENANCE.md`
+- Verification: `rtk npm test`; `rtk npm run build`; temp-db `node scripts/sqlite-compact.mjs` smoke test
+
 # 2026-06-23
 
 - 类型：文档新增

@@ -52,7 +52,26 @@ export type SystemErrorLog = {
   metadata?: Record<string, unknown> | null;
   created_at: string;
 };
-export type ChildDashboardSummary = { balance: number; frozenPoints: number; aiGreeting: string; aiRefreshPending: boolean; child: Child | null };
+export type MaintenanceQueueStats = {
+  key: string;
+  table: string;
+  label: string;
+  exists: boolean;
+  total: number;
+  backlog: number;
+  pending: number;
+  processing: number;
+  failedRecent: number;
+  terminalRecent: number;
+  failureRate: number;
+  statusCounts: Record<string, number>;
+};
+export type MaintenanceStats = {
+  retentionDays: { detail: number; shortRecord: number; aiJob: number };
+  lastRunAt: string;
+  lastRunStats: Record<string, any>;
+  aiJobs: { since: string; queues: MaintenanceQueueStats[]; totalBacklog: number; failedRecent: number; terminalRecent: number };
+};export type ChildDashboardSummary = { balance: number; frozenPoints: number; aiGreeting: string; aiRefreshPending: boolean; child: Child | null };
 
 export type RemedyCriticismItem = {
   id: string;

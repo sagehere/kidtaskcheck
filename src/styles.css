@@ -1174,6 +1174,55 @@ button:disabled {
   background: #f0fbf8;
 }
 
+.maintenance-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.maintenance-metrics > div {
+  min-height: 76px;
+  padding: 10px 12px;
+  border: 1px solid #e1dbcf;
+  border-radius: 8px;
+  background: #f8f5ee;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+}
+
+.maintenance-metrics span,
+.maintenance-queue-values span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.maintenance-metrics strong {
+  color: var(--text);
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.maintenance-queue-list {
+  gap: 8px;
+}
+
+.maintenance-queue-row {
+  align-items: center;
+}
+
+.maintenance-queue-values {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  text-align: right;
+}
+
+.maintenance-queue-values strong {
+  min-width: 42px;
+}
 .system-log-list {
   max-height: 520px;
   overflow-y: auto;

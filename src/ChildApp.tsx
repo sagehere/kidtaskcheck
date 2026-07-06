@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar, Bold, Italic, Underline, List } from "lucide-react";
+import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar, Bold, Italic, Underline, List, Eye, EyeOff } from "lucide-react";
 import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary, ChildScheduleData, ChildScheduleSlot } from "./types/api";
 import { api } from "./api/client";
 import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle } from "./components/UI";
@@ -58,6 +58,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   });
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [warehouse, setWarehouse] = useState<WarehouseItem[]>([]);
+  const [warehouseAchievements, setWarehouseAchievements] = useState<any[]>([]);
+  const [warehouseTab, setWarehouseTab] = useState<"rewards" | "achievements">("rewards");
   const [summary, setSummary] = useState<ChildDashboardSummary>({ balance: 0, frozenPoints: 0, aiGreeting: "", aiRefreshPending: false, child: null });
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [achievementTipId, setAchievementTipId] = useState("");
@@ -68,6 +70,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
 
   async function loadWarehouse() {
     setWarehouse(await api<WarehouseItem[]>("/warehouse").catch(() => []));
+    setWarehouseAchievements(await api<any[]>("/warehouse/achievements").catch(() => []));
   }
 
   async function togglePin(kind: "task" | "reward", item: any) {
@@ -464,6 +467,10 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     }
   }
 
+  async function setAchievementHidden(item: any, hidden: boolean) {
+    await run(`achievement:${item.id}`, () => api(`/child-achievements/${item.id}/visibility`, { method: "PATCH", body: JSON.stringify({ hidden }) }), hidden ? "称号已隐藏" : "称号已展示");
+    await loadWarehouse();
+  }
   async function submitTask(task: any) {
     if (!window.confirm(`确认提交任务“${task.title}”？`)) return;
     await run(`task:${task.id}`, () => api("/task-submissions", { method: "POST", body: JSON.stringify({ taskId: task.id }) }), "任务已提交，等待家长审核");
@@ -509,6 +516,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
               {icon(item.icon_type, item.icon_value, item.title)}
               <strong>{item.title}</strong>
               </button>
+              <button type="button" className="icon" title="隐藏称号" disabled={busy === `achievement:${item.id}`} onClick={() => void setAchievementHidden(item, true)}><EyeOff size={16} /></button>
               {achievementTipId === item.id && <span className="achievement-tooltip">{item.description || "已解锁"}</span>}
             </article>
           )) : <Empty text="完成任务后会解锁称号" />}
@@ -656,26 +664,43 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         <section className="panel child-panel">
           <div className="panel-title compact-title">
             <Package /><h2>仓库</h2>
-            <button className="secondary" disabled={!warehouse.some((item) => item.status === "redeemed")} onClick={() => void clearRedeemedWarehouse()}>一键清理已核销奖励</button>
+            {warehouseTab === "rewards" && <button className="secondary" disabled={!warehouse.some((item) => item.status === "redeemed")} onClick={() => void clearRedeemedWarehouse()}>一键清理已核销奖励</button>}
           </div>
-          <div className="wall-grid warehouse-grid child-tab-list">
-            {warehouse.length ? warehouse.map((item) => (
-              <article className={`mini-card wall-card reward-wall-card warehouse-card ${item.status === "redeemed" ? "is-muted redeemed" : ""}`} key={item.id}>
-                <div className="card-head wall-card-head">
-                  {icon(item.icon_type, item.icon_value, item.title)}
-                  <div>
-                    <strong>{rewardDisplayTitle(item)}</strong>
-                    <small>{item.status === "redeemed" && item.redeemed_at ? `${new Date(item.redeemed_at).toLocaleDateString("zh-CN")}已核销` : "待家长核销"}</small>
+          <Tabs value={warehouseTab} onChange={(value) => setWarehouseTab(value as "rewards" | "achievements")} options={[{ value: "rewards", label: "奖励" }, { value: "achievements", label: "成就" }]} />
+          {warehouseTab === "rewards" ? (
+            <div className="wall-grid warehouse-grid child-tab-list">
+              {warehouse.length ? warehouse.map((item) => (
+                <article className={`mini-card wall-card reward-wall-card warehouse-card ${item.status === "redeemed" ? "is-muted redeemed" : ""}`} key={item.id}>
+                  <div className="card-head wall-card-head">
+                    {icon(item.icon_type, item.icon_value, item.title)}
+                    <div>
+                      <strong>{rewardDisplayTitle(item)}</strong>
+                      <small>{item.status === "redeemed" && item.redeemed_at ? `${new Date(item.redeemed_at).toLocaleDateString("zh-CN")}已核销` : "待家长核销"}</small>
+                    </div>
                   </div>
-                </div>
-                {item.description && <small className="card-description">{item.description}</small>}
-                <div className="card-meta"><span className="cost"><Coins size={16} />{item.cost_points} 积分</span></div>
-              </article>
-            )) : <Empty text="仓库暂无奖励" />}
-          </div>
+                  {item.description && <small className="card-description">{item.description}</small>}
+                  <div className="card-meta"><span className="cost"><Coins size={16} />{item.cost_points} 积分</span></div>
+                </article>
+              )) : <Empty text="仓库暂无奖励" />}
+            </div>
+          ) : (
+            <div className="wall-grid warehouse-grid child-tab-list">
+              {warehouseAchievements.length ? warehouseAchievements.map((item) => (
+                <article className="mini-card wall-card warehouse-card" key={item.id}>
+                  <div className="card-head wall-card-head">
+                    {icon(item.icon_type, item.icon_value, item.title)}
+                    <div>
+                      <strong>{item.title}</strong>
+                      <small>{item.description || "已隐藏"}</small>
+                    </div>
+                  </div>
+                  <button className="secondary card-action" disabled={busy === `achievement:${item.id}`} onClick={() => void setAchievementHidden(item, false)}><Eye size={16} />展示</button>
+                </article>
+              )) : <Empty text="仓库暂无隐藏成就" />}
+            </div>
+          )}
         </section>
-      )}
-      {activeTab === "schedule" && (
+      )}      {activeTab === "schedule" && (
         <section className="panel child-panel">
           <div className="panel-title compact-title">
             <Calendar /><h2>我的日程表设置</h2>

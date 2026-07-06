@@ -9,7 +9,7 @@ const MIGRATIONS_DIR = join(__dirname, "../migrations");
 describe("Task 35: Migration Smoke Test", () => {
   it("all migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(28);
+    expect(files.length).toBe(29);
     const db = new SqliteTestDb();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
@@ -71,6 +71,10 @@ describe("Task 35: Migration Smoke Test", () => {
     expect(taskColumnNames).toContain("is_required");
     expect(taskColumnNames).toContain("required_count");
     expect(taskColumnNames).toContain("required_penalty_points");
+    expect(taskColumnNames).toContain("grading_mode");
+    expect(taskColumnNames).toContain("completion_standards_json");
+    const achievementColumns = db.prepare("PRAGMA table_info(child_achievements)").all().results as any[];
+    expect(achievementColumns.map((column: any) => column.name)).toContain("hidden_from_child_at");
     db.close();
   });
 

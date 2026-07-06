@@ -202,6 +202,29 @@ describe("Parent delegate accounts", () => {
     expect(body.data.items.some((item: any) => item.actorLabel === "爸爸")).toBe(true);
   });
 
+
+  it("lets a child hide and show unlocked achievements from the warehouse", async () => {
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, parentId: pid, displayName: "Child A" };
+    const achievementId = id();
+    env.DB.prepare("INSERT INTO achievements (id, parent_id, title, metric, threshold, icon_type, icon_value) VALUES (?, ?, 'Reader', 'tasks_completed', 1, 'emoji', '🏅')").bind(achievementId, pid).run();
+    env.DB.prepare("INSERT INTO child_achievements (child_id, achievement_id, unlocked_at) VALUES (?, ?, ?)").bind(cid, achievementId, new Date().toISOString()).run();
+
+    const hide = await safe(handleChildRoutes, `/child-achievements/${achievementId}/visibility`, "PATCH", makeRequest("PATCH", `/child-achievements/${achievementId}/visibility`, { hidden: true }), env, childActor);
+    expect(hide!.status).toBe(200);
+    const dashHidden = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, childActor, { waitUntil: () => {} });
+    const hiddenPayload = await dashHidden!.json();
+    expect(hiddenPayload.data.achievements.some((item: any) => item.id === achievementId)).toBe(false);
+    const warehouse = await safe(handleChildRoutes, "/warehouse/achievements", "GET", makeRequest("GET", "/warehouse/achievements"), env, childActor);
+    const warehousePayload = await warehouse!.json();
+    expect(warehousePayload.data.map((item: any) => item.id)).toContain(achievementId);
+
+    const show = await safe(handleChildRoutes, `/child-achievements/${achievementId}/visibility`, "PATCH", makeRequest("PATCH", `/child-achievements/${achievementId}/visibility`, { hidden: false }), env, childActor);
+    expect(show!.status).toBe(200);
+    const dashShown = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, childActor, { waitUntil: () => {} });
+    const shownPayload = await dashShown!.json();
+    expect(shownPayload.data.achievements.map((item: any) => item.id)).toContain(achievementId);
+  });
+
   it("imports config as disabled and ignores missing child assignments", async () => {
     const parentActor = { type: "user", role: "parent", id: pid, displayName: "Parent A", operatorLabel: "妈妈" };
     const payload = {

@@ -42,6 +42,15 @@ export const INPUT_RULES = {
     limitCount: { min: 1, max: 9999, type: "number" },
     stock: { min: 0, max: 999999, type: "number" },
 };
+export function normalizeCompletionStandards(input) {
+    const raw = Array.isArray(input) ? input : [];
+    return raw
+        .map((item) => ({
+            label: String(item?.label || "").trim().slice(0, 40),
+            points: Math.max(0, Math.min(999999, Number(item?.points || 0)))
+        }))
+        .filter((item) => item.label);
+}
 export function validateInput(value, rules, fieldName) {
     if (value === undefined || value === null) {
         if (rules.required) return `${fieldName} 为必填项`;
@@ -391,6 +400,7 @@ export async function ensureAchievementSchema(env) {
     if (!columns.includes("unlock_reward_id")) {
         await env.DB.prepare("ALTER TABLE achievements ADD COLUMN unlock_reward_id TEXT REFERENCES rewards(id)").run();
     }
+    await ensureColumn(env, "child_achievements", "hidden_from_child_at", "hidden_from_child_at TEXT");
 }
 export async function ensureChildPinsSchema(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_pins (
@@ -421,6 +431,8 @@ export async function ensureRequiredTaskSchema(env) {
     await ensureColumn(env, "tasks", "is_required", "is_required INTEGER NOT NULL DEFAULT 0");
     await ensureColumn(env, "tasks", "required_count", "required_count INTEGER NOT NULL DEFAULT 0");
     await ensureColumn(env, "tasks", "required_penalty_points", "required_penalty_points INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "tasks", "grading_mode", "grading_mode TEXT NOT NULL DEFAULT 'fixed'");
+    await ensureColumn(env, "tasks", "completion_standards_json", "completion_standards_json TEXT NOT NULL DEFAULT '[]'");
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_required_penalties (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -1469,6 +1481,7 @@ export async function listWithAssignees(env, kind, parentId) {
             ...row,
             enabledWeekdays: normalizeWeekdays(row.enabled_weekdays),
             redeemWeekdays: normalizeWeekdays(row.redeem_weekdays),
+            completionStandards: kind === "tasks" ? normalizeCompletionStandards(JSON.parse(row.completion_standards_json || "[]")) : [],
             prerequisites: kind === "rewards" ? await rewardPrerequisites(env, row.id) : [],
             requiredAchievementId: requiredAchievement?.id || "",
             requiredAchievementTitle: requiredAchievement?.title || "",
@@ -1513,8 +1526,10 @@ export async function insertTaskFromConfig(env, parentId, item, categoryMap, chi
     const isRequired = period !== "once" && item.is_required ? 1 : 0;
     const requiredCount = isRequired ? Math.max(1, Number(item.required_count || item.requiredCount || 1)) : 0;
     const requiredPenaltyPoints = isRequired ? Math.max(0, Number(item.required_penalty_points || item.requiredPenaltyPoints || 0)) : 0;
-    await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), importedActive(item), isRequired, requiredCount, requiredPenaltyPoints)
+    const gradingMode = item.grading_mode === "completion" || item.gradingMode === "completion" ? "completion" : "fixed";
+    const completionStandards = gradingMode === "completion" ? normalizeCompletionStandards(item.completionStandards || item.completion_standards || JSON.parse(item.completion_standards_json || "[]")) : [];
+    await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), importedActive(item), isRequired, requiredCount, requiredPenaltyPoints, gradingMode, JSON.stringify(completionStandards))
         .run();
     const requestedAssignees = item.assignee_names || item.assigneeNames || [];
     await replaceAssignees(env, parentId, "task_assignees", "task_id", taskId, requestedAssignees.map((name) => childMap.get(name)).filter(Boolean));
@@ -1694,8 +1709,10 @@ export async function applyConfigGroupSnapshot(env, parentId, snapshot) {
             const isRequired = period !== "once" && Number(item.is_required ?? item.isRequired ?? 0) ? 1 : 0;
             const requiredCount = isRequired ? Math.max(1, Number(item.required_count ?? item.requiredCount ?? 1)) : 0;
             const requiredPenaltyPoints = isRequired ? Math.max(0, Number(item.required_penalty_points ?? item.requiredPenaltyPoints ?? 0)) : 0;
-            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(taskId, parentId, categoryId, String(item.title || "未命名任务").trim() || "未命名任务", item.description || "", period, Number(item.points || 0), item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "✅", Math.max(1, Number(item.limit_count ?? item.limitCount ?? 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints)
+            const gradingMode = item.grading_mode === "completion" || item.gradingMode === "completion" ? "completion" : "fixed";
+            const completionStandards = gradingMode === "completion" ? normalizeCompletionStandards(item.completionStandards || item.completion_standards || JSON.parse(item.completion_standards_json || "[]")) : [];
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, parentId, categoryId, String(item.title || "未命名任务").trim() || "未命名任务", item.description || "", period, Number(item.points || 0), item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "✅", Math.max(1, Number(item.limit_count ?? item.limitCount ?? 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, gradingMode, JSON.stringify(completionStandards))
                 .run();
             const assigned = snapshotAssignees(item, children);
             stats.skippedAssignments += assigned.skipped;

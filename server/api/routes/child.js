@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, ensureChildScheduleSchema, sanitizeSchedulePlanHtml } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -117,6 +117,28 @@ FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id
 WHERE rr.child_id=? AND rr.status IN ('pending','redeemed') AND rr.hidden_from_child_at IS NULL
 ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
     }
+    if (path === "/warehouse/achievements" && method === "GET") {
+        const a = requireRole(actor, ["child"]);
+        await ensureAchievementSchema(env);
+        return ok((await env.DB.prepare(`SELECT a.*, ca.unlocked_at, ca.hidden_from_child_at
+FROM child_achievements ca JOIN achievements a ON a.id=ca.achievement_id
+WHERE ca.child_id=? AND ca.hidden_from_child_at IS NOT NULL
+ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
+    }
+    const achievementVisibility = path.match(/^\/child-achievements\/([^/]+)\/visibility$/);
+    if (achievementVisibility && method === "PATCH") {
+        const a = requireRole(actor, ["child"]);
+        await ensureAchievementSchema(env);
+        const input = await body(request);
+        const row = await env.DB.prepare("SELECT achievement_id FROM child_achievements WHERE child_id=? AND achievement_id=?")
+            .bind(a.id, achievementVisibility[1])
+            .first();
+        if (!row) return fail("NOT_FOUND", "成就称号不存在", 404);
+        await env.DB.prepare("UPDATE child_achievements SET hidden_from_child_at=? WHERE child_id=? AND achievement_id=?")
+            .bind(input.hidden ? nowIso() : null, a.id, achievementVisibility[1])
+            .run();
+        return ok(true);
+    }
     if (path === "/warehouse/clear-redeemed" && method === "PATCH") {
         const a = requireRole(actor, ["child"]);
         await env.DB.prepare("UPDATE reward_redemptions SET hidden_from_child_at=? WHERE child_id=? AND status='redeemed' AND hidden_from_child_at IS NULL")
@@ -144,6 +166,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
     }
     if (path === "/dashboard/child" && method === "GET") {
         const a = requireRole(actor, ["child"]);
+        await ensureAchievementSchema(env);
         await settleExpiredCriticismFreezes(env);
         const offset = await timezoneOffsetMinutes(env);
         const pins = (await env.DB.prepare("SELECT item_type, item_id FROM child_pins WHERE child_id=?").bind(a.id).all()).results;
@@ -219,7 +242,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
             remedyCriticisms: await activeRemedyCriticisms(env, a.id, offset),
             aiGreeting: "",
             aiRefreshPending: false,
-            achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
+            achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? AND ca.hidden_from_child_at IS NULL ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
         });
     }
     if (path === "/child-schedule" && method === "GET") {

@@ -40,7 +40,7 @@
 - 主要调用链：`ParentApp.review`/`Shell.quickAction` -> `/task-submissions/:id/review`; `ParentApp.finishRedemption`/`Shell.quickAction` -> `/reward-redemptions/:id/redeem|cancel`; 后端写账本和通知后刷新 dashboard。
 - 相关状态：`task_submissions`、`reward_redemptions`、`point_ledger`、`notifications`
 - 相关接口：`PATCH /api/task-submissions/:id/review`、`PATCH /api/reward-redemptions/:id/redeem`、`PATCH /api/reward-redemptions/:id/cancel`、`GET /api/dashboard/parent`
-- 修改注意事项：审核和兑换需要幂等/并发保护；积分余额只从 `point_ledger` 汇总；通知快捷处理要同步标记已读和刷新。
+- 修改注意事项：审核和兑换需要幂等/并发保护；积分余额只从 `point_ledger` 汇总；通知快捷处理要同步标记已读和刷新；`grading_mode=completion` 的任务审核必须从家长待办选择 `completion_standards_json` 中的文字标准，不能走通知中心无档位快捷通过。
 - 最近更新时间：2026-06-12
 
 ## 4. 孩子账号、协同管理与家长资料
@@ -58,41 +58,41 @@
 
 ## 5. 任务与分类配置
 
-- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制和展示图标。Emoji vendor 数据仅在 `EmojiSelect` 打开选择器时动态加载。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算。现有任务列表中显示必做规则摘要。
+- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制、展示图标和按完成程度给分标准。Emoji vendor 数据仅在 `EmojiSelect` 打开选择器时动态加载。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算。现有任务列表中显示必做规则摘要。
 - 用户入口：家长设置/配置区域中的任务和分类表单。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/EmojiSelect.tsx`
 - P2：`migrations/0001_initial.sql`、`migrations/0002_limits_and_repeat_submissions.sql`、`migrations/0005_feedback_templates_and_timezone.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`migrations/0022_required_tasks.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
 - 主要调用链：`ParentApp.load` -> `/task-categories`、`/tasks`; `create/update/remove` -> `/task-categories`、`/tasks`; 孩子端从 `/dashboard/child` 接收可提交任务；必做结算 `settleRequiredTaskPenalties` 由 `server/scheduler-tick.mjs` 的共享 `schedulerTick` 函数（被内置 scheduler 和独立 scheduler 共同调用）每次 tick 显式触发，同时受 `maybeRunMaintenance` 的 24 小时清理闸门间接触发。
-- 相关状态：`task_categories`、`tasks`、`task_assignees`、`task_submissions`、`task_required_penalties`
+- 相关状态：`task_categories`、`tasks`、`task_assignees`、`task_submissions`、`task_required_penalties`、`tasks.grading_mode`、`tasks.completion_standards_json`
 - 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`
-- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；家长任务列表 small 标签中追加必做规则摘要；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶；必做扣分按 `task_id + child_id + period_key` 每周期幂等结算，同周期不重复扣、不同周期各自生成独立扣分和账本记录。
+- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；家长任务列表 small 标签中追加必做规则摘要；完成程度给分使用任务行 JSON 档位，不拆独立表；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶；必做扣分按 `task_id + child_id + period_key` 每周期幂等结算，同周期不重复扣、不同周期各自生成独立扣分和账本记录。
 - 最近更新时间：2026-06-14
 
 ## 6. 奖励、兑换、仓库与退款
 
-- 功能说明：家长维护奖励和兑换规则，孩子兑换奖励，家长核销/取消/退款，孩子查看或清理仓库。
+- 功能说明：家长维护奖励和兑换规则，孩子兑换奖励，家长核销/取消/退款，孩子查看或清理仓库；仓库含奖励与隐藏成就两个标签。
 - 用户入口：家长奖励配置、家长待办、孩子奖励/仓库页面。
 - P0：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`server/api/routes/parent.js`、`server/api/routes/child.js`
 - P1：`server/api/routes/shared.js`、`server/api/utils.js`、`src/types/api.ts`
 - P2：`migrations/0001_initial.sql`、`migrations/0004_reward_once_period.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`migrations/0010_retention_reports_feedback_recall.sql`、`tests/ledger.test.ts`、`tests/api.test.ts`
 - 主要调用链：`ChildApp.redeemReward` -> `/reward-redemptions`; `ParentApp.finishRedemption` -> `/reward-redemptions/:id/redeem|cancel`; refund modal -> `/reward-redemptions/:id/refund`; warehouse -> `/warehouse`
 - 相关状态：`rewards`、`reward_assignees`、`reward_prerequisites`、`reward_redemptions`、`point_ledger`
-- 相关接口：`GET/POST /api/rewards`、`PATCH/DELETE /api/rewards/:id`、`POST /api/reward-redemptions`、`PATCH /api/reward-redemptions/:id/redeem|cancel|refund`、`GET /api/warehouse`、`PATCH /api/warehouse/clear-redeemed`
+- 相关接口：`GET/POST /api/rewards`、`PATCH/DELETE /api/rewards/:id`、`POST /api/reward-redemptions`、`PATCH /api/reward-redemptions/:id/redeem|cancel|refund`、`GET /api/warehouse`、`PATCH /api/warehouse/clear-redeemed`、`GET /api/warehouse/achievements`
 - 修改注意事项：取消/退款要正确返还积分；已核销仓库记录和孩子端隐藏逻辑要分清；奖励前置任务会依赖任务完成周期；退还奖励弹窗的候选列表需要保持弹窗内滚动，避免记录较多时挤出操作按钮。
 - 最近更新时间：2026-06-13
 
 ## 7. 成就规则
 
-- 功能说明：家长维护成就、解锁规则、目标任务/分类/时间窗口和成就关联奖励。
+- 功能说明：家长维护成就、解锁规则、目标任务/分类/时间窗口和成就关联奖励；孩子可隐藏/展示已解锁称号。
 - 用户入口：家长设置/配置区域中的成就表单，孩子端成就展示。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`src/lib/appHelpers.ts`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/ChildApp.tsx`
 - P2：`migrations/0001_initial.sql`、`migrations/0006_achievement_rules.sql`、`migrations/0007_achievement_category_rules.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`tests/api.test.ts`
 - 主要调用链：`ParentApp.load` -> `/achievements`; create/update/delete -> `/achievements`; 后端在任务审核等路径中计算或授予成就。
-- 相关状态：`achievements`、`child_achievements`、`tasks`、`task_categories`、`rewards`
+- 相关状态：`achievements`、`child_achievements.hidden_from_child_at`、`tasks`、`task_categories`、`rewards`
 - 相关接口：`GET/POST /api/achievements`、`PATCH/DELETE /api/achievements/:id`
-- 修改注意事项：成就规则和奖励联动容易影响积分/通知；规则展示由 `appHelpers.ts` 生成，后端判定在 helper 路径中。
+- 修改注意事项：成就规则和奖励联动容易影响积分/通知；规则展示由 `appHelpers.ts` 生成，后端判定在 helper 路径中；孩子隐藏称号只更新 `child_achievements.hidden_from_child_at`，不影响成就配置和解锁历史。
 - 最近更新时间：2026-06-12
 
 ## 8. 表扬批评、补救与反馈召回
@@ -110,14 +110,14 @@
 
 ## 9. 孩子端任务、积分与固定卡片
 
-- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候。必做任务在任务墙中靠前排序并以醒目标记标识，卡片上提示"须完成X次"。任务墙右上角支持"日程表显示"开关，打开后按已设置的日程时段组织任务，显示每个时段的计划内容，并保留未安排任务分组。
+- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候；成就墙支持隐藏称号，隐藏后可在仓库成就标签中展示回来。必做任务在任务墙中靠前排序并以醒目标记标识，卡片上提示"须完成X次"。任务墙右上角支持"日程表显示"开关，打开后按已设置的日程时段组织任务，显示每个时段的计划内容，并保留未安排任务分组。
 - 用户入口：孩子登录后的首页、积分账本弹层、固定按钮。
 - P0：`src/ChildApp.tsx`、`server/api/routes/child.js`、`server/api/routes/shared.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/Shell.tsx`
 - P2：`migrations/0001_initial.sql`、`migrations/0008_child_pins.sql`、`migrations/0011_ai_service_and_child_fields.sql`、`migrations/0021_remediable_criticism_daily_greeting_checklist_images.sql`、`tests/api.test.ts`
 - 主要调用链：`ChildApp.loadSummary` -> `/dashboard/child-summary`; `ChildApp.load` -> `/dashboard/child`; submit -> `/task-submissions`; pin -> `/child-pins/:kind`; ledger -> `/points/ledger`
 - 相关状态：`task_submissions`、`point_ledger`、`child_pins`、`ai_child_greetings`
-- 相关接口：`GET /api/dashboard/child-summary`、`GET /api/dashboard/child`、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`GET /api/points/ledger`
+- 相关接口：`GET /api/dashboard/child-summary`、`GET /api/dashboard/child`、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`PATCH /api/child-achievements/:achievementId/visibility`、`GET /api/points/ledger`
 - 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色。
 - 最近更新时间：2026-06-22
 
@@ -200,7 +200,7 @@
 - 主要调用链：export -> `/config/export`; import -> `/config/import`; dev reset -> `/testing/reset-parent-progress`
 - 相关状态：家庭配置相关表、任务/奖励/成就/反馈模板/孩子分配关系
 - 相关接口：`GET /api/config/export`、`POST /api/config/import`、`POST /api/testing/reset-parent-progress`
-- 修改注意事项：导入必须保持跨家庭隔离和去重策略；开发重置只应在开发环境可用；`migrations/*.sql` 属 P2，只有 schema 兼容排查或导入格式变化时读取；跨库可移植配置不要依赖旧数据库内的任务/孩子 ID，优先使用 `assignee_names`、`task_title`、`target_task_title` 等名称映射。
+- 修改注意事项：导入必须保持跨家庭隔离和去重策略；任务配置导入导出要保留 `grading_mode` 和 `completion_standards_json`；开发重置只应在开发环境可用；`migrations/*.sql` 属 P2，只有 schema 兼容排查或导入格式变化时读取；跨库可移植配置不要依赖旧数据库内的任务/孩子 ID，优先使用 `assignee_names`、`task_title`、`target_task_title` 等名称映射。
 - 最近更新时间：2026-06-15
 
 
@@ -214,5 +214,5 @@
 - 主要调用链：`ParentApp.load` -> `/config-groups`；保存/重命名/更新/激活/删除/清空当前配置 -> `handleSharedRoutes` -> config group helpers；激活使用事务覆盖四类设置并保留历史记录；清空当前配置复用同一软删除/停用语义但不删除配置组快照。
 - 相关状态：`config_groups`、`task_categories`、`tasks`、`rewards`、`achievements`、`feedback_templates`。
 - 相关接口：`GET/POST /api/config-groups`、`PATCH/DELETE /api/config-groups/:id`、`POST /api/config-groups/:id/refresh`、`POST /api/config-groups/:id/activate`、`POST /api/config/clear-current`。
-- 修改注意事项：配置组激活是覆盖当前四块设置而非普通导入；当前业务配置采用软删除/停用以保留历史记录；配置组删除只删除保存的快照；一键清空只清当前可编辑四块配置，不清孩子账号、历史提交、兑换、积分账本或配置组快照；每个家长最多 5 个配置组。
+- 修改注意事项：配置组激活是覆盖当前四块设置而非普通导入；任务快照要保留完成程度给分档位；当前业务配置采用软删除/停用以保留历史记录；配置组删除只删除保存的快照；一键清空只清当前可编辑四块配置，不清孩子账号、历史提交、兑换、积分账本或配置组快照；每个家长最多 5 个配置组。
 - 最近更新时间：2026-06-25

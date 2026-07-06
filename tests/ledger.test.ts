@@ -41,6 +41,29 @@ describe("Task 33: Points Ledger", () => {
     expect(Number(total.b)).toBe(10);
   });
 
+
+  it("completion grading task approval uses the selected standard", async () => {
+    const actor = { type: "user", role: "parent", id: pid };
+    env.DB.prepare("UPDATE tasks SET grading_mode='completion', completion_standards_json=? WHERE id=?").bind(JSON.stringify([{ label: "合格", points: 6 }, { label: "优秀", points: 10 }]), tid).run();
+    const subId = id();
+    env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, status, submitted_at, period_key) VALUES (?, ?, ?, ?, 'pending', ?, '2026-06-03')").bind(subId, tid, cid, pid, new Date().toISOString()).run();
+    const req = makeRequest("PATCH", `/task-submissions/${subId}/review`, { approved: true, note: "", completionLabel: "合格" });
+    const res = await safe(handleParentRoutes, norm(new URL(req.url).pathname), "PATCH", req, env, actor);
+    expect(res!.status).toBe(200);
+    const ledger = env.DB.prepare("SELECT amount, note FROM point_ledger WHERE source_type='task' AND source_id=?").bind(subId).first() as any;
+    expect(ledger).toMatchObject({ amount: 6, note: "任务审核通过：合格" });
+  });
+
+  it("completion grading task approval requires a selected standard", async () => {
+    const actor = { type: "user", role: "parent", id: pid };
+    env.DB.prepare("UPDATE tasks SET grading_mode='completion', completion_standards_json=? WHERE id=?").bind(JSON.stringify([{ label: "合格", points: 6 }]), tid).run();
+    const subId = id();
+    env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, status, submitted_at, period_key) VALUES (?, ?, ?, ?, 'pending', ?, '2026-06-03')").bind(subId, tid, cid, pid, new Date().toISOString()).run();
+    const req = makeRequest("PATCH", `/task-submissions/${subId}/review`, { approved: true, note: "" });
+    const res = await safe(handleParentRoutes, norm(new URL(req.url).pathname), "PATCH", req, env, actor);
+    expect(res!.status).toBe(400);
+  });
+
   it("reward cancel returns points", async () => {
     const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
     const parentActor = { type: "user", role: "parent", id: pid, displayName: "TP" };

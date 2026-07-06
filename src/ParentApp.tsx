@@ -13,6 +13,15 @@ import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, f
 
 type ParentAiServiceStoredConfig = Omit<ParentAiServiceConfig, "apiKey"> & { updatedAt?: string };
 const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, imageBaseUrl: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", scheduleImagePrompt: "", imageSize: "1248x1760", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasImageKey: false };
+type CompletionStandard = { label: string; points: number };
+function parseCompletionStandards(item: any): CompletionStandard[] {
+  if (Array.isArray(item?.completionStandards)) return item.completionStandards;
+  try { return JSON.parse(item?.completion_standards_json || "[]"); } catch { return []; }
+}
+function cleanCompletionStandards(rows: CompletionStandard[]) {
+  return rows.map((row) => ({ label: String(row.label || "").trim(), points: Math.max(0, Number(row.points || 0)) })).filter((row) => row.label);
+}
+
 
 export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
   const [children, setChildren] = useState<Child[]>([]);
@@ -304,7 +313,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     await run(() => api("/config/clear-current", { method: "POST", body: JSON.stringify({}) }), "当前配置已清空");
   }
 
-  async function review(id: string, approved: boolean) {
+  async function review(id: string, approved: boolean, completionLabel = "") {
     if (!approved) {
       const note = window.prompt("请输入驳回原因，孩子会看到这条说明", "");
       if (note === null) return;
@@ -315,7 +324,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       return;
     }
     await run(
-      () => api(`/task-submissions/${id}/review`, { method: "PATCH", body: JSON.stringify({ approved, note: "" }) }),
+      () => api(`/task-submissions/${id}/review`, { method: "PATCH", body: JSON.stringify({ approved, note: "", completionLabel }) }),
       "任务已通过并结算积分"
     );
   }
@@ -657,7 +666,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             ))}
           </div>
           <div className="grid two">
-            <ReviewPanel title="任务审核" items={dashboard.pendingSubmissions || []} empty="没有待审核任务" approve={(id) => review(id, true)} reject={(id) => review(id, false)} />
+            <ReviewPanel title="任务审核" items={dashboard.pendingSubmissions || []} empty="没有待审核任务" approve={(id, completionLabel) => review(id, true, completionLabel)} reject={(id) => review(id, false)} />
             <RedemptionPanel items={dashboard.pendingRedemptions || []} onFinish={finishRedemption} />
           </div>
           <div className="grid two">
@@ -1042,9 +1051,10 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   );
 }
 
-export function ReviewPanel({ title, items, empty, approve, reject }: { title: string; items: any[]; empty: string; approve: (id: string) => void; reject: (id: string) => void }) {
+export function ReviewPanel({ title, items, empty, approve, reject }: { title: string; items: any[]; empty: string; approve: (id: string, completionLabel?: string) => void; reject: (id: string) => void }) {
   const groups = [...new Map(items.map((item) => [item.child_id, { id: item.child_id, name: item.child_name }])).values()];
   const [activeChildId, setActiveChildId] = useState("");
+  const [completionLabels, setCompletionLabels] = useState<Record<string, string>>({});
   const selected = activeChildId && groups.some((child) => child.id === activeChildId) ? activeChildId : groups[0]?.id || "";
   const visible = selected ? items.filter((item) => item.child_id === selected) : items;
   return (
@@ -1056,22 +1066,32 @@ export function ReviewPanel({ title, items, empty, approve, reject }: { title: s
       {groups.length > 1 && <Tabs value={selected} onChange={setActiveChildId} options={groups.map((child) => ({ value: child.id, label: child.name }))} />}
       <div className="list scroll-list">
         {visible.length ? (
-          visible.map((item: any) => (
-            <article className="row" key={item.id}>
-              <div>
-                <strong>{item.title}</strong>
-                <span>{item.child_name} · {item.period_key}</span>
-              </div>
-              <div className="actions">
-                <button className="icon good" title="通过" onClick={() => approve(item.id)}>
-                  <Check size={18} />
-                </button>
-                <button className="icon danger" title="驳回" onClick={() => reject(item.id)}>
-                  <Trash2 size={18} />
-                </button>
-              </div>
-            </article>
-          ))
+          visible.map((item: any) => {
+            const standards = parseCompletionStandards(item);
+            const needsCompletion = item.grading_mode === "completion" && standards.length > 0;
+            const completionLabel = completionLabels[item.id] || standards[0]?.label || "";
+            return (
+              <article className="row" key={item.id}>
+                <div>
+                  <strong>{item.title}</strong>
+                  <span>{item.child_name} · {item.period_key}{needsCompletion ? " · 完成程度给分" : ` · ${item.points || 0}分`}</span>
+                  {needsCompletion && (
+                    <select value={completionLabel} onChange={(e) => setCompletionLabels({ ...completionLabels, [item.id]: e.target.value })}>
+                      {standards.map((standard) => <option key={standard.label} value={standard.label}>{standard.label} · {standard.points}分</option>)}
+                    </select>
+                  )}
+                </div>
+                <div className="actions">
+                  <button className="icon good" title="通过" onClick={() => approve(item.id, needsCompletion ? completionLabel : undefined)}>
+                    <Check size={18} />
+                  </button>
+                  <button className="icon danger" title="驳回" onClick={() => reject(item.id)}>
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </article>
+            );
+          })
         ) : (
           <Empty text={empty} />
         )}
@@ -1079,7 +1099,6 @@ export function ReviewPanel({ title, items, empty, approve, reject }: { title: s
     </section>
   );
 }
-
 export function RedemptionPanel({ items, onFinish }: { items: any[]; onFinish: (id: string, action: "redeem" | "cancel") => void }) {
   const groups = [...new Map(items.map((item) => [item.child_id, { id: item.child_id, name: item.child_name }])).values()];
   const [activeChildId, setActiveChildId] = useState("");
@@ -1447,12 +1466,32 @@ export function CreateAchievement({ tasks, categories, onCreate }: { tasks: Task
   );
 }
 
+function CompletionStandardsEditor({ value, onChange }: { value: CompletionStandard[]; onChange: (value: CompletionStandard[]) => void }) {
+  const rows = value.length ? value : [{ label: "完成", points: 0 }];
+  function updateRow(index: number, patch: Partial<CompletionStandard>) {
+    onChange(rows.map((row, i) => i === index ? { ...row, ...patch } : row));
+  }
+  return (
+    <div className="stack">
+      {rows.map((row, index) => (
+        <div className="grid two compact-fields" key={index}>
+          <Field label="标准"><input required value={row.label} onChange={(e) => updateRow(index, { label: e.target.value })} /></Field>
+          <Field label="分值"><input type="number" min="0" value={row.points} onChange={(e) => updateRow(index, { points: Number(e.target.value) })} /></Field>
+        </div>
+      ))}
+      <div className="actions">
+        <button type="button" className="secondary" onClick={() => onChange([...rows, { label: "", points: 0 }])}><Plus size={16} />添加标准</button>
+        {rows.length > 1 && <button type="button" className="secondary" onClick={() => onChange(rows.slice(0, -1))}>删除最后一项</button>}
+      </div>
+    </div>
+  );
+}
 export function CreateTask({ children, categories, onCreate }: { children: Child[]; categories: Category[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, enabledWeekdays: [...DEFAULT_WEEKDAYS], iconValue: "✅", isActive: true, childIds: [] as string[], isRequired: false, requiredCount: 1, requiredPenaltyPoints: 0 });
+  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, enabledWeekdays: [...DEFAULT_WEEKDAYS], iconValue: "✅", isActive: true, childIds: [] as string[], isRequired: false, requiredCount: 1, requiredPenaltyPoints: 0, gradingMode: "fixed", completionStandards: [{ label: "完成", points: 5 }] });
   const categoryId = data.categoryId || categories[0]?.id || "";
   const showRequired = data.period !== "once";
   return (
-    <FormPanel title="新任务" icon={<ClipboardCheck />} onSubmit={() => onCreate({ ...data, categoryId, iconType: "emoji" })}>
+    <FormPanel title="新任务" icon={<ClipboardCheck />} onSubmit={() => onCreate({ ...data, categoryId, iconType: "emoji", completionStandards: cleanCompletionStandards(data.completionStandards) })}>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
       <Field label="分类">
@@ -1471,6 +1510,8 @@ export function CreateTask({ children, categories, onCreate }: { children: Child
       <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
       <Field label="启用周几"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
+      <Toggle label="按完成程度给分" checked={data.gradingMode === "completion"} onChange={(checked) => setData({ ...data, gradingMode: checked ? "completion" : "fixed" })} />
+      {data.gradingMode === "completion" && <CompletionStandardsEditor value={data.completionStandards} onChange={(completionStandards) => setData({ ...data, completionStandards })} />}
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
       {showRequired && (
@@ -1532,6 +1573,7 @@ export function CreateFeedbackTemplate({ onCreate }: { onCreate: (data: any) => 
       </Field>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
+
       {data.kind === "criticism" && (
         <>
           <Toggle label="可补救" checked={data.isRemediable} onChange={(isRemediable) => setData({ ...data, isRemediable })} />
@@ -1591,6 +1633,7 @@ export function EditFeedbackForm({ item, onSave, onCancel }: { item: FeedbackTem
       <Field label="类型"><select value={data.kind} onChange={(e) => setData({ ...data, kind: e.target.value as "praise" | "criticism", isRemediable: e.target.value === "criticism" ? data.isRemediable : false })}><option value="praise">表扬</option><option value="criticism">批评</option></select></Field>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
+
       {data.kind === "criticism" && (
         <>
           <Toggle label="可补救" checked={data.isRemediable} onChange={(isRemediable) => setData({ ...data, isRemediable })} />
@@ -1937,7 +1980,7 @@ export function Overview({ title, items, kind, children = [], categories = [], t
                 <strong>{kind === "reward" ? rewardDisplayTitle(item) : item.title}</strong>
                 {item.description && <span>{item.description}</span>}
                 <small>
-                  {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · +${item.points} · ${item.limit_count || 1}次 · ${weekdayLabel(item.enabled_weekdays || item.enabledWeekdays)}${item.is_required === 1 ? ` · 必做 ${item.required_count || 1} 次 · 未达标扣 ${item.required_penalty_points || 0} 分` : ""}`}
+                  {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · ${item.grading_mode === "completion" ? "完成程度给分" : `+${item.points}`} · ${item.limit_count || 1}次 · ${weekdayLabel(item.enabled_weekdays || item.enabledWeekdays)}${item.is_required === 1 ? ` · 必做 ${item.required_count || 1} 次 · 未达标扣 ${item.required_penalty_points || 0} 分` : ""}`}
                   {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`} · 核销${weekdayLabel(item.redeem_weekdays || item.redeemWeekdays)}${item.requiredAchievementTitle ? ` · 解锁${item.requiredAchievementTitle}` : ""}`}
                   {kind === "achievement" && formatAchievementRule(item, tasks, categories)}
                 </small>
@@ -1985,11 +2028,13 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
     childIds: item.assignees || [],
     isRequired: item.is_required === 1,
     requiredCount: item.required_count || 1,
-    requiredPenaltyPoints: item.required_penalty_points || 0
+    requiredPenaltyPoints: item.required_penalty_points || 0,
+    gradingMode: item.grading_mode || "fixed",
+    completionStandards: parseCompletionStandards(item).length ? parseCompletionStandards(item) : [{ label: "完成", points: item.points || 0 }]
   }));
   const showRequired = kind === "task" && data.period !== "once";
   return (
-    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave(kind === "achievement" ? achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "", targetCategoryId: data.targetCategoryId || categories[0]?.id || "" }) : { ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji" }); }}>
+    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave(kind === "achievement" ? achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "", targetCategoryId: data.targetCategoryId || categories[0]?.id || "" }) : { ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji", completionStandards: cleanCompletionStandards(data.completionStandards || []) }); }}>
       <Field label={kind === "reward" ? "名称" : "标题"}><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       {kind !== "task" && kind !== "reward" ? null : <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>}
       {kind === "task" && (
@@ -1999,6 +2044,8 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
           <Field label="次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
           <Field label="启用周几"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
           <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
+      <Toggle label="按完成程度给分" checked={data.gradingMode === "completion"} onChange={(checked) => setData({ ...data, gradingMode: checked ? "completion" : "fixed" })} />
+      {data.gradingMode === "completion" && <CompletionStandardsEditor value={data.completionStandards} onChange={(completionStandards) => setData({ ...data, completionStandards })} />}
           {showRequired && (
             <>
               <Toggle label="必做任务" checked={data.isRequired} onChange={(isRequired) => setData({ ...data, isRequired })} />

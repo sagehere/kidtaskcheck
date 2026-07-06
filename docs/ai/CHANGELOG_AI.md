@@ -310,3 +310,16 @@
 - 业务代码：`server/api/utils.js`、`server/api/routes/shared.js`、`src/ParentApp.tsx`、`src/styles.css`
 - 测试：`tests/api.test.ts`
 - 验证：`rtk npm test -- --run tests/api.test.ts`
+
+## 2026-07-06
+
+- 类型：功能增强
+- 范围：儿童成就墙/仓库、家长任务配置与审核
+- 摘要：
+  - 儿童成就墙新增称号隐藏/展示，隐藏称号进入仓库的成就标签。
+  - 任务新增按完成程度给分模式，家长可配置文字标准档位并在审核时选择档位入账。
+  - 配置导入导出和配置组快照保留完成程度给分设置。
+- 业务代码：`server/api/routes/child.js`、`server/api/routes/parent.js`、`server/api/routes/shared.js`、`server/api/utils.js`、`src/ChildApp.tsx`、`src/ParentApp.tsx`
+- 迁移：`migrations/0029_achievement_visibility_and_completion_grading.sql`
+- 测试：`tests/api.test.ts`、`tests/ledger.test.ts`、`tests/migration.test.ts`
+- 验证：`npm.cmd test -- --run tests/api.test.ts tests/ledger.test.ts tests/migration.test.ts`；`npm.cmd run build`

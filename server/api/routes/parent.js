@@ -1,5 +1,5 @@
-﻿import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText } from "../utils.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards } from "../utils.js";
 import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs, enqueueScheduleImageJob, loadScheduleImageJob, publicScheduleImageJob, processScheduleImageJobs } from "../ai/index.js";
 
 const PRINT_A4_STYLE = '@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933;line-height:1.5}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:24px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px;page-break-inside:auto}th,td{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}th{background:#f0f0f0}.print-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.print-task-card{border:1px solid #a7b0c0;border-radius:6px;padding:8px;background:#f8fafc;break-inside:avoid;page-break-inside:avoid}.print-task-card strong{display:block}.print-task-card small{display:block;color:#64748b}.print-plan{border:1px solid #cbd5e1;border-radius:6px;padding:8px;min-height:36px;background:#fff}.print-plan :first-child{margin-top:0}.print-plan :last-child{margin-bottom:0}.schedule-print-slot{break-inside:avoid;page-break-inside:avoid;margin-top:14px}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}.ai-commentary{background:#f0f4ff;border-left:4px solid #6366f1;padding:16px 20px;margin:18px 0;border-radius:4px}.ai-commentary h2{margin:0 0 8px;border:none;padding:0}.ai-commentary p{margin:4px 0;line-height:1.8}.ai-commentary .note{font-size:12px;color:#888;margin-top:8px}@media print{button{display:none}body{margin:0}.summary{grid-template-columns:repeat(2,1fr)}table,.print-task-card,.schedule-print-slot{break-inside:avoid;page-break-inside:avoid}}';
@@ -19,6 +19,20 @@ function schedulePlainText(slot) {
     return schedulePlanHtmlToText(slot.plan_html || "");
 }
 
+function completionStandards(row) {
+    try {
+        return normalizeCompletionStandards(JSON.parse(row.completion_standards_json || "[]"));
+    } catch {
+        return [];
+    }
+}
+
+function taskGrading(input) {
+    const gradingMode = input.gradingMode === "completion" || input.grading_mode === "completion" ? "completion" : "fixed";
+    const standards = gradingMode === "completion" ? normalizeCompletionStandards(input.completionStandards || input.completion_standards || []) : [];
+    if (gradingMode === "completion" && !standards.length) return { error: "完成程度给分至少需要一个标准" };
+    return { gradingMode, standards };
+}
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
         const a = requireRole(actor, ["parent"]);
@@ -883,8 +897,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             const isRequired = period !== "once" && input.isRequired ? 1 : 0;
             const requiredCount = isRequired ? Math.max(1, Number(input.requiredCount || 1)) : 0;
             const requiredPenaltyPoints = isRequired ? Math.max(0, Number(input.requiredPenaltyPoints || 0)) : 0;
-            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(taskId, a.id, input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints)
+            const grading = taskGrading(input);
+            if (grading.error) return fail("BAD_REQUEST", grading.error, 400);
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, a.id, input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, grading.gradingMode, JSON.stringify(grading.standards))
                 .run();
             await replaceAssignees(env, a.id, "task_assignees", "task_id", taskId, input.childIds || []);
             return ok(true);
@@ -910,8 +926,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         const isRequired = period !== "once" && input.isRequired ? 1 : 0;
         const requiredCount = isRequired ? Math.max(1, Number(input.requiredCount || 1)) : 0;
         const requiredPenaltyPoints = isRequired ? Math.max(0, Number(input.requiredPenaltyPoints || 0)) : 0;
-        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, enabled_weekdays=?, is_active=?, is_required=?, required_count=?, required_penalty_points=?, updated_at=? WHERE id=?")
-            .bind(input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, nowIso(), taskPatch[1])
+        const grading = taskGrading(input);
+        if (grading.error) return fail("BAD_REQUEST", grading.error, 400);
+        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, enabled_weekdays=?, is_active=?, is_required=?, required_count=?, required_penalty_points=?, grading_mode=?, completion_standards_json=?, updated_at=? WHERE id=?")
+            .bind(input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, grading.gradingMode, JSON.stringify(grading.standards), nowIso(), taskPatch[1])
             .run();
         await replaceAssignees(env, a.id, "task_assignees", "task_id", taskPatch[1], input.childIds || []);
         return ok(true);
@@ -1048,7 +1066,7 @@ WHERE id=?`)
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         const audit = actorAudit(a);
         const input = await body(request);
-        const sub = await env.DB.prepare("SELECT s.*, t.point_type, t.points FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.id=? AND s.parent_id=? AND s.status='pending'")
+        const sub = await env.DB.prepare("SELECT s.*, t.point_type, t.points, t.grading_mode, t.completion_standards_json FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.id=? AND s.parent_id=? AND s.status='pending'")
             .bind(review[1], a.id)
             .first();
         if (!sub)
@@ -1059,10 +1077,16 @@ WHERE id=?`)
             if (existing)
                 return fail("DUPLICATE_LEDGER", "该任务已审核通过，不能重复记账", 409);
         }
+        const standards = status === "approved" && sub.grading_mode === "completion" ? completionStandards(sub) : [];
+        const selectedStandard = standards.find((item) => item.label === String(input.completionLabel || input.completion_label || ""));
+        if (status === "approved" && sub.grading_mode === "completion" && !selectedStandard)
+            return fail("BAD_REQUEST", "该任务需要在家长待办中选择完成程度标准", 400);
+        const awardedPoints = selectedStandard ? selectedStandard.points : Number(sub.points);
+        const reviewNote = selectedStandard ? `任务审核通过：${selectedStandard.label}` : "任务审核通过";
         const stmts = [env.DB.prepare("UPDATE task_submissions SET status=?, reviewed_at=?, review_note=? WHERE id=?").bind(status, nowIso(), input.note || "", sub.id)];
         if (status === "approved") {
             stmts.push(env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)")
-                .bind(id(), sub.child_id, a.id, signedPoints(sub.point_type, Number(sub.points)), sub.id, sub.period_key, "任务审核通过", audit.type, audit.id, audit.label));
+                .bind(id(), sub.child_id, a.id, signedPoints(sub.point_type, awardedPoints), sub.id, sub.period_key, reviewNote, audit.type, audit.id, audit.label));
         }
         stmts.push(env.DB.prepare("UPDATE notifications SET read_at=? WHERE recipient_type='user' AND recipient_id=? AND related_type='task_submission' AND related_id=? AND read_at IS NULL")
             .bind(nowIso(), a.id, sub.id));
@@ -1077,7 +1101,7 @@ WHERE id=?`)
             actorId: audit.id || a.id,
             actorLabel: audit.label,
             title: status === "approved" ? "任务审核通过" : "任务被驳回",
-            body: status === "approved" ? "家长已通过你的任务，积分已结算。" : input.note || "家长驳回了这次任务提交。",
+            body: status === "approved" ? (selectedStandard ? `家长已按「${selectedStandard.label}」通过你的任务，积分已结算。` : "家长已通过你的任务，积分已结算。") : input.note || "家长驳回了这次任务提交。",
             eventType: status === "approved" ? "task_approved" : "task_rejected",
             relatedType: "task_submission",
             relatedId: sub.id

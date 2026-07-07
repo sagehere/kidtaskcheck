@@ -1586,6 +1586,11 @@ button:disabled {
   font-weight: 800;
 }
 
+.card-meta .exempted-tag {
+  color: #166534;
+  background: #dcfce7;
+}
+
 .wall-card.required-card::before {
   background: linear-gradient(90deg, #f59e0b, #ef4444);
 }

@@ -346,3 +346,16 @@
 - 业务代码：`server/api/routes/child.js`、`server/api/routes/shared.js`、`src/ChildApp.tsx`、`src/ParentApp.tsx`、`src/styles.css`、`src/types/api.ts`
 - 测试：`tests/ledger.test.ts`
 - 验证：待运行 `npm.cmd test -- --run tests/ledger.test.ts`
+
+
+## 2026-07-07
+
+- 类型：功能增强
+- 范围：必做任务豁免、家长待处理、孩子任务墙
+- 摘要：
+  - 新增 `DELETE /api/tasks/:id/required-penalty-exemptions`，家长可撤销当前周期尚未实际扣分结算的 0 分豁免记录。
+  - 家长必做扣分豁免面板对已豁免任务显示“撤销豁免”操作，撤销后现有刷新会同步清除孩子端和家长端“已豁免”状态。
+  - 修正任务卡片中“已豁免”标签被通用元信息样式覆盖的问题，孩子任务墙和日程任务卡显示绿色底色。
+- 业务代码：`server/api/routes/parent.js`、`src/ParentApp.tsx`、`src/styles.css`
+- 测试：`tests/ledger.test.ts`
+- 验证：待运行 `npm.cmd test -- --run tests/ledger.test.ts`

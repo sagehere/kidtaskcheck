@@ -339,6 +339,26 @@ describe("Required Task Penalties", () => {
     const dupReq = makeRequest("POST", `/tasks/${tid}/required-penalty-exemptions`, { childId: cid });
     const dup = await safe(handleParentRoutes, norm(new URL(dupReq.url).pathname), "POST", dupReq, env, parentActor);
     expect(dup!.status).toBe(409);
+
+    const settledDeleteReq = makeRequest("DELETE", `/tasks/${tid2}/required-penalty-exemptions`, { childId: cid });
+    const settledDelete = await safe(handleParentRoutes, norm(new URL(settledDeleteReq.url).pathname), "DELETE", settledDeleteReq, env, parentActor);
+    expect(settledDelete!.status).toBe(409);
+    expect(env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid2, cid).first()).toBeTruthy();
+
+    const deleteReq = makeRequest("DELETE", `/tasks/${tid}/required-penalty-exemptions`, { childId: cid });
+    const deleted = await safe(handleParentRoutes, norm(new URL(deleteReq.url).pathname), "DELETE", deleteReq, env, parentActor);
+    expect(deleted!.status).toBe(200);
+    expect(env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).first()).toBeNull();
+
+    const childAfterDeleteReq = makeRequest("GET", "/dashboard/child");
+    const childAfterDeleteRes = await safe(handleChildRoutes, norm(new URL(childAfterDeleteReq.url).pathname), "GET", childAfterDeleteReq, env, childActor, new URL(childAfterDeleteReq.url));
+    const childAfterDelete = await childAfterDeleteRes!.json();
+    expect(childAfterDelete.data.tasks.find((task: any) => task.id === tid).requiredPenaltyExempted).toBe(false);
+
+    const parentAfterDeleteReq = makeRequest("GET", "/dashboard/parent");
+    const parentAfterDeleteRes = await safe(handleSharedRoutes, norm(new URL(parentAfterDeleteReq.url).pathname), "GET", parentAfterDeleteReq, env, parentActor, new URL(parentAfterDeleteReq.url));
+    const parentAfterDelete = await parentAfterDeleteRes!.json();
+    expect(parentAfterDelete.data.requiredPenaltyExemptions.some((item: any) => item.taskId === tid)).toBe(false);
   });
   it("does not deduct points when required task approval count meets threshold", async () => {
     tid = id();

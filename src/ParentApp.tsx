@@ -407,6 +407,14 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       "本周期必做扣分已豁免"
     );
   }
+
+  async function revokeRequiredPenaltyExemption(data: { childId: string; taskId: string }) {
+    await run(
+      () => api(`/tasks/${data.taskId}/required-penalty-exemptions`, { method: "DELETE", body: JSON.stringify({ childId: data.childId }) }),
+      "本周期必做扣分豁免已撤销"
+    );
+  }
+
   function exportChildPrint(child: Child) {
     window.open(`/api/children/${encodeURIComponent(child.id)}/export-print`, "_blank", "noopener,noreferrer");
   }
@@ -677,7 +685,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           </div>
           <div className="grid two">
             <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} remedyItems={dashboard.remedyCriticisms || []} onRemedy={(id) => void confirmRemedy(id)} />
-            <RequiredPenaltyExemptionPanel children={children} tasks={tasks} exemptions={dashboard.requiredPenaltyExemptions || []} onSubmit={exemptRequiredPenalty} />
+            <RequiredPenaltyExemptionPanel children={children} tasks={tasks} exemptions={dashboard.requiredPenaltyExemptions || []} onSubmit={exemptRequiredPenalty} onRevoke={revokeRequiredPenaltyExemption} />
           </div>
         </>
       )}
@@ -1212,7 +1220,7 @@ export function PraiseCriticismPanel({ children, templates, onSubmit, remedyItem
   );
 }
 
-export function RequiredPenaltyExemptionPanel({ children, tasks, exemptions = [], onSubmit }: { children: Child[]; tasks: Task[]; exemptions?: { childId: string; taskId: string }[]; onSubmit: (data: { childId: string; taskId: string }) => void }) {
+export function RequiredPenaltyExemptionPanel({ children, tasks, exemptions = [], onSubmit, onRevoke }: { children: Child[]; tasks: Task[]; exemptions?: { childId: string; taskId: string }[]; onSubmit: (data: { childId: string; taskId: string }) => void; onRevoke: (data: { childId: string; taskId: string }) => void }) {
   const [data, setData] = useState({ childId: "", taskId: "" });
   const childId = data.childId || children[0]?.id || "";
   const requiredTasks = tasks.filter((task) => Number(task.is_required || 0) === 1 && task.is_active !== 0 && (task.assignees || []).includes(childId));
@@ -1237,7 +1245,7 @@ export function RequiredPenaltyExemptionPanel({ children, tasks, exemptions = []
           </Field>
           {!requiredTasks.length && <Empty text="该孩子暂无可豁免的必做任务" />}
           {selectedExempted && <span className="exempted-tag">已豁免</span>}
-          <button className="secondary" disabled={!taskId || selectedExempted}><BadgeCheck size={18} />豁免本周期</button>
+          {selectedExempted ? <button type="button" className="secondary" disabled={!taskId} onClick={() => onRevoke({ childId, taskId })}><RotateCcw size={18} />撤销豁免</button> : <button className="secondary" disabled={!taskId}><BadgeCheck size={18} />豁免本周期</button>}
         </form>
       )}
     </section>

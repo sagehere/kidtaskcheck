@@ -907,7 +907,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         }
     }
     const taskExemption = path.match(/^\/tasks\/([^/]+)\/required-penalty-exemptions$/);
-    if (taskExemption && method === "POST") {
+    if (taskExemption && (method === "POST" || method === "DELETE")) {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         const input = await body(request);
         await ensureRequiredTaskSchema(env);
@@ -921,6 +921,19 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         const existing = await env.DB.prepare("SELECT id FROM task_required_penalties WHERE task_id=? AND child_id=? AND period_key=?")
             .bind(task.id, input.childId, periodKeyValue)
             .first();
+        if (method === "DELETE") {
+            if (!existing)
+                return fail("NOT_FOUND", "本周期未豁免", 404);
+            const exemption = await env.DB.prepare("SELECT id FROM task_required_penalties WHERE id=? AND parent_id=? AND penalty_points=0")
+                .bind(existing.id, a.id)
+                .first();
+            if (!exemption)
+                return fail("ALREADY_SETTLED", "本周期已结算，不能撤销豁免", 409);
+            await env.DB.prepare("DELETE FROM task_required_penalties WHERE id=?")
+                .bind(exemption.id)
+                .run();
+            return ok(true);
+        }
         if (existing)
             return fail("ALREADY_SETTLED", "该任务本周期已结算或已豁免", 409);
         await env.DB.prepare("INSERT INTO task_required_penalties (id, task_id, child_id, parent_id, period_key, required_count, actual_count, penalty_points, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)")

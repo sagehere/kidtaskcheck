@@ -1574,6 +1574,18 @@ button:disabled {
   background: #fef3c7;
 }
 
+.exempted-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  color: #166534;
+  background: #dcfce7;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .wall-card.required-card::before {
   background: linear-gradient(90deg, #f59e0b, #ef4444);
 }

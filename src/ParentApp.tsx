@@ -677,7 +677,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           </div>
           <div className="grid two">
             <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} remedyItems={dashboard.remedyCriticisms || []} onRemedy={(id) => void confirmRemedy(id)} />
-            <RequiredPenaltyExemptionPanel children={children} tasks={tasks} onSubmit={exemptRequiredPenalty} />
+            <RequiredPenaltyExemptionPanel children={children} tasks={tasks} exemptions={dashboard.requiredPenaltyExemptions || []} onSubmit={exemptRequiredPenalty} />
           </div>
         </>
       )}
@@ -1212,16 +1212,18 @@ export function PraiseCriticismPanel({ children, templates, onSubmit, remedyItem
   );
 }
 
-export function RequiredPenaltyExemptionPanel({ children, tasks, onSubmit }: { children: Child[]; tasks: Task[]; onSubmit: (data: { childId: string; taskId: string }) => void }) {
+export function RequiredPenaltyExemptionPanel({ children, tasks, exemptions = [], onSubmit }: { children: Child[]; tasks: Task[]; exemptions?: { childId: string; taskId: string }[]; onSubmit: (data: { childId: string; taskId: string }) => void }) {
   const [data, setData] = useState({ childId: "", taskId: "" });
   const childId = data.childId || children[0]?.id || "";
   const requiredTasks = tasks.filter((task) => Number(task.is_required || 0) === 1 && task.is_active !== 0 && (task.assignees || []).includes(childId));
   const taskId = requiredTasks.some((task) => task.id === data.taskId) ? data.taskId : "";
+  const exemptedTaskIds = new Set(exemptions.filter((item) => item.childId === childId).map((item) => item.taskId));
+  const selectedExempted = taskId ? exemptedTaskIds.has(taskId) : false;
   return (
     <section className="panel">
       <div className="panel-title"><BadgeCheck /><h2>必做扣分豁免</h2></div>
       {!children.length ? <Empty text="先创建孩子账号后再操作" /> : (
-        <form className="stack compact" onSubmit={(event) => { event.preventDefault(); if (childId && taskId) onSubmit({ childId, taskId }); }}>
+        <form className="stack compact" onSubmit={(event) => { event.preventDefault(); if (childId && taskId && !selectedExempted) onSubmit({ childId, taskId }); }}>
           <Field label="孩子">
             <select value={childId} onChange={(e) => setData({ childId: e.target.value, taskId: "" })}>
               {children.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
@@ -1230,11 +1232,12 @@ export function RequiredPenaltyExemptionPanel({ children, tasks, onSubmit }: { c
           <Field label="必做任务">
             <select value={taskId} onChange={(e) => setData({ ...data, taskId: e.target.value })} disabled={!requiredTasks.length}>
               <option value="">请选择本周期豁免任务</option>
-              {requiredTasks.map((task) => <option key={task.id} value={task.id}>{task.title} · {formatPeriod(task.period || "daily")}</option>)}
+              {requiredTasks.map((task) => <option key={task.id} value={task.id}>{task.title} · {formatPeriod(task.period || "daily")}{exemptedTaskIds.has(task.id) ? " · 已豁免" : ""}</option>)}
             </select>
           </Field>
           {!requiredTasks.length && <Empty text="该孩子暂无可豁免的必做任务" />}
-          <button className="secondary" disabled={!taskId}><BadgeCheck size={18} />豁免本周期</button>
+          {selectedExempted && <span className="exempted-tag">已豁免</span>}
+          <button className="secondary" disabled={!taskId || selectedExempted}><BadgeCheck size={18} />豁免本周期</button>
         </form>
       )}
     </section>

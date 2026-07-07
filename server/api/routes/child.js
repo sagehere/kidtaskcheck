@@ -177,10 +177,15 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             .all();
         const enabledTasks = currentTasks.results.filter((task) => isWeekdayAllowed(task.enabled_weekdays, undefined, offset));
         const taskPeriods = enabledTasks.map((task) => ({ itemId: task.id, periodKey: periodKey(task.period, undefined, offset) }));
-        const [taskUsageCounts, taskStatuses] = await Promise.all([
+        const periodKeys = [...new Set(taskPeriods.map((task) => task.periodKey))];
+        const [taskUsageCounts, taskStatuses, exemptionRows] = await Promise.all([
             childUsageCountsForPeriods(env, "task_submissions", "task_id", a.id, taskPeriods, ["pending", "approved"]),
-            childLatestTaskStatuses(env, a.id, taskPeriods)
+            childLatestTaskStatuses(env, a.id, taskPeriods),
+            periodKeys.length
+                ? env.DB.prepare(`SELECT task_id, period_key FROM task_required_penalties WHERE child_id=? AND penalty_points=0 AND period_key IN (${periodKeys.map(() => "?").join(",")})`).bind(a.id, ...periodKeys).all()
+                : { results: [] }
         ]);
+        const exempted = new Set(exemptionRows.results.map((row) => `${row.task_id}:${row.period_key}`));
         const taskRows = enabledTasks.map((task, index) => {
             const pkey = taskPeriods[index].periodKey;
             const key = `${task.id}:${pkey}`;
@@ -199,6 +204,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
                 resetAt: nextPeriodReset(task.period, undefined, offset),
                 submissionStatus: latest?.status || null,
                 rejectionNote: rejected?.review_note || "",
+                requiredPenaltyExempted: exempted.has(key),
                 isPinned: task.id === pinnedTaskId
             };
         });
@@ -250,13 +256,23 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
         await ensureChildScheduleSchema(env);
         const slots = (await env.DB.prepare("SELECT * FROM child_schedule_slots WHERE child_id=? ORDER BY sort_order, created_at")
             .bind(a.id).all()).results;
-        const items = slots.length
+        let items = slots.length
             ? (await env.DB.prepare(`SELECT csi.*, t.title, t.points, t.period, t.limit_count, t.is_required, t.required_count, t.description, tc.name category_name
 FROM child_schedule_items csi
 JOIN tasks t ON t.id=csi.task_id
 LEFT JOIN task_categories tc ON tc.id=t.category_id
 WHERE csi.child_id=? ORDER BY csi.sort_order, csi.created_at`).bind(a.id).all()).results
             : [];
+        if (items.length) {
+            const offset = await timezoneOffsetMinutes(env);
+            const taskPeriods = items.map((item) => ({ taskId: item.task_id, periodKey: periodKey(item.period, undefined, offset) }));
+            const periodKeys = [...new Set(taskPeriods.map((item) => item.periodKey))];
+            const rows = await env.DB.prepare(`SELECT task_id, period_key FROM task_required_penalties WHERE child_id=? AND penalty_points=0 AND period_key IN (${periodKeys.map(() => "?").join(",")})`)
+                .bind(a.id, ...periodKeys)
+                .all();
+            const exempted = new Set(rows.results.map((row) => `${row.task_id}:${row.period_key}`));
+            items = items.map((item, index) => ({ ...item, requiredPenaltyExempted: exempted.has(`${item.task_id}:${taskPeriods[index].periodKey}`) }));
+        }
         return ok({ slots, items });
     }
     if (path === "/child-schedule" && method === "PUT") {

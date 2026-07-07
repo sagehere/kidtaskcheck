@@ -135,6 +135,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           <span className={task.point_type === "earn" ? "positive" : "negative"}>{points} 积分</span>
           <span>{task.usedCount}/{task.limitCount} 次</span>
           {isRequired && <span className="required-tag">须完成{task.required_count || 1}次</span>}
+          {task.requiredPenaltyExempted && <span className="exempted-tag">已豁免</span>}
           <span>{task.periodKey}</span>
         </div>
         <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
@@ -254,6 +255,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
       is_required: it.is_required,
       required_count: it.required_count,
       description: it.description,
+      requiredPenaltyExempted: it.requiredPenaltyExempted,
     }));
     setSchedule({ slots, items });
   }
@@ -382,6 +384,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           {points !== undefined && <span className={task?.point_type === "spend" ? "negative" : "positive"}>{points} 积分</span>}
           {task && <span>{scheduledCountForTask(task.id)}/{getTaskScheduleLimit(task.id)} 次</span>}
           {(task?.is_required === 1 || item.is_required) && <span className="required-tag">须完成{task?.required_count || item.required_count || 1}次</span>}
+          {(task?.requiredPenaltyExempted || item.requiredPenaltyExempted) && <span className="exempted-tag">已豁免</span>}
         </div>
       </article>
     );

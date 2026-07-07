@@ -334,3 +334,15 @@
 - 业务代码：`server/api/utils.js`、`server/api/routes/parent.js`、`server/api/ai/cache.js`、`src/ParentApp.tsx`
 - 测试：`tests/ledger.test.ts`、`tests/api.test.ts`
 - 验证：`npm.cmd test -- --run tests/ledger.test.ts tests/api.test.ts`、`npm.cmd run build`
+
+## 2026-07-07
+
+- 类型：功能增强
+- 范围：必做任务豁免显示、孩子任务墙、家长待处理
+- 摘要：
+  - `/dashboard/child` 和 `/dashboard/parent` 返回当前周期 0 分必做豁免状态。
+  - 孩子任务卡/日程任务卡与家长必做豁免面板显示“已豁免”，并禁用已豁免任务的重复提交按钮。
+  - 补充必做豁免接口测试，覆盖 0 分豁免与非 0 扣分记录的显示差异。
+- 业务代码：`server/api/routes/child.js`、`server/api/routes/shared.js`、`src/ChildApp.tsx`、`src/ParentApp.tsx`、`src/styles.css`、`src/types/api.ts`
+- 测试：`tests/ledger.test.ts`
+- 验证：待运行 `npm.cmd test -- --run tests/ledger.test.ts`

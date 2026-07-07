@@ -318,6 +318,24 @@ describe("Required Task Penalties", () => {
     const exemption = env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).first() as any;
     expect(exemption).toBeTruthy();
     expect(Number(exemption.penalty_points)).toBe(0);
+    const tid2 = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT2', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 1, 5)").bind(tid2, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid2, cid).run();
+    env.DB.prepare("INSERT INTO task_required_penalties (id, task_id, child_id, parent_id, period_key, required_count, actual_count, penalty_points) VALUES (?, ?, ?, ?, ?, 1, 0, 5)").bind(id(), tid2, cid, pid, exemption.period_key).run();
+
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
+    const childDashReq = makeRequest("GET", "/dashboard/child");
+    const childDashRes = await safe(handleChildRoutes, norm(new URL(childDashReq.url).pathname), "GET", childDashReq, env, childActor, new URL(childDashReq.url));
+    const childDash = await childDashRes!.json();
+    expect(childDash.data.tasks.find((task: any) => task.id === tid).requiredPenaltyExempted).toBe(true);
+    expect(childDash.data.tasks.find((task: any) => task.id === tid2).requiredPenaltyExempted).toBe(false);
+
+    const parentDashReq = makeRequest("GET", "/dashboard/parent");
+    const parentDashRes = await safe(handleSharedRoutes, norm(new URL(parentDashReq.url).pathname), "GET", parentDashReq, env, parentActor, new URL(parentDashReq.url));
+    const parentDash = await parentDashRes!.json();
+    expect(parentDash.data.requiredPenaltyExemptions).toContainEqual({ childId: cid, taskId: tid, periodKey: exemption.period_key });
+    expect(parentDash.data.requiredPenaltyExemptions.some((item: any) => item.taskId === tid2)).toBe(false);
+
     const dupReq = makeRequest("POST", `/tasks/${tid}/required-penalty-exemptions`, { childId: cid });
     const dup = await safe(handleParentRoutes, norm(new URL(dupReq.url).pathname), "POST", dupReq, env, parentActor);
     expect(dup!.status).toBe(409);

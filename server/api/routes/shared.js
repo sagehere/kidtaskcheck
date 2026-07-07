@@ -1,4 +1,5 @@
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup, clearCurrentConfig } from "../utils.js";
+import { periodKey } from "../../../src/lib/domain.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup, clearCurrentConfig, ensureRequiredTaskSchema } from "../utils.js";
 import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes, activeRemedyCriticisms } from "../utils.js";
 
 export async function handleSharedRoutes(path, method, request, env, actor, url) {
@@ -325,10 +326,21 @@ WHERE id=? AND freeze_status='frozen'`)
                 allRemedy.push({ ...item, childId: child.id, childName: child.display_name });
             }
         }
+        await ensureRequiredTaskSchema(env);
+        const requiredRows = (await env.DB.prepare(`SELECT t.id task_id, t.period, ta.child_id
+FROM tasks t
+JOIN task_assignees ta ON ta.task_id=t.id
+JOIN children c ON c.id=ta.child_id AND c.parent_id=t.parent_id AND c.deleted_at IS NULL
+WHERE t.parent_id=? AND t.is_required=1 AND t.is_active=1 AND t.deleted_at IS NULL`).bind(a.id).all()).results;
+        const currentRequired = requiredRows.map((row) => ({ childId: row.child_id, taskId: row.task_id, periodKey: periodKey(row.period, undefined, offset) }));
+        const penaltyRows = (await env.DB.prepare("SELECT child_id, task_id, period_key FROM task_required_penalties WHERE parent_id=? AND penalty_points=0").bind(a.id).all()).results;
+        const exempted = new Set(penaltyRows.map((row) => `${row.child_id}:${row.task_id}:${row.period_key}`));
+        const requiredPenaltyExemptions = currentRequired.filter((row) => exempted.has(`${row.childId}:${row.taskId}:${row.periodKey}`));
         const childCards = children.map((child) => ({ ...child, balance: balances.get(child.id) || 0, frozenPoints: frozenMap.get(child.id) || 0 }));
         return ok({
             children: childCards,
             remedyCriticisms: allRemedy,
+            requiredPenaltyExemptions,
             pendingSubmissions: (await env.DB.prepare("SELECT s.*, t.title, t.points, t.grading_mode, t.completion_standards_json, c.display_name child_name FROM task_submissions s JOIN tasks t ON t.id=s.task_id JOIN children c ON c.id=s.child_id WHERE s.parent_id=? AND s.status='pending' ORDER BY s.submitted_at").bind(a.id).all()).results,
             pendingRedemptions: (await env.DB.prepare("SELECT rr.*, r.title, r.redeem_weekdays, c.display_name child_name FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id JOIN children c ON c.id=rr.child_id WHERE rr.parent_id=? AND rr.status='pending' ORDER BY rr.requested_at").bind(a.id).all()).results
         });

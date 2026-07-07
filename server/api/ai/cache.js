@@ -69,6 +69,8 @@ export async function getParentAiServiceConfig(env, parentId) {
     }
 }
 
+const greetingLimit = (text) => Array.from(String(text || "")).slice(0, 200).join("");
+
 export async function loadAiGreetingSnapshot(env, child, offset) {
     if (!child?.ai_enabled)
         return { greeting: "", aiRefreshPending: false };
@@ -82,11 +84,11 @@ export async function loadAiGreetingSnapshot(env, child, offset) {
         .bind(child.id, dayKey, configHash)
         .first();
     if (cached?.greeting)
-        return { greeting: cached.greeting, aiRefreshPending: false };
+        return { greeting: greetingLimit(cached.greeting), aiRefreshPending: false };
     const stale = await env.DB.prepare("SELECT greeting FROM ai_child_greetings WHERE child_id=? ORDER BY generated_at DESC LIMIT 1")
         .bind(child.id)
         .first();
-    return { greeting: stale?.greeting || "", aiRefreshPending: true };
+    return { greeting: greetingLimit(stale?.greeting), aiRefreshPending: true };
 }
 
 export async function ensureParentAiServiceSettings(env) {

@@ -620,7 +620,7 @@ export async function settleRequiredTaskPenalties(env, at = nowIso()) {
     const shouldSettleMonthly = dayOfMonth === 1 && hour >= 0;
     if (!shouldSettleDaily && !shouldSettleWeekly && !shouldSettleMonthly)
         return { settled: 0 };
-    const tasks = (await env.DB.prepare(`SELECT t.id, t.parent_id, t.period, t.required_count, t.required_penalty_points, t.title,
+    const tasks = (await env.DB.prepare(`SELECT t.id, t.parent_id, t.period, t.required_count, t.required_penalty_points, t.title, t.created_at, t.updated_at,
   ta.child_id
 FROM tasks t
 JOIN task_assignees ta ON ta.task_id=t.id
@@ -638,6 +638,10 @@ WHERE t.is_required=1
         else if (task.period === "monthly" && shouldSettleMonthly)
             periodKeyValue = monthlyKey;
         else
+            continue;
+        const activeFrom = task.updated_at || task.created_at;
+        const activeFromKey = periodKey(task.period, activeFrom, offset);
+        if (activeFrom && new Date(activeFrom).getTime() <= now.getTime() && activeFromKey > periodKeyValue)
             continue;
         const existing = await env.DB.prepare("SELECT id FROM task_required_penalties WHERE task_id=? AND child_id=? AND period_key=?")
             .bind(task.id, task.child_id, periodKeyValue).first();

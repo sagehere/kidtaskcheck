@@ -906,6 +906,28 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             return ok(true);
         }
     }
+    const taskExemption = path.match(/^\/tasks\/([^/]+)\/required-penalty-exemptions$/);
+    if (taskExemption && method === "POST") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const input = await body(request);
+        await ensureRequiredTaskSchema(env);
+        const task = await env.DB.prepare("SELECT t.id, t.parent_id, t.period, t.required_count, t.title FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id AND ta.child_id=? JOIN children c ON c.id=ta.child_id AND c.parent_id=t.parent_id AND c.status='active' AND c.deleted_at IS NULL WHERE t.id=? AND t.parent_id=? AND t.is_required=1 AND t.required_count>0 AND t.is_active=1 AND t.deleted_at IS NULL")
+            .bind(input.childId, taskExemption[1], a.id)
+            .first();
+        if (!task)
+            return fail("NOT_FOUND", "可豁免的必做任务不存在", 404);
+        const at = nowIso();
+        const periodKeyValue = periodKey(task.period, at, await timezoneOffsetMinutes(env));
+        const existing = await env.DB.prepare("SELECT id FROM task_required_penalties WHERE task_id=? AND child_id=? AND period_key=?")
+            .bind(task.id, input.childId, periodKeyValue)
+            .first();
+        if (existing)
+            return fail("ALREADY_SETTLED", "该任务本周期已结算或已豁免", 409);
+        await env.DB.prepare("INSERT INTO task_required_penalties (id, task_id, child_id, parent_id, period_key, required_count, actual_count, penalty_points, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)")
+            .bind(id(), task.id, input.childId, a.id, periodKeyValue, task.required_count, at)
+            .run();
+        return ok(true);
+    }
     const taskPatch = path.match(/^\/tasks\/([^/]+)$/);
     if (taskPatch && method === "PATCH") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);

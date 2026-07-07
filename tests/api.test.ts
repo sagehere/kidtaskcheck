@@ -690,6 +690,18 @@ describe("Parent AI Service Validation", () => {
     expect(rows[0].greeting).toBe(text);
     expect(rows[0].child_id).toBe(childId);
   });
+  it("limits child summary greeting to 200 characters", async () => {
+    const actor = { type: "user", role: "parent", id: parentId };
+    const childId = await seedAiChild(1);
+    await safe(handleParentRoutes, "/parent/ai-service", "PATCH", makeRequest("PATCH", "/parent/ai-service", { baseUrl: "https://api.example.com/v1", model: "gpt-a", prompt: "hello", apiKey: "sk-test" }), env, actor);
+    const text = "你".repeat(220);
+    await safe(handleParentRoutes, "/parent/ai-service/preview/cache", "POST", makeRequest("POST", "/parent/ai-service/preview/cache", { childId, type: "greeting", text }), env, actor);
+    const childActor = { type: "child", role: "child", id: childId, parent_id: parentId, displayName: "AI Child" };
+    const res = await safe(handleChildRoutes, "/dashboard/child-summary", "GET", makeRequest("GET", "/dashboard/child-summary"), env, childActor);
+    expect(res!.status).toBe(200);
+    const payload = await res!.json();
+    expect(Array.from(payload.data.aiGreeting)).toHaveLength(200);
+  });
   it("preview/cache writes monthly report commentary into ai_report_commentaries", async () => {
     const actor = { type: "user", role: "parent", id: parentId };
     const childId = await seedAiChild(1);

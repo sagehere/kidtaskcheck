@@ -285,6 +285,43 @@ describe("Required Task Penalties", () => {
     expect(penaltyRow.sourceLabel).toBe("任务：TT");
   });
 
+  it("does not deduct previous period for newly created required tasks", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points, created_at, updated_at) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 1, 5, '2026-06-11T00:00:00.000Z', '2026-06-11T00:00:00.000Z')").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    const result = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(result.settled).toBe(0);
+    expect(env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).first()).toBeNull();
+  });
+
+  it("does not deduct previous period after a required task is edited", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points, created_at, updated_at) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 1, 5, '2026-06-01T00:00:00.000Z', '2026-06-11T00:00:00.000Z')").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 100, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    const result = await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    expect(result.settled).toBe(0);
+    expect(env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).first()).toBeNull();
+  });
+
+  it("exempts current required task period once", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 1, 5)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    const parentActor = { type: "user", role: "parent", id: pid };
+    const req = makeRequest("POST", `/tasks/${tid}/required-penalty-exemptions`, { childId: cid });
+    const res = await safe(handleParentRoutes, norm(new URL(req.url).pathname), "POST", req, env, parentActor);
+    expect(res!.status).toBe(200);
+    const exemption = env.DB.prepare("SELECT * FROM task_required_penalties WHERE task_id=? AND child_id=?").bind(tid, cid).first() as any;
+    expect(exemption).toBeTruthy();
+    expect(Number(exemption.penalty_points)).toBe(0);
+    const dupReq = makeRequest("POST", `/tasks/${tid}/required-penalty-exemptions`, { childId: cid });
+    const dup = await safe(handleParentRoutes, norm(new URL(dupReq.url).pathname), "POST", dupReq, env, parentActor);
+    expect(dup!.status).toBe(409);
+  });
   it("does not deduct points when required task approval count meets threshold", async () => {
     tid = id();
     env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 2, 5)").bind(tid, pid).run();

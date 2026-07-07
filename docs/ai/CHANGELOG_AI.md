@@ -323,3 +323,14 @@
 - 迁移：`migrations/0029_achievement_visibility_and_completion_grading.sql`
 - 测试：`tests/api.test.ts`、`tests/ledger.test.ts`、`tests/migration.test.ts`
 - 验证：`npm.cmd test -- --run tests/api.test.ts tests/ledger.test.ts tests/migration.test.ts`；`npm.cmd run build`
+## 2026-07-07
+
+- 类型：功能增强
+- 范围：必做任务扣分、家长待处理、孩子每日寄语
+- 摘要：
+  - 必做任务结算跳过任务创建/修改后才开始生效的上一周期，避免新建或编辑后补扣前一天未完成分数。
+  - 家长待处理页新增当前周期必做扣分豁免入口，复用 `task_required_penalties` 写入 0 分幂等记录。
+  - 孩子端 AI 每日寄语读取时截断到 200 个字符。
+- 业务代码：`server/api/utils.js`、`server/api/routes/parent.js`、`server/api/ai/cache.js`、`src/ParentApp.tsx`
+- 测试：`tests/ledger.test.ts`、`tests/api.test.ts`
+- 验证：`npm.cmd test -- --run tests/ledger.test.ts tests/api.test.ts`、`npm.cmd run build`

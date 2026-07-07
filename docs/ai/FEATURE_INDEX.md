@@ -58,16 +58,16 @@
 
 ## 5. 任务与分类配置
 
-- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制、展示图标和按完成程度给分标准。Emoji vendor 数据仅在 `EmojiSelect` 打开选择器时动态加载。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算。现有任务列表中显示必做规则摘要。
+- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制、展示图标和按完成程度给分标准。Emoji vendor 数据仅在 `EmojiSelect` 打开选择器时动态加载。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算；新建/修改后的任务不补扣上一周期；家长可在待处理页为孩子的必做任务当前周期豁免一次扣分。现有任务列表中显示必做规则摘要。
 - 用户入口：家长设置/配置区域中的任务和分类表单。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/EmojiSelect.tsx`
 - P2：`migrations/0001_initial.sql`、`migrations/0002_limits_and_repeat_submissions.sql`、`migrations/0005_feedback_templates_and_timezone.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`migrations/0022_required_tasks.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
 - 主要调用链：`ParentApp.load` -> `/task-categories`、`/tasks`; `create/update/remove` -> `/task-categories`、`/tasks`; 孩子端从 `/dashboard/child` 接收可提交任务；必做结算 `settleRequiredTaskPenalties` 由 `server/scheduler-tick.mjs` 的共享 `schedulerTick` 函数（被内置 scheduler 和独立 scheduler 共同调用）每次 tick 显式触发，同时受 `maybeRunMaintenance` 的 24 小时清理闸门间接触发。
 - 相关状态：`task_categories`、`tasks`、`task_assignees`、`task_submissions`、`task_required_penalties`、`tasks.grading_mode`、`tasks.completion_standards_json`
-- 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`
-- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；家长任务列表 small 标签中追加必做规则摘要；完成程度给分使用任务行 JSON 档位，不拆独立表；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶；必做扣分按 `task_id + child_id + period_key` 每周期幂等结算，同周期不重复扣、不同周期各自生成独立扣分和账本记录。
-- 最近更新时间：2026-06-14
+- 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`、`POST /api/tasks/:id/required-penalty-exemptions`
+- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；家长任务列表 small 标签中追加必做规则摘要；完成程度给分使用任务行 JSON 档位，不拆独立表；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶；必做扣分按 `task_id + child_id + period_key` 每周期幂等结算，同周期不重复扣、不同周期各自生成独立扣分和账本记录；当前周期豁免复用 `task_required_penalties` 写入 0 分记录。
+- 最近更新时间：2026-07-07
 
 ## 6. 奖励、兑换、仓库与退款
 
@@ -118,8 +118,8 @@
 - 主要调用链：`ChildApp.loadSummary` -> `/dashboard/child-summary`; `ChildApp.load` -> `/dashboard/child`; submit -> `/task-submissions`; pin -> `/child-pins/:kind`; ledger -> `/points/ledger`
 - 相关状态：`task_submissions`、`point_ledger`、`child_pins`、`ai_child_greetings`
 - 相关接口：`GET /api/dashboard/child-summary`、`GET /api/dashboard/child`、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`PATCH /api/child-achievements/:achievementId/visibility`、`GET /api/points/ledger`
-- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色。
-- 最近更新时间：2026-06-22
+- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；孩子面板每日寄语显示上限为 200 个字符；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色。
+- 最近更新时间：2026-07-07
 
 ## 10. 积分账本、报表、打印与归档
 
@@ -151,7 +151,7 @@
 
 ## 12. AI 服务、问候与报告评论
 
-- 功能说明：家长配置 OpenAI-compatible 文本 AI，拉取模型，测试连接，预览问候/周报/月报，系统定时生成孩子问候和报告评论。模型选择支持手动输入任意兼容模型名。预览结果可手动替换写入对应缓存。
+- 功能说明：家长配置 OpenAI-compatible 文本 AI，拉取模型，测试连接，预览问候/周报/月报，系统定时生成孩子问候和报告评论。模型选择支持手动输入任意兼容模型名。预览结果可手动替换写入对应缓存，孩子端读取问候缓存时最多返回 200 个字符。
 - 用户入口：家长设置中的 AI 服务区域、孩子端问候、家长报表。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`server/api/ai/orchestrator.js`、`server/api/ai/providers.js`、`server/api/ai/prompt.js`
 - P1：`server/api/ai/cache.js`、`server/api/ai/queue.js`、`server/api/ai/scheduled.js`、`server/scheduler-tick.mjs`、`server/scheduler.mjs`、`server/api/utils.js`、`src/types/api.ts`
@@ -160,7 +160,7 @@
 - 相关状态：`parent_ai_service_settings`、`ai_child_greetings`、`ai_report_commentaries`、`ai_generation_queue`、`ai_scheduled_refresh_runs`、`system_error_logs`、`system_settings.cleanup_last_stats_json`
 - 相关接口：`GET/PATCH /api/parent/ai-service`、`POST /api/parent/ai-service/models`、`POST /api/parent/ai-service/test`、`POST /api/parent/ai-service/preview`、`POST /api/parent/ai-service/preview/cache`
 - 修改注意事项：AI 预览默认不写缓存（`{ cache: false }`）；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure；scheduled 使用管理员时区和已完成周期；模型字段使用 `<input list>` 支持手动输入；预览替换缓存使用 `INSERT OR REPLACE` 只替换当前配置 hash 下的缓存，不触发新 AI 调用；管理员维护统计读取 AI 队列 pending/processing 积压和近 7 天终态失败率，不触发 AI 生成。
-- 最近更新时间：2026-06-15
+- 最近更新时间：2026-07-07
 
 ## 13. AI 图片、漫画报告、打印清单图与日程表图
 

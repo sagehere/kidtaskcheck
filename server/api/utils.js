@@ -2070,9 +2070,10 @@ export async function ledgerSource(env, row) {
     }
     if (row.source_type === "task_required_penalty") {
         const found = await env.DB.prepare("SELECT title FROM tasks WHERE id=?").bind(row.source_id).first();
+        const label = Number(row.amount) > 0 ? "必做扣分退回" : "必做扣分";
         if (found?.title)
-            return { sourceTypeLabel: "必做扣分", sourceLabel: `任务：${found.title}` };
-        return { sourceTypeLabel: "必做扣分", sourceLabel: "必做扣分" };
+            return { sourceTypeLabel: label, sourceLabel: `任务：${found.title}` };
+        return { sourceTypeLabel: label, sourceLabel: label };
     }
     if (row.source_type === "feedback_recall") {
         const original = await env.DB.prepare("SELECT pl.source_type, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id=?").bind(row.source_id).first();

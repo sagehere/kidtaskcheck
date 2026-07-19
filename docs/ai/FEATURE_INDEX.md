@@ -40,8 +40,8 @@
 - 主要调用链：`ParentApp.review`/`Shell.quickAction` -> `/task-submissions/:id/review`; `ParentApp.finishRedemption`/`Shell.quickAction` -> `/reward-redemptions/:id/redeem|cancel`; 后端写账本和通知后刷新 dashboard。
 - 相关状态：`task_submissions`、`reward_redemptions`、`point_ledger`、`notifications`
 - 相关接口：`PATCH /api/task-submissions/:id/review`、`PATCH /api/reward-redemptions/:id/redeem`、`PATCH /api/reward-redemptions/:id/cancel`、`GET /api/dashboard/parent`
-- 修改注意事项：审核和兑换需要幂等/并发保护；积分余额只从 `point_ledger` 汇总；通知快捷处理要同步标记已读和刷新；`grading_mode=completion` 的任务审核必须从家长待办选择 `completion_standards_json` 中的文字标准，不能走通知中心无档位快捷通过。
-- 最近更新时间：2026-06-12
+- 修改注意事项：审核和兑换需要幂等/并发保护；积分余额只从 `point_ledger` 汇总；通知快捷处理要同步标记已读和刷新；`grading_mode=completion` 的任务审核必须从家长待办选择 `completion_standards_json` 中的文字标准，不能走通知中心无档位快捷通过；必做任务跨周期审核通过时，只有历史周期累计通过次数达到 `task_required_penalties.required_count` 才退回实际 `penalty_points`，驳回或仍未达标保留扣分，同一任务/儿童/周期只退一次。
+- 最近更新时间：2026-07-19
 
 ## 4. 孩子账号、协同管理与家长资料
 

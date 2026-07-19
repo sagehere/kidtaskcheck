@@ -394,6 +394,49 @@ describe("Required Task Penalties", () => {
     expect(Number(penalty.actual_count)).toBe(0);
   });
 
+  it("refunds a capped required-task penalty once when late approvals reach the saved threshold", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points, created_at, updated_at) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 2, 5, '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z')").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 3, 'manual', 'seed', '2026-06-10')").bind(id(), cid, pid).run();
+    const submissions = [id(), id(), id()];
+    for (const submissionId of submissions) {
+      env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, status, submitted_at, period_key) VALUES (?, ?, ?, ?, 'pending', ?, '2026-06-10')").bind(submissionId, tid, cid, pid, "2026-06-10T12:00:00.000Z").run();
+    }
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    const actor = { type: "user", role: "parent", id: pid };
+    for (const submissionId of submissions) {
+      const req = makeRequest("PATCH", `/task-submissions/${submissionId}/review`, { approved: true, note: "" });
+      const res = await safe(handleParentRoutes, norm(new URL(req.url).pathname), "PATCH", req, env, actor);
+      expect(res!.status).toBe(200);
+    }
+    const refunds = env.DB.prepare("SELECT amount FROM point_ledger WHERE child_id=? AND source_type='task_required_penalty' AND source_id=? AND period_key='2026-06-10' AND amount>0").bind(cid, tid).all().results as any[];
+    expect(refunds).toEqual([{ amount: 3 }]);
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(33);
+  });
+
+  it("keeps the required-task penalty when a late submission is rejected", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points, created_at, updated_at) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 1, 5, '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z')").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 10, 'manual', 'seed', '2026-06-10')").bind(id(), cid, pid).run();
+    const submissionId = id();
+    env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, status, submitted_at, period_key) VALUES (?, ?, ?, ?, 'pending', ?, '2026-06-10')").bind(submissionId, tid, cid, pid, "2026-06-10T12:00:00.000Z").run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    await settleRequiredTaskPenalties(env, "2026-06-11T00:00:00.000Z");
+    const req = makeRequest("PATCH", `/task-submissions/${submissionId}/review`, { approved: false, note: "" });
+    const res = await safe(handleParentRoutes, norm(new URL(req.url).pathname), "PATCH", req, env, { type: "user", role: "parent", id: pid });
+    expect(res!.status).toBe(200);
+    const penalty = env.DB.prepare("SELECT penalty_points FROM task_required_penalties WHERE task_id=? AND child_id=? AND period_key='2026-06-10'").bind(tid, cid).first() as any;
+    expect(Number(penalty.penalty_points)).toBe(5);
+    const refunds = env.DB.prepare("SELECT COUNT(*) as c FROM point_ledger WHERE child_id=? AND source_type='task_required_penalty' AND source_id=? AND period_key='2026-06-10' AND amount>0").bind(cid, tid).first() as any;
+    expect(Number(refunds.c)).toBe(0);
+    const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
+    expect(Number(balance.b)).toBe(5);
+  });
+
   it("caps penalty at available balance and does not produce negative balance", async () => {
     tid = id();
     env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 3, 20)").bind(tid, pid).run();

@@ -1,4 +1,15 @@
-# 2026-06-30
+# 2026-07-19
+
+- 类型：缺陷修复
+- 任务：必做任务跨周期审核达标后退回实际扣分，同时保留正常任务积分结算。
+- 修改文件：
+  - `server/api/routes/parent.js`：审核通过后按历史周期达标条件追加幂等的必做扣分冲销账本流水。
+  - `server/api/utils.js`：正向必做账本显示为“必做扣分退回”。
+  - `tests/ledger.test.ts`：覆盖延迟审核达标、余额限制扣分、重复审核与驳回场景。
+  - `docs/ai/FEATURE_INDEX.md`：记录跨周期审核结算规则。
+- 验证：`npm test -- tests/ledger.test.ts`
+
+## 2026-06-30
 
 - Type: bug fix / maintenance hardening
 - Scope: SQLite retention, activity archives, AI job cleanup, admin maintenance visibility, report indexes, emoji lazy loading

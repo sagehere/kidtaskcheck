@@ -1122,6 +1122,13 @@ WHERE id=?`)
         if (status === "approved") {
             stmts.push(env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)")
                 .bind(id(), sub.child_id, a.id, signedPoints(sub.point_type, awardedPoints), sub.id, sub.period_key, reviewNote, audit.type, audit.id, audit.label));
+            stmts.push(env.DB.prepare(`INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot)
+SELECT ?, p.child_id, p.parent_id, p.penalty_points, 'task_required_penalty', p.task_id, p.period_key, '跨周期审核通过，退回必做扣分', ?, ?, ?
+FROM task_required_penalties p
+WHERE p.task_id=? AND p.child_id=? AND p.parent_id=? AND p.period_key=? AND p.penalty_points>0
+  AND (SELECT COUNT(*) FROM task_submissions WHERE task_id=p.task_id AND child_id=p.child_id AND parent_id=p.parent_id AND period_key=p.period_key AND status='approved') >= p.required_count
+  AND NOT EXISTS (SELECT 1 FROM point_ledger WHERE child_id=p.child_id AND parent_id=p.parent_id AND source_type='task_required_penalty' AND source_id=p.task_id AND period_key=p.period_key AND amount>0)`)
+                .bind(id(), audit.type, audit.id, audit.label, sub.task_id, sub.child_id, a.id, sub.period_key));
         }
         stmts.push(env.DB.prepare("UPDATE notifications SET read_at=? WHERE recipient_type='user' AND recipient_id=? AND related_type='task_submission' AND related_id=? AND read_at IS NULL")
             .bind(nowIso(), a.id, sub.id));

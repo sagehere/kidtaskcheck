@@ -1,12 +1,12 @@
-import { nowIso, timezoneOffsetMinutes } from "../utils.js";
+import { nowIso, timezoneOffsetMinutes, oncePerDb } from "../utils.js";
 import { periodKey } from "../../../src/lib/domain.js";
 import { previousCompletedReportRange } from "./orchestrator.js";
 import { enqueueScheduledAiJobs, processAiGenerationQueue } from "./queue.js";
-import { processCartoonReportJobs, processPrintChecklistImageJobs } from "./cartoon-queue.js";
+import { processCartoonReportJobs, processPrintChecklistImageJobs, processScheduleImageJobs } from "./cartoon-queue.js";
 
 const MINUTE_MS = 60000;
 
-export async function ensureAiScheduledRefreshRuns(env) {
+async function ensureAiScheduledRefreshRunsNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ai_scheduled_refresh_runs (
   job_type TEXT NOT NULL,
   period_key TEXT NOT NULL,
@@ -18,6 +18,9 @@ export async function ensureAiScheduledRefreshRuns(env) {
   completed_at TEXT,
   PRIMARY KEY (job_type, period_key)
 )`).run();
+}
+export function ensureAiScheduledRefreshRuns(env) {
+    return oncePerDb(env, "ai-scheduled-refresh-runs", () => ensureAiScheduledRefreshRunsNow(env));
 }
 
 function localParts(input, offset) {
@@ -74,7 +77,8 @@ export async function runScheduledAiRefresh(env, scheduledAt = new Date()) {
         const queue = await processAiGenerationQueue(env, { offset });
         const cartoonQueue = await processCartoonReportJobs(env);
         const printChecklistQueue = await processPrintChecklistImageJobs(env);
-        return { skipped: true, reason: "outside_midnight_window", jobs: [], queue, cartoonQueue, printChecklistQueue };
+        const scheduleImageQueue = await processScheduleImageJobs(env);
+        return { skipped: true, reason: "outside_midnight_window", jobs: [], queue, cartoonQueue, printChecklistQueue, scheduleImageQueue };
     }
 
     const jobs = [];
@@ -106,5 +110,6 @@ export async function runScheduledAiRefresh(env, scheduledAt = new Date()) {
     const queue = await processAiGenerationQueue(env, { offset, ranges: queueRanges });
     const cartoonQueue = await processCartoonReportJobs(env);
     const printChecklistQueue = await processPrintChecklistImageJobs(env);
-    return { skipped: jobs.length === 0, reason: jobs.length ? "" : "no_due_jobs", jobs, queue, cartoonQueue, printChecklistQueue };
+    const scheduleImageQueue = await processScheduleImageJobs(env);
+    return { skipped: jobs.length === 0, reason: jobs.length ? "" : "no_due_jobs", jobs, queue, cartoonQueue, printChecklistQueue, scheduleImageQueue };
 }

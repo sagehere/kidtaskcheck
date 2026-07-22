@@ -1,5 +1,5 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
-import { nowIso, ensureColumn } from "../utils.js";
+import { nowIso, ensureColumn, oncePerDb } from "../utils.js";
 
 export function aiConfigHash(config) {
     const hash = ["sha256", config.baseUrl || "", config.model || "", config.prompt || ""].join("|");
@@ -91,7 +91,7 @@ export async function loadAiGreetingSnapshot(env, child, offset) {
     return { greeting: greetingLimit(stale?.greeting), aiRefreshPending: true };
 }
 
-export async function ensureParentAiServiceSettings(env) {
+async function ensureParentAiServiceSettingsNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS parent_ai_service_settings (
   parent_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   base_url TEXT NOT NULL DEFAULT '',
@@ -123,8 +123,11 @@ export async function ensureParentAiServiceSettings(env) {
     await ensureColumn(env, "parent_ai_service_settings", "checklist_image_prompt", "checklist_image_prompt TEXT NOT NULL DEFAULT ''");
     await ensureColumn(env, "parent_ai_service_settings", "schedule_image_prompt", "schedule_image_prompt TEXT NOT NULL DEFAULT ''");
 }
+export function ensureParentAiServiceSettings(env) {
+    return oncePerDb(env, "parent-ai-service-settings", () => ensureParentAiServiceSettingsNow(env));
+}
 
-export async function ensureAiReportCommentaries(env) {
+async function ensureAiReportCommentariesNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ai_report_commentaries (
   child_id TEXT NOT NULL REFERENCES children(id),
   parent_id TEXT NOT NULL REFERENCES users(id),
@@ -135,4 +138,7 @@ export async function ensureAiReportCommentaries(env) {
   generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (child_id, period_key, period_type, config_hash)
 )`).run();
+}
+export function ensureAiReportCommentaries(env) {
+    return oncePerDb(env, "ai-report-commentaries", () => ensureAiReportCommentariesNow(env));
 }

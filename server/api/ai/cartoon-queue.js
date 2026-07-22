@@ -1,4 +1,4 @@
-import { id, nowIso, ensureColumn, logSystemError, timezoneOffsetMinutes } from "../utils.js";
+import { id, nowIso, ensureColumn, logSystemError, oncePerDb, timezoneOffsetMinutes } from "../utils.js";
 import { generateCartoonReportImage, generatePrintChecklistImage, generateScheduleImage } from "./orchestrator.js";
 import { NonRetryableError } from "./orchestrator.js";
 import { AiProviderError } from "./providers.js";
@@ -8,7 +8,7 @@ const DEFAULT_LOCK_MS = 10 * 60_000;
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 const MINUTE_MS = 60_000;
 
-export async function ensureAiCartoonReportJobs(env) {
+async function ensureAiCartoonReportJobsNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ai_cartoon_report_jobs (
   id TEXT PRIMARY KEY,
   parent_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -111,22 +111,78 @@ function errorInfo(error) {
     return { code: "AI_CARTOON_REPORT_ERROR", message: String(error?.message || error || "cartoon report failed"), retryable: true };
 }
 
-async function reserveNextCartoonJob(env, now, lockMs) {
-    await ensureAiCartoonReportJobs(env);
-    await env.DB.prepare(`UPDATE ai_cartoon_report_jobs
+async function reserveNextImageJob(env, table, ensure, now, lockMs) {
+    await ensure(env);
+    await env.DB.prepare(`UPDATE ${table}
 SET status='pending', locked_until=NULL
 WHERE status='processing' AND locked_until IS NOT NULL AND locked_until<?`).bind(now).run();
-    const job = await env.DB.prepare(`SELECT * FROM ai_cartoon_report_jobs
+    const job = await env.DB.prepare(`SELECT * FROM ${table}
 WHERE status='pending' AND (next_attempt_at IS NULL OR next_attempt_at<=?)
 ORDER BY created_at ASC
 LIMIT 1`).bind(now).first();
     if (!job) return null;
     const lockUntil = new Date(Date.parse(now) + lockMs).toISOString();
-    const result = await env.DB.prepare(`UPDATE ai_cartoon_report_jobs
+    const result = await env.DB.prepare(`UPDATE ${table}
 SET status='processing', started_at=?, locked_until=?, updated_at=?
 WHERE id=? AND status='pending'`).bind(now, lockUntil, now, job.id).run();
     if ((result?.meta?.changes || 0) < 1) return null;
     return { ...job, status: "processing", started_at: now, locked_until: lockUntil };
+}
+
+async function completeImageJob(env, table, job, result) {
+    const now = nowIso();
+    await env.DB.prepare(`UPDATE ${table}
+SET status='completed', last_error=NULL, error_code=NULL, image_url=?, format=?, filename=?, prompt_preview=?, locked_until=NULL, completed_at=?, updated_at=?
+WHERE id=?`)
+        .bind(result.imageUrl, result.format || "jpeg", result.filename || "", result.promptPreview || "", now, now, job.id)
+        .run();
+}
+
+async function failImageJob(env, table, source, metadata, job, info) {
+    const retryCount = Number(job.retry_count || 0) + 1;
+    const maxRetries = Number(job.max_retries || DEFAULT_MAX_RETRIES);
+    const canRetry = info.retryable && retryCount < maxRetries;
+    const status = canRetry ? "pending" : "failed";
+    const now = nowIso();
+    const nextAttemptAt = canRetry ? new Date(Date.now() + retryDelayMs(retryCount - 1)).toISOString() : null;
+    await env.DB.prepare(`UPDATE ${table}
+SET status=?, retry_count=?, error_code=?, last_error=?, next_attempt_at=?, locked_until=NULL, completed_at=?, updated_at=?
+WHERE id=?`)
+        .bind(status, retryCount, info.code, info.message.slice(0, 500), nextAttemptAt, status === "failed" ? now : null, now, job.id)
+        .run();
+    if (status === "failed") {
+        await logSystemError(env, {
+            source,
+            message: info.message,
+            status: 500,
+            metadata: { jobId: job.id, parentId: job.parent_id, childId: job.child_id, errorCode: info.code, ...metadata(job) }
+        });
+    }
+    return canRetry;
+}
+
+async function processImageJobs(env, { maxJobs, config, lockMs }) {
+    const limit = Number.isFinite(Number(maxJobs)) ? Number(maxJobs) : Number(env[config.maxJobsKey] || 2);
+    const stats = { processed: 0, completed: 0, failed: 0, retried: 0, empty: false };
+    for (let index = 0; index < limit; index++) {
+        const job = await reserveNextImageJob(env, config.table, config.ensure, nowIso(), lockMs);
+        if (!job) {
+            stats.empty = true;
+            break;
+        }
+        stats.processed++;
+        try {
+            const child = await loadChild(env, job);
+            if (!child) throw new NonRetryableError("child_missing");
+            await completeImageJob(env, config.table, job, await config.generate(env, child, job));
+            stats.completed++;
+        } catch (error) {
+            const retrying = await failImageJob(env, config.table, config.source, config.metadata, job, errorInfo(error));
+            if (retrying) stats.retried++;
+            else stats.failed++;
+        }
+    }
+    return stats;
 }
 
 async function loadChild(env, job) {
@@ -165,67 +221,27 @@ function rangeFromPeriodKey(periodType, periodKey, offset) {
     };
 }
 
-async function completeJob(env, job, result) {
-    const now = nowIso();
-    await env.DB.prepare(`UPDATE ai_cartoon_report_jobs
-SET status='completed', last_error=NULL, error_code=NULL, image_url=?, format=?, filename=?, prompt_preview=?, locked_until=NULL, completed_at=?, updated_at=?
-WHERE id=?`)
-        .bind(result.imageUrl, result.format || "jpeg", result.filename || "", result.promptPreview || "", now, now, job.id)
-        .run();
-}
-
-async function failJob(env, job, info) {
-    const retryCount = Number(job.retry_count || 0) + 1;
-    const maxRetries = Number(job.max_retries || DEFAULT_MAX_RETRIES);
-    const canRetry = info.retryable && retryCount < maxRetries;
-    const status = canRetry ? "pending" : "failed";
-    const now = nowIso();
-    const nextAttemptAt = canRetry ? new Date(Date.now() + retryDelayMs(retryCount - 1)).toISOString() : null;
-    await env.DB.prepare(`UPDATE ai_cartoon_report_jobs
-SET status=?, retry_count=?, error_code=?, last_error=?, next_attempt_at=?, locked_until=NULL, completed_at=?, updated_at=?
-WHERE id=?`)
-        .bind(status, retryCount, info.code, info.message.slice(0, 500), nextAttemptAt, status === "failed" ? now : null, now, job.id)
-        .run();
-    if (status === "failed") {
-        await logSystemError(env, {
-            source: "ai_cartoon_report_queue",
-            message: info.message,
-            status: 500,
-            metadata: { jobId: job.id, parentId: job.parent_id, childId: job.child_id, periodType: job.period_type, periodKey: job.period_key, errorCode: info.code }
-        });
-    }
-    return canRetry;
-}
-
 export async function processCartoonReportJobs(env, { maxJobs = undefined, lockMs = DEFAULT_LOCK_MS } = {}) {
-    const limit = Number.isFinite(Number(maxJobs)) ? Number(maxJobs) : Number(env.AI_CARTOON_QUEUE_MAX_JOBS || 2);
-    const stats = { processed: 0, completed: 0, failed: 0, retried: 0, empty: false };
-    for (let index = 0; index < limit; index++) {
-        const job = await reserveNextCartoonJob(env, nowIso(), lockMs);
-        if (!job) {
-            stats.empty = true;
-            break;
+    return processImageJobs(env, {
+        maxJobs,
+        lockMs,
+        config: {
+            maxJobsKey: "AI_CARTOON_QUEUE_MAX_JOBS",
+            table: "ai_cartoon_report_jobs",
+            ensure: ensureAiCartoonReportJobs,
+            source: "ai_cartoon_report_queue",
+            metadata: (job) => ({ periodType: job.period_type, periodKey: job.period_key }),
+            async generate(context, child, job) {
+                const offset = await timezoneOffsetMinutes(context);
+                const range = rangeFromPeriodKey(job.period_type, job.period_key, offset);
+                if (!range) throw new NonRetryableError("invalid_period_key");
+                return generateCartoonReportImage(context, child, job.period_type, range);
+            }
         }
-        stats.processed++;
-        try {
-            const child = await loadChild(env, job);
-            if (!child) throw new NonRetryableError("child_missing");
-            const offset = await timezoneOffsetMinutes(env);
-            const range = rangeFromPeriodKey(job.period_type, job.period_key, offset);
-            if (!range) throw new NonRetryableError("invalid_period_key");
-            const result = await generateCartoonReportImage(env, child, job.period_type, range);
-            await completeJob(env, job, result);
-            stats.completed++;
-        } catch (error) {
-            const retrying = await failJob(env, job, errorInfo(error));
-            if (retrying) stats.retried++;
-            else stats.failed++;
-        }
-    }
-    return stats;
+    });
 }
 
-export async function ensureAiPrintChecklistImageJobs(env) {
+async function ensureAiPrintChecklistImageJobsNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ai_print_checklist_image_jobs (
   id TEXT PRIMARY KEY,
   parent_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -316,57 +332,7 @@ export async function loadPrintChecklistImageJob(env, parentId, jobId) {
     return env.DB.prepare("SELECT * FROM ai_print_checklist_image_jobs WHERE id=? AND parent_id=?").bind(jobId, parentId).first();
 }
 
-async function reserveNextPrintChecklistJob(env, now, lockMs) {
-    await ensureAiPrintChecklistImageJobs(env);
-    await env.DB.prepare(`UPDATE ai_print_checklist_image_jobs
-SET status='pending', locked_until=NULL
-WHERE status='processing' AND locked_until IS NOT NULL AND locked_until<?`).bind(now).run();
-    const job = await env.DB.prepare(`SELECT * FROM ai_print_checklist_image_jobs
-WHERE status='pending' AND (next_attempt_at IS NULL OR next_attempt_at<=?)
-ORDER BY created_at ASC
-LIMIT 1`).bind(now).first();
-    if (!job) return null;
-    const lockUntil = new Date(Date.parse(now) + lockMs).toISOString();
-    const result = await env.DB.prepare(`UPDATE ai_print_checklist_image_jobs
-SET status='processing', started_at=?, locked_until=?, updated_at=?
-WHERE id=? AND status='pending'`).bind(now, lockUntil, now, job.id).run();
-    if ((result?.meta?.changes || 0) < 1) return null;
-    return { ...job, status: "processing", started_at: now, locked_until: lockUntil };
-}
-
-async function completePrintChecklistJob(env, job, result) {
-    const now = nowIso();
-    await env.DB.prepare(`UPDATE ai_print_checklist_image_jobs
-SET status='completed', last_error=NULL, error_code=NULL, image_url=?, format=?, filename=?, prompt_preview=?, locked_until=NULL, completed_at=?, updated_at=?
-WHERE id=?`)
-        .bind(result.imageUrl, result.format || "jpeg", result.filename || "", result.promptPreview || "", now, now, job.id)
-        .run();
-}
-
-async function failPrintChecklistJob(env, job, info) {
-    const retryCount = Number(job.retry_count || 0) + 1;
-    const maxRetries = Number(job.max_retries || DEFAULT_MAX_RETRIES);
-    const canRetry = info.retryable && retryCount < maxRetries;
-    const status = canRetry ? "pending" : "failed";
-    const now = nowIso();
-    const nextAttemptAt = canRetry ? new Date(Date.now() + retryDelayMs(retryCount - 1)).toISOString() : null;
-    await env.DB.prepare(`UPDATE ai_print_checklist_image_jobs
-SET status=?, retry_count=?, error_code=?, last_error=?, next_attempt_at=?, locked_until=NULL, completed_at=?, updated_at=?
-WHERE id=?`)
-        .bind(status, retryCount, info.code, info.message.slice(0, 500), nextAttemptAt, status === "failed" ? now : null, now, job.id)
-        .run();
-    if (status === "failed") {
-        await logSystemError(env, {
-            source: "ai_print_checklist_image_queue",
-            message: info.message,
-            status: 500,
-            metadata: { jobId: job.id, parentId: job.parent_id, childId: job.child_id, errorCode: info.code }
-        });
-    }
-    return canRetry;
-}
-
-export async function ensureAiScheduleImageJobs(env) {
+async function ensureAiScheduleImageJobsNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ai_schedule_image_jobs (
   id TEXT PRIMARY KEY,
   parent_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -394,6 +360,15 @@ export async function ensureAiScheduleImageJobs(env) {
     await ensureColumn(env, "ai_schedule_image_jobs", "locked_until", "locked_until TEXT");
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_ai_schedule_jobs_ready ON ai_schedule_image_jobs(status, next_attempt_at, created_at)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_ai_schedule_jobs_parent ON ai_schedule_image_jobs(parent_id, child_id, job_key)").run();
+}
+export function ensureAiCartoonReportJobs(env) {
+    return oncePerDb(env, "ai-cartoon-report-jobs", () => ensureAiCartoonReportJobsNow(env));
+}
+export function ensureAiPrintChecklistImageJobs(env) {
+    return oncePerDb(env, "ai-print-checklist-image-jobs", () => ensureAiPrintChecklistImageJobsNow(env));
+}
+export function ensureAiScheduleImageJobs(env) {
+    return oncePerDb(env, "ai-schedule-image-jobs", () => ensureAiScheduleImageJobsNow(env));
 }
 
 export function publicScheduleImageJob(row) {
@@ -457,102 +432,32 @@ export async function loadScheduleImageJob(env, parentId, jobId) {
     return env.DB.prepare("SELECT * FROM ai_schedule_image_jobs WHERE id=? AND parent_id=?").bind(jobId, parentId).first();
 }
 
-async function reserveNextScheduleImageJob(env, now, lockMs) {
-    await ensureAiScheduleImageJobs(env);
-    await env.DB.prepare(`UPDATE ai_schedule_image_jobs
-SET status='pending', locked_until=NULL
-WHERE status='processing' AND locked_until IS NOT NULL AND locked_until<?`).bind(now).run();
-    const job = await env.DB.prepare(`SELECT * FROM ai_schedule_image_jobs
-WHERE status='pending' AND (next_attempt_at IS NULL OR next_attempt_at<=?)
-ORDER BY created_at ASC
-LIMIT 1`).bind(now).first();
-    if (!job) return null;
-    const lockUntil = new Date(Date.parse(now) + lockMs).toISOString();
-    const result = await env.DB.prepare(`UPDATE ai_schedule_image_jobs
-SET status='processing', started_at=?, locked_until=?, updated_at=?
-WHERE id=? AND status='pending'`).bind(now, lockUntil, now, job.id).run();
-    if ((result?.meta?.changes || 0) < 1) return null;
-    return { ...job, status: "processing", started_at: now, locked_until: lockUntil };
-}
-
-async function completeScheduleImageJob(env, job, result) {
-    const now = nowIso();
-    await env.DB.prepare(`UPDATE ai_schedule_image_jobs
-SET status='completed', last_error=NULL, error_code=NULL, image_url=?, format=?, filename=?, prompt_preview=?, locked_until=NULL, completed_at=?, updated_at=?
-WHERE id=?`)
-        .bind(result.imageUrl, result.format || "jpeg", result.filename || "", result.promptPreview || "", now, now, job.id)
-        .run();
-}
-
-async function failScheduleImageJob(env, job, info) {
-    const retryCount = Number(job.retry_count || 0) + 1;
-    const maxRetries = Number(job.max_retries || DEFAULT_MAX_RETRIES);
-    const canRetry = info.retryable && retryCount < maxRetries;
-    const status = canRetry ? "pending" : "failed";
-    const now = nowIso();
-    const nextAttemptAt = canRetry ? new Date(Date.now() + retryDelayMs(retryCount - 1)).toISOString() : null;
-    await env.DB.prepare(`UPDATE ai_schedule_image_jobs
-SET status=?, retry_count=?, error_code=?, last_error=?, next_attempt_at=?, locked_until=NULL, completed_at=?, updated_at=?
-WHERE id=?`)
-        .bind(status, retryCount, info.code, info.message.slice(0, 500), nextAttemptAt, status === "failed" ? now : null, now, job.id)
-        .run();
-    if (status === "failed") {
-        await logSystemError(env, {
-            source: "ai_schedule_image_queue",
-            message: info.message,
-            status: 500,
-            metadata: { jobId: job.id, parentId: job.parent_id, childId: job.child_id, errorCode: info.code }
-        });
-    }
-    return canRetry;
-}
-
 export async function processScheduleImageJobs(env, { maxJobs = undefined, lockMs = DEFAULT_LOCK_MS } = {}) {
-    const limit = Number.isFinite(Number(maxJobs)) ? Number(maxJobs) : Number(env.AI_SCHEDULE_QUEUE_MAX_JOBS || 2);
-    const stats = { processed: 0, completed: 0, failed: 0, retried: 0, empty: false };
-    for (let index = 0; index < limit; index++) {
-        const job = await reserveNextScheduleImageJob(env, nowIso(), lockMs);
-        if (!job) {
-            stats.empty = true;
-            break;
+    return processImageJobs(env, {
+        maxJobs,
+        lockMs,
+        config: {
+            maxJobsKey: "AI_SCHEDULE_QUEUE_MAX_JOBS",
+            table: "ai_schedule_image_jobs",
+            ensure: ensureAiScheduleImageJobs,
+            source: "ai_schedule_image_queue",
+            metadata: () => ({}),
+            generate: (context, child) => generateScheduleImage(context, child)
         }
-        stats.processed++;
-        try {
-            const child = await loadChild(env, job);
-            if (!child) throw new NonRetryableError("child_missing");
-            const result = await generateScheduleImage(env, child);
-            await completeScheduleImageJob(env, job, result);
-            stats.completed++;
-        } catch (error) {
-            const retrying = await failScheduleImageJob(env, job, errorInfo(error));
-            if (retrying) stats.retried++;
-            else stats.failed++;
-        }
-    }
-    return stats;
+    });
 }
 
 export async function processPrintChecklistImageJobs(env, { maxJobs = undefined, lockMs = DEFAULT_LOCK_MS } = {}) {
-    const limit = Number.isFinite(Number(maxJobs)) ? Number(maxJobs) : Number(env.AI_PRINT_CHECKLIST_QUEUE_MAX_JOBS || 2);
-    const stats = { processed: 0, completed: 0, failed: 0, retried: 0, empty: false };
-    for (let index = 0; index < limit; index++) {
-        const job = await reserveNextPrintChecklistJob(env, nowIso(), lockMs);
-        if (!job) {
-            stats.empty = true;
-            break;
+    return processImageJobs(env, {
+        maxJobs,
+        lockMs,
+        config: {
+            maxJobsKey: "AI_PRINT_CHECKLIST_QUEUE_MAX_JOBS",
+            table: "ai_print_checklist_image_jobs",
+            ensure: ensureAiPrintChecklistImageJobs,
+            source: "ai_print_checklist_image_queue",
+            metadata: () => ({}),
+            generate: (context, child) => generatePrintChecklistImage(context, child)
         }
-        stats.processed++;
-        try {
-            const child = await loadChild(env, job);
-            if (!child) throw new NonRetryableError("child_missing");
-            const result = await generatePrintChecklistImage(env, child);
-            await completePrintChecklistJob(env, job, result);
-            stats.completed++;
-        } catch (error) {
-            const retrying = await failPrintChecklistJob(env, job, errorInfo(error));
-            if (retrying) stats.retried++;
-            else stats.failed++;
-        }
-    }
-    return stats;
+    });
 }

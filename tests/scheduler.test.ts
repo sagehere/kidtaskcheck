@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { resetTestEnv } from "./helpers/setup";
 import { ensureAdmin, hashPassword, id } from "../server/api/utils.js";
+import { ensureAiScheduleImageJobs } from "../server/api/ai/cartoon-queue.js";
 
 describe("schedulerTick shared tick", () => {
   let env: any, pid: string, cid: string, tid: string;
@@ -70,5 +71,18 @@ describe("schedulerTick shared tick", () => {
     expect(r2.requiredPenalties.settled).toBe(0);
     const balance = env.DB.prepare("SELECT COALESCE(SUM(amount),0) as b FROM point_ledger WHERE child_id=?").bind(cid).first() as any;
     expect(Number(balance.b)).toBe(95);
+  });
+
+  it("recovers pending schedule image jobs through the scheduler", async () => {
+    await ensureAiScheduleImageJobs(env);
+    const jobId = id();
+    env.DB.prepare("INSERT INTO ai_schedule_image_jobs (id, parent_id, child_id, job_key, status, retry_count, max_retries, created_at, updated_at, next_attempt_at) VALUES (?, ?, ?, 'current', 'pending', 2, 3, ?, ?, ?)")
+      .bind(jobId, pid, cid, "2026-06-11T12:00:00.000Z", "2026-06-11T12:00:00.000Z", "2026-06-11T12:00:00.000Z")
+      .run();
+    env.DB.prepare("UPDATE children SET deleted_at=? WHERE id=?").bind("2026-06-11T12:00:00.000Z", cid).run();
+    const { runScheduledAiRefresh } = await import("../server/api/ai/scheduled.js");
+    const result = await runScheduledAiRefresh(env, new Date("2026-06-11T12:00:00.000Z"));
+    expect(result.scheduleImageQueue.failed).toBe(1);
+    expect(env.DB.prepare("SELECT status FROM ai_schedule_image_jobs WHERE id=?").bind(jobId).first()).toMatchObject({ status: "failed" });
   });
 });

@@ -7,3 +7,11 @@ backups
 *.sqlite-shm
 *.sqlite-wal
 npm-debug.log
+tests
+docs
+.agents
+.codex
+README.md
+USER_MANUAL.md
+DOCKER_DEPLOY.md
+AGENTS.md

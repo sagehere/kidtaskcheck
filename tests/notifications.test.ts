@@ -66,4 +66,26 @@ VALUES
     expect(payload.data.unread).toBe(3);
     expect(payload.data.items.map((item: any) => item.id)).toEqual([rewardId, oldActionId, ordinaryId]);
   });
+
+  it("returns only the unread count for notification polling", async () => {
+    const actor = { type: "user", role: "parent", id: pid, displayName: "P" };
+    env.DB.prepare("INSERT INTO notifications (id, recipient_type, recipient_id, actor_type, actor_id, title, body, event_type) VALUES (?, 'user', ?, 'child', ?, 'Update', '', 'praise')")
+      .bind(id(), pid, cid)
+      .run();
+    const req = makeRequest("GET", "/notifications?summary=1");
+    const res = await safe(handleSharedRoutes, "/notifications", "GET", req, env, actor, new URL(req.url));
+    expect(await res!.json()).toEqual({ data: { unread: 1 } });
+  });
+
+  it("returns a clear 400 for malformed JSON bodies", async () => {
+    const actor = { type: "user", role: "parent", id: pid, displayName: "P" };
+    const req = new Request("http://localhost/api/config-groups", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{"
+    });
+    const res = await safe(handleSharedRoutes, "/config-groups", "POST", req, env, actor, new URL(req.url));
+    expect(res!.status).toBe(400);
+    expect(await res!.json()).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
 });

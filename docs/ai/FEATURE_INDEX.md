@@ -37,11 +37,11 @@
 - P0：`src/ParentApp.tsx`、`src/components/Shell.tsx`、`server/api/routes/parent.js`、`server/api/routes/shared.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/ChildApp.tsx`
 - P2：`migrations/0001_initial.sql`、`migrations/0003_notifications.sql`、`migrations/0013_concurrency_idempotency.sql`、`tests/concurrency.test.ts`、`tests/notifications.test.ts`
-- 主要调用链：`ParentApp.review`/`Shell.quickAction` -> `/task-submissions/:id/review`; `ParentApp.finishRedemption`/`Shell.quickAction` -> `/reward-redemptions/:id/redeem|cancel`; 后端写账本和通知后刷新 dashboard。
+- 主要调用链：`ParentApp.review`/`Shell.quickAction` -> `/task-submissions/:id/review`; `ParentApp.finishRedemption`/`Shell.quickAction` -> `/reward-redemptions/:id/redeem|cancel`; 后端写账本和通知后刷新完整配置，空闲轮询只刷新 `/dashboard/parent`。
 - 相关状态：`task_submissions`、`reward_redemptions`、`point_ledger`、`notifications`
 - 相关接口：`PATCH /api/task-submissions/:id/review`、`PATCH /api/reward-redemptions/:id/redeem`、`PATCH /api/reward-redemptions/:id/cancel`、`GET /api/dashboard/parent`
 - 修改注意事项：审核和兑换需要幂等/并发保护；积分余额只从 `point_ledger` 汇总；通知快捷处理要同步标记已读和刷新；`grading_mode=completion` 的任务审核必须从家长待办选择 `completion_standards_json` 中的文字标准，不能走通知中心无档位快捷通过；必做任务跨周期审核通过时，只有历史周期累计通过次数达到 `task_required_penalties.required_count` 才退回实际 `penalty_points`，驳回或仍未达标保留扣分，同一任务/儿童/周期只退一次。
-- 最近更新时间：2026-07-19
+- 最近更新时间：2026-07-22
 
 ## 4. 孩子账号、协同管理与家长资料
 
@@ -79,8 +79,8 @@
 - 主要调用链：`ChildApp.redeemReward` -> `/reward-redemptions`; `ParentApp.finishRedemption` -> `/reward-redemptions/:id/redeem|cancel`; refund modal -> `/reward-redemptions/:id/refund`; warehouse -> `/warehouse`
 - 相关状态：`rewards`、`reward_assignees`、`reward_prerequisites`、`reward_redemptions`、`point_ledger`
 - 相关接口：`GET/POST /api/rewards`、`PATCH/DELETE /api/rewards/:id`、`POST /api/reward-redemptions`、`PATCH /api/reward-redemptions/:id/redeem|cancel|refund`、`GET /api/warehouse`、`PATCH /api/warehouse/clear-redeemed`、`GET /api/warehouse/achievements`
-- 修改注意事项：取消/退款要正确返还积分；已核销仓库记录和孩子端隐藏逻辑要分清；奖励前置任务会依赖任务完成周期；退还奖励弹窗的候选列表需要保持弹窗内滚动，避免记录较多时挤出操作按钮。
-- 最近更新时间：2026-06-13
+- 修改注意事项：取消/退款要正确返还积分；已核销仓库记录和孩子端隐藏逻辑要分清；奖励前置任务会依赖任务完成周期；奖励前置成就锁应批量查询，不能随奖励数量逐条查询；退还奖励弹窗的候选列表需要保持弹窗内滚动，避免记录较多时挤出操作按钮。
+- 最近更新时间：2026-07-22
 
 ## 7. 成就规则
 
@@ -115,10 +115,10 @@
 - P0：`src/ChildApp.tsx`、`server/api/routes/child.js`、`server/api/routes/shared.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/Shell.tsx`
 - P2：`migrations/0001_initial.sql`、`migrations/0008_child_pins.sql`、`migrations/0011_ai_service_and_child_fields.sql`、`migrations/0021_remediable_criticism_daily_greeting_checklist_images.sql`、`tests/api.test.ts`
-- 主要调用链：`ChildApp.loadSummary` -> `/dashboard/child-summary`; `ChildApp.load` -> `/dashboard/child`; submit -> `/task-submissions`; pin -> `/child-pins/:kind`; ledger -> `/points/ledger`
+- 主要调用链：`ChildApp.load` -> `/dashboard/child`（任务、积分、冻结积分和 AI 问候）；submit -> `/task-submissions`; pin -> `/child-pins/:kind`; ledger -> `/points/ledger`; 仅进入仓库或相关操作后请求 `/warehouse`。
 - 相关状态：`task_submissions`、`point_ledger.freeze_status`、`child_pins`、`ai_child_greetings`
-- 相关接口：`GET /api/dashboard/child-summary`、`GET /api/dashboard/child`、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`PATCH /api/child-achievements/:achievementId/visibility`、`GET /api/points/ledger`
-- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；孩子面板每日寄语显示上限为 200 个字符；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色；当前周期 0 分豁免记录在任务墙和日程任务卡显示绿色底色的“已豁免”；`requiredPenaltyRemedies` 与批评补救共用待补救展示，孩子不能自行确认。
+- 相关接口：`GET /api/dashboard/child`、`GET /api/dashboard/child-summary`（兼容保留）、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`PATCH /api/child-achievements/:achievementId/visibility`、`GET /api/points/ledger`
+- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；`/dashboard/child` 返回 AI 缓存问候与刷新等待标记，孩子端不再重复请求 summary；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；孩子面板每日寄语显示上限为 200 个字符；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色；当前周期 0 分豁免记录在任务墙和日程任务卡显示绿色底色的“已豁免”；`requiredPenaltyRemedies` 与批评补救共用待补救展示，孩子不能自行确认。
 - 最近更新时间：2026-07-22
 
 ## 10. 积分账本、报表、打印与归档
@@ -131,8 +131,8 @@
 - 主要调用链：ledger modal -> `/points/ledger`; print -> `/children/:id/export-print`; report -> `/children/:id/report?period=weekly|monthly`; report may read cached AI commentary.
 - 相关状态：`point_ledger`、`activity_archives`、`ai_report_commentaries`、`system_settings.timezone_offset_minutes`
 - 相关接口：`GET /api/points/ledger`、`GET /api/children/:id/export-print`、`GET /api/children/:id/report`
-- 修改注意事项：报表应使用已完成周期语义；所有报表打印应适配 A4；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口；`ledgerSource` 支持 `task_required_penalty` 来源类型，展示"必做扣分 / 任务：{title}"；`/points/ledger` 按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序，报表账本窗口用 `datetime(created_at)` 过滤，`localTimeText` 将旧 `YYYY-MM-DD HH:mm:ss` 视为 UTC 后再应用系统时区；积分清单 UI 使用共享 `LedgerModal`，默认按今天/昨天/日期分组，支持收入、支出、冻结/补救、任务、奖励、反馈、必做扣分筛选，不显示顶部汇总卡片。
-- 最近更新时间：2026-06-13
+- 修改注意事项：报表应使用已完成周期语义；所有报表打印应适配 A4；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口；账本和通知来源补全必须批量查询，不能按列表行数逐条查库；`ledgerSource` 支持 `task_required_penalty` 来源类型，展示"必做扣分 / 任务：{title}"；`/points/ledger` 按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序，报表账本窗口用 `datetime(created_at)` 过滤，`localTimeText` 将旧 `YYYY-MM-DD HH:mm:ss` 视为 UTC 后再应用系统时区；积分清单 UI 使用共享 `LedgerModal`，默认按今天/昨天/日期分组，支持收入、支出、冻结/补救、任务、奖励、反馈、必做扣分筛选，不显示顶部汇总卡片。
+- 最近更新时间：2026-07-22
 
 - Maintenance note (2026-06-30): long-running SQLite cleanup keeps detailed ledger/submission/redemption rows for `detail_retention_days` (default 365) and summarizes old ledger rows into `activity_archives`. `archiveOldActivity` must update existing monthly archives and the matching `activity_archive` ledger row when late old rows appear, because `point_ledger` remains the balance source of truth. `db:compact` is the low-frequency maintenance-window command for shrinking the SQLite file after cleanup; do not run VACUUM on the normal request/bootstrap path. Report/ledger window queries are supported by `idx_ledger_child_parent_created`, `idx_submissions_child_parent_submitted`, `idx_redemptions_child_parent_requested`, and `idx_child_achievements_child_unlocked`; keep runtime `ensureReportWindowIndexes` in sync with migration 0028.
 
@@ -143,11 +143,11 @@
 - P0：`src/components/Shell.tsx`、`server/api/routes/shared.js`
 - P1：`server/api/routes/parent.js`、`server/api/routes/child.js`、`server/api/utils.js`、`src/types/api.ts`
 - P2：`migrations/0003_notifications.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`migrations/0020_parent_delegates_operator_cartoon_jobs.sql`、`tests/notifications.test.ts`
-- 主要调用链：`Shell.loadNotifications` -> `/notifications`; mark read -> `/notifications/:id/read`; read all -> `/notifications/read-all`; quick action -> parent review/redemption endpoints.
+- 主要调用链：关闭抽屉时 `Shell.loadUnread` -> `/notifications?summary=1`；打开抽屉后 `Shell.loadNotifications` -> `/notifications`; mark read -> `/notifications/:id/read`; read all -> `/notifications/read-all`; quick action -> parent review/redemption endpoints.
 - 相关状态：`notifications.read_at`、`recipient_type`、`recipient_id`、`actor_label_snapshot`
-- 相关接口：`GET /api/notifications`、`PATCH /api/notifications/read-all`、`PATCH /api/notifications/:id/read`
-- 修改注意事项：当前通知列表只展示未读；后端排序为待处理项（`task_submission` / `reward_redemption`）优先，再按 `created_at DESC, id DESC`；前端消息中心提供全部未读、待处理、需签收、普通消息筛选，并在全部未读中把待处理分组置顶；`notificationSource` 支持 `task_required_penalty` 事件类型和 `point_ledger` 关联来源；`eventTypeLabel` 新增 `task_required_penalty` 返回"必做扣分"；消息筛选条（`.notification-filter-bar`）已修复 CSS 布局：固定高度、隐藏滚动条、不遮挡下方消息列表、移动端保留横向滑动但不显示滚动条。
-- 最近更新时间：2026-06-14
+- 相关接口：`GET /api/notifications`、`GET /api/notifications?summary=1`、`PATCH /api/notifications/read-all`、`PATCH /api/notifications/:id/read`
+- 修改注意事项：`summary=1` 只返回 `{ unread }`，完整未读列表仅在抽屉打开时加载；当前通知列表只展示未读；后端排序为待处理项（`task_submission` / `reward_redemption`）优先，再按 `created_at DESC, id DESC`；前端消息中心提供全部未读、待处理、需签收、普通消息筛选，并在全部未读中把待处理分组置顶；`notificationSource` 支持 `task_required_penalty` 事件类型和 `point_ledger` 关联来源；`eventTypeLabel` 新增 `task_required_penalty` 返回"必做扣分"；消息筛选条（`.notification-filter-bar`）已修复 CSS 布局：固定高度、隐藏滚动条、不遮挡下方消息列表、移动端保留横向滑动但不显示滚动条。
+- 最近更新时间：2026-07-22
 
 ## 12. AI 服务、问候与报告评论
 
@@ -159,8 +159,8 @@
 - 主要调用链：settings load/save -> `/parent/ai-service`; model/test -> `/parent/ai-service/models|test`; preview -> `/parent/ai-service/preview`; preview/cache -> `/parent/ai-service/preview/cache`; scheduler -> `server/api/ai/scheduled.js` -> queue/orchestrator/cache。
 - 相关状态：`parent_ai_service_settings`、`ai_child_greetings`、`ai_report_commentaries`、`ai_generation_queue`、`ai_scheduled_refresh_runs`、`system_error_logs`、`system_settings.cleanup_last_stats_json`
 - 相关接口：`GET/PATCH /api/parent/ai-service`、`POST /api/parent/ai-service/models`、`POST /api/parent/ai-service/test`、`POST /api/parent/ai-service/preview`、`POST /api/parent/ai-service/preview/cache`
-- 修改注意事项：AI 预览默认不写缓存（`{ cache: false }`）；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure；scheduled 使用管理员时区和已完成周期；模型字段使用 `<input list>` 支持手动输入；预览替换缓存使用 `INSERT OR REPLACE` 只替换当前配置 hash 下的缓存，不触发新 AI 调用；管理员维护统计读取 AI 队列 pending/processing 积压和近 7 天终态失败率，不触发 AI 生成。
-- 最近更新时间：2026-07-07
+- 修改注意事项：AI 预览默认不写缓存（`{ cache: false }`）；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure，且同一 DB 实例只执行一次、失败后允许下次重试；scheduled 使用管理员时区和已完成周期；模型字段使用 `<input list>` 支持手动输入；预览替换缓存使用 `INSERT OR REPLACE` 只替换当前配置 hash 下的缓存，不触发新 AI 调用；管理员维护统计读取 AI 队列 pending/processing 积压和近 7 天终态失败率，不触发 AI 生成。
+- 最近更新时间：2026-07-22
 
 ## 13. AI 图片、漫画报告、打印清单图与日程表图
 
@@ -172,8 +172,8 @@
 - 主要调用链：`ParentApp.generateCartoonReport` -> `/parent/ai-service/cartoon-report` -> queue -> provider image generation -> polling `/parent/ai-service/cartoon-report/:jobId`; checklist image -> `/children/:id/print-checklist-image` -> polling job endpoint; schedule image -> `/children/:id/schedule-image` -> polling job endpoint。
 - 相关状态：`parent_ai_service_settings.image_*`、`ai_cartoon_report_jobs`、`ai_print_checklist_image_jobs`、`ai_schedule_image_jobs`、`system_settings.cleanup_last_stats_json`
 - 相关接口：`POST /api/parent/ai-service/cartoon-report`、`GET /api/parent/ai-service/cartoon-report/:jobId`、`POST /api/children/:id/print-checklist-image`、`GET /api/children/:id/print-checklist-image/:jobId`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
-- 修改注意事项：图片 AI 配置和文本 AI 配置分开；前端轮询有 abort controller；不要把生成结果持久化到新存储，除非用户明确要求。日程表图使用独立 `ai_schedule_image_jobs` 表和独立提示词 `schedule_image_prompt`；生成 prompt 时将 `plan_html` 转为纯文本，避免把 HTML 标签直接交给图片模型。
-- 最近更新时间：2026-06-22
+- 修改注意事项：图片 AI 配置和文本 AI 配置分开；前端轮询有 abort controller；不要把生成结果持久化到新存储，除非用户明确要求。日程表图使用独立 `ai_schedule_image_jobs` 表和独立提示词 `schedule_image_prompt`；scheduler 与常规 AI 队列共同处理其 pending 或锁超时的 processing 作业，避免服务中断后遗留；生成 prompt 时将 `plan_html` 转为纯文本，避免把 HTML 标签直接交给图片模型。
+- 最近更新时间：2026-07-22
 
 - Maintenance note (2026-06-30): AI queue/job history uses `ai_job_retention_days` (default 92). Daily maintenance deletes only completed/failed rows older than the cutoff from `ai_generation_queue`, `ai_scheduled_refresh_runs`, `ai_cartoon_report_jobs`, `ai_print_checklist_image_jobs`, and `ai_schedule_image_jobs`; pending/processing rows and user-visible AI content caches are retained. Admin `/admin/maintenance-stats` surfaces latest cleanup counts, backlog, and recent failure rate across these tables.
 
@@ -187,8 +187,8 @@
 - 主要调用链：`ChildApp.scheduleTab` -> GET/PUT `/children/:id/schedule`; `ParentApp.exportChildSchedulePrint` -> window.open `/children/:id/schedule-print`; `ParentApp.generateScheduleImage` -> POST `/children/:id/schedule-image` -> queue -> polling -> GET `/children/:id/schedule-image/:jobId`
 - 相关状态：`child_schedule_slots.plan_html`、`child_schedule_items`、`ai_schedule_image_jobs`、`parent_ai_service_settings.schedule_image_prompt`
 - 相关接口：`GET/PUT /api/children/:id/schedule`、`GET /api/children/:id/schedule-print`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
-- 修改注意事项：日程表只有孩子可编辑、家长只读查看；每个时段包含“计划”和“可完成任务”两行；计划富文本保存为受限 HTML，前端编辑器避免在输入中重写 DOM 以保留光标位置，加载日程时必须映射后端 `plan_html`；任务拖入日程表不改变积分/任务提交流程；任务卡片池使用任务自身 `limitCount/limit_count` 作为可安排次数口径，不使用必做 `required_count`；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023/0025 需 bootstrap 运行 ensureChildScheduleSchema。
-- 最近更新时间：2026-06-22
+- 修改注意事项：日程表只有孩子可编辑、家长只读查看；每个时段包含“计划”和“可完成任务”两行；计划富文本保存为受限 HTML，前端编辑器避免在输入中重写 DOM 以保留光标位置，加载日程时必须映射后端 `plan_html`；任务拖入日程表不改变积分/任务提交流程；任务卡片池使用任务自身 `limitCount/limit_count` 作为可安排次数口径，不使用必做 `required_count`；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表并由 scheduler 恢复过期任务；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023/0025 需 bootstrap 运行 ensureChildScheduleSchema。
+- 最近更新时间：2026-07-22
 
 ## 15. 配置导入导出与开发测试入口
 

@@ -1,6 +1,6 @@
 # PROJECT_INDEX
 
-最近更新：2026-06-12
+最近更新：2026-07-22
 
 ## 项目简介
 
@@ -51,6 +51,16 @@
 - SQLite 迁移：`npm run db:migrate:sqlite`
 - SQLite 验证：`npm run db:verify:sqlite`
 - Docker 更新：`docker compose pull && docker compose up -d`
+
+## 核心业务流与不变量
+
+- 登录分流：`/auth/login` 创建会话，`/auth/me` 决定 admin、parent/parent_delegate 或 child 应用；退出清除会话 cookie。
+- 任务审核：孩子提交任务，家长审核后才写入任务积分账本并通知；审核必须幂等，完成程度任务必须选择已配置档位。
+- 奖励兑换：孩子兑换先冻结/扣减积分，家长核销、取消或退款按既有账本语义结算；奖励、任务和成就的跨家庭查询必须在 SQL 层以 `parent_id` 隔离。
+- 反馈与补救：表扬/批评写入账本和通知；可补救批评、必做扣分均可冻结积分，补救、超时或确认后结算，撤回保留审计语义。
+- 必做任务：周期结束由共享 scheduler tick 幂等结算，同一任务/孩子/周期最多一条扣分记录；余额永远由 `point_ledger` 聚合，不维护可漂移的余额字段。
+- AI：问候、报告和三类图片均由持久队列处理；前端只读缓存/任务状态，scheduler 会恢复 pending 或过期 processing 作业。
+- 维护：启动与每个 scheduler tick 都检查 24 小时维护闸门；归档只清理已终态历史，不能破坏账本、软删除和用户可见缓存。
 
 ## AI 维护入口说明
 

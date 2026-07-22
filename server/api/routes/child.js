@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -211,11 +211,8 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
         const rewardRows = await env.DB.prepare("SELECT r.* FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id WHERE ra.child_id=? AND r.parent_id=? AND r.is_active=1 AND r.deleted_at IS NULL ORDER BY r.cost_points")
             .bind(a.id, a.parent_id)
             .all();
-        const rewardsWithLocks = [];
-        for (const reward of rewardRows.results) {
-            if (!(await rewardLockedByAchievement(env, reward.id, a.id)))
-                rewardsWithLocks.push(reward);
-        }
+        const lockedRewardIds = await lockedRewardIdsByAchievement(env, rewardRows.results.map((reward) => reward.id), a.id);
+        const rewardsWithLocks = rewardRows.results.filter((reward) => !lockedRewardIds.has(reward.id));
         const rewardPeriods = rewardsWithLocks.map((reward) => ({ itemId: reward.id, periodKey: periodKey(reward.limit_period, undefined, offset) }));
         const rewardUsageCounts = await childUsageCountsForPeriods(env, "reward_redemptions", "reward_id", a.id, rewardPeriods, ["pending", "redeemed"]);
         const rewards = rewardsWithLocks.map((reward, index) => {
@@ -237,6 +234,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
         const visiblePinnedTaskId = taskRows.some((task) => task.id === pinnedTaskId) ? pinnedTaskId : null;
         const visiblePinnedRewardId = rewards.some((reward) => reward.id === pinnedRewardId) ? pinnedRewardId : null;
         const childRow = await env.DB.prepare("SELECT id, parent_id, display_name, ai_enabled, gender, birth_date FROM children WHERE id=?").bind(a.id).first();
+        const snapshot = childRow ? await loadAiGreetingSnapshot(env, childRow, offset) : { greeting: "", aiRefreshPending: false };
         return ok({
             child: a,
             balance: await balance(env, a.id),
@@ -247,8 +245,8 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             rewards,
             remedyCriticisms: await activeRemedyCriticisms(env, a.id, offset),
             requiredPenaltyRemedies: await activeRequiredPenaltyRemedies(env, a.id, offset),
-            aiGreeting: "",
-            aiRefreshPending: false,
+            aiGreeting: snapshot.greeting,
+            aiRefreshPending: snapshot.aiRefreshPending,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? AND ca.hidden_from_child_at IS NULL ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
         });
     }

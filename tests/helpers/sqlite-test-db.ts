@@ -43,6 +43,7 @@ class SqliteTestStatement {
 
 export class SqliteTestDb {
   private db: DatabaseSync;
+  private prepareCount = 0;
 
   constructor() {
     this.db = new DatabaseSync(":memory:");
@@ -50,7 +51,16 @@ export class SqliteTestDb {
   }
 
   prepare(sql: string) {
+    this.prepareCount += 1;
     return new SqliteTestStatement(this.db, sql);
+  }
+
+  queryCount() {
+    return this.prepareCount;
+  }
+
+  resetQueryCount() {
+    this.prepareCount = 0;
   }
 
   exec(sql: string) {

@@ -10,7 +10,22 @@ export const id = () => crypto.randomUUID();
 export const PBKDF2_ITERATIONS = 100000;
 export const DAY_MS = 86400000;
 export const DEFAULT_AI_JOB_RETENTION_DAYS = 92;
-export let bootstrapPromise = null;
+const onceByDb = new WeakMap();
+export function oncePerDb(env, key, work) {
+    let tasks = onceByDb.get(env.DB);
+    if (!tasks) {
+        tasks = new Map();
+        onceByDb.set(env.DB, tasks);
+    }
+    const existing = tasks.get(key);
+    if (existing) return existing;
+    const pending = Promise.resolve().then(work);
+    tasks.set(key, pending);
+    pending.catch(() => {
+        if (tasks.get(key) === pending) tasks.delete(key);
+    });
+    return pending;
+}
 export const LOGIN_MAX_ATTEMPTS = 5;
 export const LOGIN_WINDOW_MS = 60000;
 export async function ensureLoginAttemptsSchema(env) {
@@ -116,7 +131,7 @@ export async function body(request) {
         return (await request.json());
     }
     catch {
-        return {};
+        throw fail("BAD_REQUEST", "请求体必须是有效 JSON", 400);
     }
 }
 export function cookie(request, name) {
@@ -167,7 +182,7 @@ export async function ensureNotificationsSchema(env) {
     await ensureColumn(env, "notifications", "actor_label_snapshot", "actor_label_snapshot TEXT NOT NULL DEFAULT ''");
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_type, recipient_id, read_at, created_at)").run();
 }
-export async function ensureParentDelegatesSchema(env) {
+async function ensureParentDelegatesSchemaNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS parent_delegates (
   id TEXT PRIMARY KEY,
   parent_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -183,7 +198,7 @@ export async function ensureParentDelegatesSchema(env) {
     await ensureColumn(env, "users", "operator_label", "operator_label TEXT NOT NULL DEFAULT ''");
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_parent_delegates_parent ON parent_delegates(parent_id, status, deleted_at)").run();
 }
-export async function ensureOperatorAuditSchema(env) {
+async function ensureOperatorAuditSchemaNow(env) {
     await ensureColumn(env, "point_ledger", "actor_type", "actor_type TEXT NOT NULL DEFAULT ''");
     await ensureColumn(env, "point_ledger", "actor_id", "actor_id TEXT NOT NULL DEFAULT ''");
     await ensureColumn(env, "point_ledger", "actor_label_snapshot", "actor_label_snapshot TEXT NOT NULL DEFAULT ''");
@@ -207,7 +222,7 @@ export async function ensureSystemSettings(env) {
     await ensureParentAiServiceSettings(env);
     await ensureCriticismRemedySchema(env);
 }
-export async function ensureParentAiServiceSettings(env) {
+async function ensureParentAiServiceSettingsNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS parent_ai_service_settings (
   parent_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   base_url TEXT NOT NULL DEFAULT '',
@@ -238,6 +253,9 @@ export async function ensureParentAiServiceSettings(env) {
     await ensureColumn(env, "parent_ai_service_settings", "image_n", "image_n INTEGER NOT NULL DEFAULT 1");
     await ensureColumn(env, "parent_ai_service_settings", "checklist_image_prompt", "checklist_image_prompt TEXT NOT NULL DEFAULT ''");
     await ensureColumn(env, "parent_ai_service_settings", "schedule_image_prompt", "schedule_image_prompt TEXT NOT NULL DEFAULT ''");
+}
+export function ensureParentAiServiceSettings(env) {
+    return oncePerDb(env, "parent-ai-service-settings", () => ensureParentAiServiceSettingsNow(env));
 }
 export async function timezoneOffsetMinutes(env) {
     const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key='timezone_offset_minutes'").first();
@@ -336,7 +354,7 @@ export function escapeHtml(value) {
         "'": "&#39;"
     })[char]);
 }
-export async function ensureFeedbackSchema(env) {
+async function ensureFeedbackSchemaNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS feedback_templates (
   id TEXT PRIMARY KEY,
   parent_id TEXT NOT NULL REFERENCES users(id),
@@ -357,7 +375,7 @@ export async function ensureFeedbackSchema(env) {
     await ensureColumn(env, "feedback_templates", "remedy_deadline_hours", "remedy_deadline_hours INTEGER NOT NULL DEFAULT 24");
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_feedback_templates_parent ON feedback_templates(parent_id, kind, is_active, deleted_at)").run();
 }
-export async function ensureCriticismRemedySchema(env) {
+async function ensureCriticismRemedySchemaNow(env) {
     await ensureFeedbackSchema(env);
     await ensureColumn(env, "point_ledger", "effective_amount", "effective_amount INTEGER NOT NULL DEFAULT 0");
     await ensureColumn(env, "point_ledger", "frozen_amount", "frozen_amount INTEGER NOT NULL DEFAULT 0");
@@ -376,7 +394,7 @@ export async function ensureCategorySchema(env) {
         await env.DB.prepare("ALTER TABLE task_categories ADD COLUMN source_system_id TEXT REFERENCES task_categories(id)").run();
     }
 }
-export async function ensureAchievementSchema(env) {
+async function ensureAchievementSchemaNow(env) {
     const columns = (await env.DB.prepare("PRAGMA table_info(achievements)").all()).results.map((row) => row.name);
     if (!columns.includes("rule_type")) {
         await env.DB.prepare("ALTER TABLE achievements ADD COLUMN rule_type TEXT NOT NULL DEFAULT 'tasks_completed'").run();
@@ -427,7 +445,7 @@ export async function ensureIterationSchema(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_redemptions_child_status ON reward_redemptions(child_id, status, requested_at)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_submissions_child_task_status ON task_submissions(child_id, task_id, status)").run();
 }
-export async function ensureRequiredTaskSchema(env) {
+async function ensureRequiredTaskSchemaNow(env) {
     await ensureColumn(env, "tasks", "is_required", "is_required INTEGER NOT NULL DEFAULT 0");
     await ensureColumn(env, "tasks", "required_count", "required_count INTEGER NOT NULL DEFAULT 0");
     await ensureColumn(env, "tasks", "required_penalty_points", "required_penalty_points INTEGER NOT NULL DEFAULT 0");
@@ -452,7 +470,7 @@ export async function ensureRequiredTaskSchema(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_required_penalties_child ON task_required_penalties(child_id, period_key)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_required_penalties_parent ON task_required_penalties(parent_id, period_key)").run();
 }
-export async function ensureChildScheduleSchema(env) {
+async function ensureChildScheduleSchemaNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_schedule_slots (
   id TEXT PRIMARY KEY,
   child_id TEXT NOT NULL REFERENCES children(id) ON DELETE CASCADE,
@@ -477,6 +495,27 @@ export async function ensureChildScheduleSchema(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_slots_child ON child_schedule_slots(child_id, sort_order)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_slot ON child_schedule_items(slot_id, sort_order)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_child_task ON child_schedule_items(child_id, task_id)").run();
+}
+export function ensureParentDelegatesSchema(env) {
+    return oncePerDb(env, "parent-delegates-schema", () => ensureParentDelegatesSchemaNow(env));
+}
+export function ensureOperatorAuditSchema(env) {
+    return oncePerDb(env, "operator-audit-schema", () => ensureOperatorAuditSchemaNow(env));
+}
+export function ensureFeedbackSchema(env) {
+    return oncePerDb(env, "feedback-schema", () => ensureFeedbackSchemaNow(env));
+}
+export function ensureCriticismRemedySchema(env) {
+    return oncePerDb(env, "criticism-remedy-schema", () => ensureCriticismRemedySchemaNow(env));
+}
+export function ensureAchievementSchema(env) {
+    return oncePerDb(env, "achievement-schema", () => ensureAchievementSchemaNow(env));
+}
+export function ensureRequiredTaskSchema(env) {
+    return oncePerDb(env, "required-task-schema", () => ensureRequiredTaskSchemaNow(env));
+}
+export function ensureChildScheduleSchema(env) {
+    return oncePerDb(env, "child-schedule-schema", () => ensureChildScheduleSchemaNow(env));
 }
 const SESSION_DAYS = 180;
 const REMEMBER_SESSION_DAYS = 3650;
@@ -534,7 +573,7 @@ export function schedulePlanHtmlToText(value) {
         .trim();
 }
 
-export async function ensureRetentionSchema(env) {
+async function ensureRetentionSchemaNow(env) {
     await ensureColumn(env, "point_ledger", "revoked_at", "revoked_at TEXT");
     await ensureColumn(env, "point_ledger", "revoke_ledger_id", "revoke_ledger_id TEXT REFERENCES point_ledger(id)");
     await ensureColumn(env, "point_ledger", "retention_until", "retention_until TEXT");
@@ -566,12 +605,18 @@ export async function ensureRetentionSchema(env) {
 ('cleanup_last_run_at', ''),
 ('cleanup_last_stats_json', '{}')`).run();
 }
-export async function ensureReportWindowIndexes(env) {
+async function ensureReportWindowIndexesNow(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_ledger_child_parent_created ON point_ledger(child_id, parent_id, created_at)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_ledger_child_parent_created_id ON point_ledger(child_id, parent_id, created_at, id)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_submissions_child_parent_submitted ON task_submissions(child_id, parent_id, submitted_at)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_redemptions_child_parent_requested ON reward_redemptions(child_id, parent_id, requested_at)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_child_achievements_child_unlocked ON child_achievements(child_id, unlocked_at)").run();
+}
+export function ensureRetentionSchema(env) {
+    return oncePerDb(env, "retention-schema", () => ensureRetentionSchemaNow(env));
+}
+export function ensureReportWindowIndexes(env) {
+    return oncePerDb(env, "report-window-indexes", () => ensureReportWindowIndexesNow(env));
 }
 export async function settingNumber(env, key, fallback) {
     const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key=?").bind(key).first();
@@ -705,12 +750,44 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     return { settled };
 }
 export async function activeRemedyCriticisms(env, childId, offset, at = nowIso()) {
-    await settleExpiredCriticismFreezes(env, at);
     return activeRemedyItems(env, childId, offset, "criticism", at);
 }
 export async function activeRequiredPenaltyRemedies(env, childId, offset, at = nowIso()) {
-    await settleExpiredCriticismFreezes(env, at);
     return activeRemedyItems(env, childId, offset, "task_required_penalty", at);
+}
+export async function activeRemedyItemsForChildren(env, children, offset, at = nowIso()) {
+    if (!children.length) return [];
+    const childIds = children.map((child) => child.id);
+    const placeholders = childIds.map(() => "?").join(",");
+    const names = new Map(children.map((child) => [child.id, child.display_name]));
+    const rows = (await env.DB.prepare(`SELECT pl.*, COALESCE(ft.title, t.title) template_title
+FROM point_ledger pl
+LEFT JOIN feedback_templates ft ON pl.source_type='criticism' AND ft.id=pl.source_id
+LEFT JOIN tasks t ON pl.source_type='task_required_penalty' AND t.id=pl.source_id
+WHERE pl.child_id IN (${placeholders})
+  AND pl.source_type IN ('criticism', 'task_required_penalty')
+  AND pl.freeze_status='frozen'
+  AND pl.revoked_at IS NULL
+  AND pl.remedied_at IS NULL
+  AND pl.remedy_deadline_at>?
+ORDER BY pl.remedy_deadline_at ASC`).bind(...childIds, at).all()).results;
+    const nowMs = Date.parse(at);
+    return rows.map((row) => ({
+        id: row.id,
+        sourceType: row.source_type,
+        childId: row.child_id,
+        childName: names.get(row.child_id) || "",
+        title: row.template_title || row.note || "批评补救",
+        note: row.note || "",
+        frozenAmount: Number(row.frozen_amount || 0),
+        remedyCondition: row.remedy_condition || "",
+        remedyPoints: Number(row.remedy_points || 0),
+        remedyDeadlineAt: row.remedy_deadline_at,
+        localRemedyDeadlineAt: localTimeText(row.remedy_deadline_at, offset),
+        remainingMs: Math.max(0, Date.parse(row.remedy_deadline_at) - nowMs),
+        createdAt: row.created_at,
+        localCreatedAt: localTimeText(row.created_at, offset)
+    }));
 }
 async function activeRemedyItems(env, childId, offset, sourceType, at) {
     const rows = (await env.DB.prepare(`SELECT pl.*, COALESCE(ft.title, t.title) template_title
@@ -1019,35 +1096,16 @@ export async function maybeRunMaintenance(env) {
         throw error;
     }
 }
-let bootstrapLock = false;
 export async function bootstrap(env) {
-    if (bootstrapPromise) {
-        await bootstrapPromise;
-        return;
-    }
-    if (bootstrapLock) {
-        while (bootstrapLock && !bootstrapPromise) {
-            await new Promise(resolve => setTimeout(resolve, 10));
-        }
-        if (bootstrapPromise) await bootstrapPromise;
-        return;
-    }
-    bootstrapLock = true;
-    bootstrapPromise = (async () => {
+    return oncePerDb(env, "bootstrap", async () => {
         await ensureSystemSettings(env);
         await ensureSystemErrorLogs(env);
         await ensureAdmin(env);
         await ensureChildScheduleSchema(env);
         await maybeRunMaintenance(env);
-    })().catch((error) => {
-        bootstrapPromise = null;
-        throw error;
-    }).finally(() => {
-        bootstrapLock = false;
     });
-    await bootstrapPromise;
 }
-export async function ensureRewardOnceSchema(env) {
+async function ensureRewardOnceSchemaNow(env) {
     const schema = await env.DB.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='rewards'").first();
     if (!schema?.sql || String(schema.sql).includes("'once'"))
         return;
@@ -1114,6 +1172,9 @@ FROM reward_redemptions_backup`).run();
     await env.DB.prepare("DROP TABLE reward_redemptions_backup").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_redemptions_parent_status ON reward_redemptions(parent_id, status)").run();
     await env.DB.prepare("PRAGMA foreign_keys = ON").run();
+}
+export function ensureRewardOnceSchema(env) {
+    return oncePerDb(env, "reward-once-schema", () => ensureRewardOnceSchemaNow(env));
 }
 export async function actorFromRequest(request, env) {
     const token = cookie(request, "session");
@@ -1283,6 +1344,19 @@ WHERE a.unlock_reward_id=? AND a.is_active=1 AND a.deleted_at IS NULL`)
         .bind(childId, rewardId)
         .all()).results;
     return rows.length > 0 && rows.every((row) => !row.unlocked_at);
+}
+export async function lockedRewardIdsByAchievement(env, rewardIds, childId) {
+    if (!rewardIds.length) return new Set();
+    const placeholders = rewardIds.map(() => "?").join(",");
+    const rows = (await env.DB.prepare(`SELECT a.unlock_reward_id
+FROM achievements a
+LEFT JOIN child_achievements ca ON ca.achievement_id=a.id AND ca.child_id=?
+WHERE a.unlock_reward_id IN (${placeholders}) AND a.is_active=1 AND a.deleted_at IS NULL
+GROUP BY a.unlock_reward_id
+HAVING COUNT(*) > 0 AND SUM(CASE WHEN ca.unlocked_at IS NOT NULL THEN 1 ELSE 0 END)=0`)
+        .bind(childId, ...rewardIds)
+        .all()).results;
+    return new Set(rows.map((row) => row.unlock_reward_id));
 }
 export async function replaceRewardAchievementRequirement(env, parentId, rewardId, achievementId) {
     const requiredAchievementId = String(achievementId || "").trim();
@@ -1495,21 +1569,54 @@ export async function listWithAssignees(env, kind, parentId) {
     const rows = await env.DB.prepare(`SELECT * FROM ${kind} WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC`).bind(parentId).all();
     const table = kind === "tasks" ? "task_assignees" : "reward_assignees";
     const key = kind === "tasks" ? "task_id" : "reward_id";
-    return Promise.all(rows.results.map(async (row) => {
-        const requiredAchievement = kind === "rewards"
-            ? await env.DB.prepare("SELECT id, title FROM achievements WHERE parent_id=? AND unlock_reward_id=? AND deleted_at IS NULL ORDER BY updated_at DESC, created_at DESC LIMIT 1").bind(parentId, row.id).first()
-            : null;
+    const ids = rows.results.map((row) => row.id);
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => "?").join(",");
+    const [assignmentRows, prerequisiteRows, achievementRows] = await Promise.all([
+        env.DB.prepare(`SELECT ${key} item_id, child_id FROM ${table} WHERE ${key} IN (${placeholders})`).bind(...ids).all(),
+        kind === "rewards"
+            ? env.DB.prepare(`SELECT rp.reward_id, rp.task_id, rp.required_count, t.title, t.period
+FROM reward_prerequisites rp JOIN tasks t ON t.id=rp.task_id
+WHERE rp.reward_id IN (${placeholders}) ORDER BY t.created_at DESC`).bind(...ids).all()
+            : { results: [] },
+        kind === "rewards"
+            ? env.DB.prepare(`SELECT id, title, unlock_reward_id FROM achievements
+WHERE parent_id=? AND unlock_reward_id IN (${placeholders}) AND deleted_at IS NULL
+ORDER BY updated_at DESC, created_at DESC`).bind(parentId, ...ids).all()
+            : { results: [] }
+    ]);
+    const assignees = new Map();
+    for (const row of assignmentRows.results) {
+        const current = assignees.get(row.item_id) || [];
+        current.push(row.child_id);
+        assignees.set(row.item_id, current);
+    }
+    const prerequisites = new Map();
+    for (const row of prerequisiteRows.results) {
+        const current = prerequisites.get(row.reward_id) || [];
+        current.push({ task_id: row.task_id, required_count: row.required_count, title: row.title, period: row.period });
+        prerequisites.set(row.reward_id, current);
+    }
+    const requiredAchievements = new Map();
+    for (const row of achievementRows.results) {
+        if (!requiredAchievements.has(row.unlock_reward_id)) requiredAchievements.set(row.unlock_reward_id, row);
+    }
+    return rows.results.map((row) => {
+        let completionStandards = [];
+        try { completionStandards = normalizeCompletionStandards(JSON.parse(row.completion_standards_json || "[]")); }
+        catch { completionStandards = []; }
+        const requiredAchievement = requiredAchievements.get(row.id);
         return {
             ...row,
             enabledWeekdays: normalizeWeekdays(row.enabled_weekdays),
             redeemWeekdays: normalizeWeekdays(row.redeem_weekdays),
-            completionStandards: kind === "tasks" ? normalizeCompletionStandards(JSON.parse(row.completion_standards_json || "[]")) : [],
-            prerequisites: kind === "rewards" ? await rewardPrerequisites(env, row.id) : [],
+            completionStandards: kind === "tasks" ? completionStandards : [],
+            prerequisites: kind === "rewards" ? (prerequisites.get(row.id) || []) : [],
             requiredAchievementId: requiredAchievement?.id || "",
             requiredAchievementTitle: requiredAchievement?.title || "",
-            assignees: (await env.DB.prepare(`SELECT child_id FROM ${table} WHERE ${key}=?`).bind(row.id).all()).results.map((x) => x.child_id)
+            assignees: assignees.get(row.id) || []
         };
-    }));
+    });
 }
 export async function listConfig(env, parentId) {
     await ensureFeedbackSchema(env);
@@ -2070,8 +2177,89 @@ export async function notificationSource(env, item) {
     const fallback = eventTypeLabel(item.event_type);
     return { sourceTypeLabel: fallback, sourceLabel: fallback };
 }
+
+function sourceIds(rows, predicate, field) {
+    return [...new Set(rows.filter(predicate).map((row) => row[field]).filter(Boolean))];
+}
+
+async function sourceMaps(env, input) {
+    const maps = {
+        tasksBySubmission: new Map(),
+        rewardsByRedemption: new Map(),
+        rewards: new Map(),
+        feedbackTemplates: new Map(),
+        tasks: new Map(),
+        ledgers: new Map(),
+        recallSources: new Map()
+    };
+    const load = async (ids, sql, target) => {
+        if (!ids.length) return;
+        const rows = (await env.DB.prepare(`${sql} IN (${ids.map(() => "?").join(",")})`).bind(...ids).all()).results;
+        for (const row of rows) target.set(row.id, row);
+    };
+    await Promise.all([
+        load(input.taskSubmissionIds, "SELECT s.id, t.title FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.id", maps.tasksBySubmission),
+        load(input.rewardRedemptionIds, "SELECT rr.id, r.title FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id WHERE rr.id", maps.rewardsByRedemption),
+        load(input.rewardIds, "SELECT id, title FROM rewards WHERE id", maps.rewards),
+        load(input.templateIds, "SELECT id, title FROM feedback_templates WHERE id", maps.feedbackTemplates),
+        load(input.taskIds, "SELECT id, title FROM tasks WHERE id", maps.tasks),
+        load(input.ledgerIds, "SELECT pl.id, pl.source_type, pl.source_id, ft.title AS feedback_title, t.title AS task_title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id LEFT JOIN tasks t ON t.id=pl.source_id WHERE pl.id", maps.ledgers),
+        load(input.recallIds, "SELECT pl.id, pl.source_type, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id", maps.recallSources)
+    ]);
+    return maps;
+}
+
 export async function withNotificationSources(env, rows) {
-    return Promise.all(rows.map(async (item) => ({ ...item, actorLabel: item.actor_label_snapshot || "", ...(await notificationSource(env, item)) })));
+    const maps = await sourceMaps(env, {
+        taskSubmissionIds: sourceIds(rows, (item) => item.related_type === "task_submission", "related_id"),
+        rewardRedemptionIds: sourceIds(rows, (item) => item.related_type === "reward_redemption", "related_id"),
+        rewardIds: sourceIds(rows, (item) => item.related_type === "reward", "related_id"),
+        templateIds: [],
+        taskIds: [],
+        ledgerIds: sourceIds(rows, (item) => item.related_type === "point_ledger", "related_id"),
+        recallIds: []
+    });
+    const ledgerRows = [...maps.ledgers.values()];
+    const recallIds = sourceIds(ledgerRows, (row) => row.source_type === "feedback_recall", "source_id");
+    if (recallIds.length) {
+        const recalls = await sourceMaps(env, { taskSubmissionIds: [], rewardRedemptionIds: [], rewardIds: [], templateIds: [], taskIds: [], ledgerIds: [], recallIds });
+        maps.recallSources = recalls.recallSources;
+    }
+    return rows.map((item) => {
+        let source = null;
+        if (item.related_type === "task_submission") {
+            const row = maps.tasksBySubmission.get(item.related_id);
+            if (row?.title) source = { sourceTypeLabel: "任务", sourceLabel: `任务：${row.title}` };
+        } else if (item.related_type === "reward_redemption") {
+            const row = maps.rewardsByRedemption.get(item.related_id);
+            if (row?.title) source = { sourceTypeLabel: "奖励", sourceLabel: `奖励：${row.title}` };
+        } else if (item.related_type === "reward") {
+            const row = maps.rewards.get(item.related_id);
+            if (row?.title) source = { sourceTypeLabel: "奖励", sourceLabel: `奖励：${row.title}` };
+        } else if (item.related_type === "point_ledger") {
+            const row = maps.ledgers.get(item.related_id);
+            if (row?.feedback_title) {
+                const label = row.source_type === "criticism" ? "批评" : "表扬";
+                source = { sourceTypeLabel: label, sourceLabel: `${label}：${row.feedback_title}` };
+            } else if (row?.source_type === "feedback_recall") {
+                const original = maps.recallSources.get(row.source_id);
+                if (original?.title) {
+                    const label = original.source_type === "criticism" ? "批评" : "表扬";
+                    source = { sourceTypeLabel: `${label}撤回`, sourceLabel: `${label}：${original.title}` };
+                } else if (original?.source_type) {
+                    const label = eventTypeLabel(original.source_type);
+                    source = { sourceTypeLabel: `${label}撤回`, sourceLabel: label };
+                }
+            } else if (row?.source_type === "task_required_penalty") {
+                source = row.task_title ? { sourceTypeLabel: "必做扣分", sourceLabel: `任务：${row.task_title}` } : { sourceTypeLabel: "必做扣分", sourceLabel: "必做扣分" };
+            } else if (row?.source_type) {
+                const label = eventTypeLabel(row.source_type);
+                source = { sourceTypeLabel: label, sourceLabel: label };
+            }
+        }
+        const fallback = eventTypeLabel(item.event_type);
+        return { ...item, actorLabel: item.actor_label_snapshot || "", ...(source || { sourceTypeLabel: fallback, sourceLabel: fallback }) };
+    });
 }
 export async function ledgerSource(env, row) {
     if (row.source_type === "task") {
@@ -2116,13 +2304,53 @@ export async function ledgerSource(env, row) {
     return { sourceTypeLabel: fallback, sourceLabel: fallback };
 }
 export async function withLedgerSources(env, rows, offset) {
-    return Promise.all(rows.map(async (row) => ({
-        ...row,
-        actorLabel: row.actor_label_snapshot || "",
-        localCreatedAt: localTimeText(row.created_at, offset),
-        localRemedyDeadlineAt: row.remedy_deadline_at ? localTimeText(row.remedy_deadline_at, offset) : "",
-        ...(await ledgerSource(env, row))
-    })));
+    const maps = await sourceMaps(env, {
+        taskSubmissionIds: sourceIds(rows, (row) => row.source_type === "task", "source_id"),
+        rewardRedemptionIds: sourceIds(rows, (row) => ["reward", "reward_cancel", "reward_refund"].includes(row.source_type), "source_id"),
+        rewardIds: [],
+        templateIds: sourceIds(rows, (row) => row.source_type === "praise" || row.source_type === "criticism", "source_id"),
+        taskIds: sourceIds(rows, (row) => row.source_type === "task_required_penalty", "source_id"),
+        ledgerIds: [],
+        recallIds: sourceIds(rows, (row) => row.source_type === "feedback_recall", "source_id")
+    });
+    return rows.map((row) => {
+        let source = null;
+        if (row.source_type === "task") {
+            const found = maps.tasksBySubmission.get(row.source_id);
+            if (found?.title) source = { sourceTypeLabel: "任务", sourceLabel: `任务：${found.title}` };
+        } else if (["reward", "reward_cancel", "reward_refund"].includes(row.source_type)) {
+            const found = maps.rewardsByRedemption.get(row.source_id);
+            if (found?.title) source = { sourceTypeLabel: row.source_type === "reward" ? "奖励兑换" : "奖励退还", sourceLabel: `奖励：${found.title}` };
+        } else if (row.source_type === "praise" || row.source_type === "criticism") {
+            let label = row.source_type === "praise" ? "表扬" : "批评";
+            if (row.source_type === "criticism" && row.freeze_status === "frozen") label = "批评冻结";
+            if (row.source_type === "criticism" && row.freeze_status === "remedied") label = "批评补救";
+            if (row.source_type === "criticism" && row.freeze_status === "settled") label = "批评结算";
+            const found = maps.feedbackTemplates.get(row.source_id);
+            source = found?.title ? { sourceTypeLabel: label, sourceLabel: `${label}：${found.title}` } : { sourceTypeLabel: label, sourceLabel: label };
+        } else if (row.source_type === "task_required_penalty") {
+            const label = Number(row.amount) > 0 ? "必做扣分退回" : row.freeze_status === "frozen" ? "必做扣分冻结" : row.freeze_status === "remedied" ? "必做补救" : row.freeze_status === "settled" ? "必做扣分结算" : "必做扣分";
+            const found = maps.tasks.get(row.source_id);
+            source = found?.title ? { sourceTypeLabel: label, sourceLabel: `任务：${found.title}` } : { sourceTypeLabel: label, sourceLabel: label };
+        } else if (row.source_type === "feedback_recall") {
+            const original = maps.recallSources.get(row.source_id);
+            if (original?.title) {
+                const label = original.source_type === "criticism" ? "批评" : "表扬";
+                source = { sourceTypeLabel: `${label}撤回`, sourceLabel: `${label}撤回：${original.title}` };
+            } else if (original?.source_type) {
+                const label = eventTypeLabel(original.source_type);
+                source = { sourceTypeLabel: `${label}撤回`, sourceLabel: `${label}撤回` };
+            }
+        }
+        const fallback = eventTypeLabel(row.source_type);
+        return {
+            ...row,
+            actorLabel: row.actor_label_snapshot || "",
+            localCreatedAt: localTimeText(row.created_at, offset),
+            localRemedyDeadlineAt: row.remedy_deadline_at ? localTimeText(row.remedy_deadline_at, offset) : "",
+            ...(source || { sourceTypeLabel: fallback, sourceLabel: fallback })
+        };
+    });
 }
 export function sessionCookie(value, env, request, maxAgeDays = SESSION_DAYS) {
     const proto = request?.headers?.get("x-forwarded-proto")

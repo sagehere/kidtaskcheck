@@ -37,17 +37,26 @@ export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullabl
     }
   }
 
+  async function loadUnread() {
+    const data = await api<{ unread: number }>("/notifications?summary=1").catch(() => ({ unread: 0 }));
+    setUnread(data.unread);
+  }
+
   useEffect(() => {
-    void loadNotifications();
-    function onRefresh() { void loadNotifications(); }
+    if (open) void loadNotifications();
+    else void loadUnread();
+    function onRefresh() {
+      if (open) void loadNotifications();
+      else void loadUnread();
+    }
     window.addEventListener("app:refresh-notifications", onRefresh);
-    notifPollingRef.current = window.setInterval(() => void loadNotifications(), REFRESH_INTERVAL_MS);
+    notifPollingRef.current = window.setInterval(() => void (open ? loadNotifications() : loadUnread()), REFRESH_INTERVAL_MS);
     function onVisibility() {
       if (document.hidden) {
         if (notifPollingRef.current !== null) { window.clearInterval(notifPollingRef.current); notifPollingRef.current = null; }
       } else if (notifPollingRef.current === null) {
-        void loadNotifications();
-        notifPollingRef.current = window.setInterval(() => void loadNotifications(), REFRESH_INTERVAL_MS);
+        void (open ? loadNotifications() : loadUnread());
+        notifPollingRef.current = window.setInterval(() => void (open ? loadNotifications() : loadUnread()), REFRESH_INTERVAL_MS);
       }
     }
     document.addEventListener("visibilitychange", onVisibility);
@@ -56,7 +65,7 @@ export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullabl
       window.removeEventListener("app:refresh-notifications", onRefresh);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [me.id]);
+  }, [me.id, open]);
   useEffect(() => {
     function closeOnOutsideClick(event: MouseEvent) {
       if (!notificationRef.current?.contains(event.target as Node)) setOpen(false);

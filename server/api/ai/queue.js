@@ -1,4 +1,4 @@
-import { nowIso, id, ensureColumn, logSystemError } from "../utils.js";
+import { nowIso, id, ensureColumn, logSystemError, oncePerDb } from "../utils.js";
 import { generateParentAiGreeting, generateReportCommentary, NonRetryableError } from "./orchestrator.js";
 import { AiProviderError } from "./providers.js";
 
@@ -7,7 +7,7 @@ const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_LOCK_MS = 5 * 60_000;
 const MINUTE_MS = 60_000;
 
-export async function ensureAiGenerationQueue(env) {
+async function ensureAiGenerationQueueNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ai_generation_queue (
   id TEXT PRIMARY KEY,
   parent_id TEXT NOT NULL REFERENCES users(id),
@@ -27,6 +27,9 @@ export async function ensureAiGenerationQueue(env) {
     await ensureColumn(env, "ai_generation_queue", "locked_until", "locked_until TEXT");
     await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_queue_unique_job ON ai_generation_queue(parent_id, child_id, type, period_key)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_ai_queue_ready ON ai_generation_queue(status, next_attempt_at, created_at)").run();
+}
+export function ensureAiGenerationQueue(env) {
+    return oncePerDb(env, "ai-generation-queue", () => ensureAiGenerationQueueNow(env));
 }
 
 export async function enqueueAiGenerationJob(env, { parentId, childId, type, periodKey }) {

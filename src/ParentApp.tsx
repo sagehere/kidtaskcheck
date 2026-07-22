@@ -196,15 +196,24 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       loadLockRef.current = false;
     }
   }
+
+  async function loadDashboard() {
+    if (loadLockRef.current) return;
+    try {
+      setDashboard(await api<any>("/dashboard/parent"));
+    } catch {
+      setError("待办数据加载失败，可点击重试");
+    }
+  }
   useEffect(() => {
     void load();
-    pollingRef.current = window.setInterval(() => void load(), REFRESH_INTERVAL_MS);
+    pollingRef.current = window.setInterval(() => void loadDashboard(), REFRESH_INTERVAL_MS);
     function onVisibility() {
       if (document.hidden) {
         if (pollingRef.current !== null) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
       } else if (pollingRef.current === null) {
-        void load();
-        pollingRef.current = window.setInterval(() => void load(), REFRESH_INTERVAL_MS);
+        void loadDashboard();
+        pollingRef.current = window.setInterval(() => void loadDashboard(), REFRESH_INTERVAL_MS);
       }
     }
     document.addEventListener("visibilitychange", onVisibility);

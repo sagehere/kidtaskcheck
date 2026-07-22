@@ -1,5 +1,11 @@
 # 2026-07-22
 
+- 类型：全项目保守优化
+- 任务：降低家长/孩子空闲轮询、批量消除列表来源和配置关系的 N+1 查询、缓存 SQLite schema 自修复、让 scheduler 恢复日程图片队列，并缩减生产镜像运行层。
+- 修改文件：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`src/components/Shell.tsx`、`server/api/utils.js`、`server/api/routes/shared.js`、`server/api/routes/child.js`、`server/api/ai/{cache,queue,scheduled,cartoon-queue}.js`、`server/scheduler-tick.mjs`、`Dockerfile`、`.dockerignore` 与相关测试/索引。
+- 兼容性：新增 `GET /api/notifications?summary=1`；`GET /api/dashboard/child` 增加 AI 问候字段；保留 child summary 和原通知列表接口。
+- 验证：`rtk npm run build`；`rtk npm test`（144 项）。Dockerfile 静态检查确认 runtime 未复制或安装 `node_modules`；实际镜像构建受本机 Docker Desktop Linux 引擎未运行阻断。
+
 - 类型：维护规则
 - 任务：后续推送默认直接推送 `main`，未经用户明确要求不得创建分支。
 - 修改文件：`AGENTS.md`。

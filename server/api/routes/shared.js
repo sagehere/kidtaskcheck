@@ -1,6 +1,6 @@
 import { periodKey } from "../../../src/lib/domain.js";
 import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup, clearCurrentConfig, ensureRequiredTaskSchema } from "../utils.js";
-import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies } from "../utils.js";
+import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes, activeRemedyItemsForChildren } from "../utils.js";
 
 async function confirmFrozenRemedy(env, actor, ledgerId, sourceType) {
     await ensureCriticismRemedySchema(env);
@@ -50,6 +50,11 @@ export async function handleSharedRoutes(path, method, request, env, actor, url)
     if (path === "/notifications" && method === "GET") {
         const a = requireRole(actor, ["parent", "parent_delegate", "child"]);
         const recipient = notificationRecipient(a);
+        const unread = Number((await env.DB.prepare("SELECT COUNT(*) v FROM notifications WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL")
+            .bind(recipient.type, recipient.id)
+            .first())?.v || 0);
+        if (url.searchParams.get("summary") === "1")
+            return ok({ unread });
         const rows = (await env.DB.prepare(`SELECT * FROM notifications
 WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL
 ORDER BY CASE WHEN related_type IN ('task_submission', 'reward_redemption') THEN 0 ELSE 1 END,
@@ -58,9 +63,6 @@ ORDER BY CASE WHEN related_type IN ('task_submission', 'reward_redemption') THEN
 LIMIT 50`)
             .bind(recipient.type, recipient.id)
             .all()).results;
-        const unread = Number((await env.DB.prepare("SELECT COUNT(*) v FROM notifications WHERE recipient_type=? AND recipient_id=? AND read_at IS NULL")
-            .bind(recipient.type, recipient.id)
-            .first())?.v || 0);
         return ok({ items: await withNotificationSources(env, rows), unread });
     }
     if (path === "/notifications/read-all" && method === "PATCH") {
@@ -333,18 +335,9 @@ WHERE pl.id=? AND pl.parent_id=? AND c.parent_id=? AND pl.source_type IN ('prais
             frozenPointsForChildren(env, childIds)
         ]);
         const offset = await timezoneOffsetMinutes(env);
-        const allRemedy = [];
-        const allRequiredPenaltyRemedies = [];
-        for (const child of children) {
-            const items = await activeRemedyCriticisms(env, child.id, offset);
-            for (const item of items) {
-                allRemedy.push({ ...item, childId: child.id, childName: child.display_name });
-            }
-            const requiredItems = await activeRequiredPenaltyRemedies(env, child.id, offset);
-            for (const item of requiredItems) {
-                allRequiredPenaltyRemedies.push({ ...item, childId: child.id, childName: child.display_name });
-            }
-        }
+        const remedyItems = await activeRemedyItemsForChildren(env, children, offset);
+        const allRemedy = remedyItems.filter((item) => item.sourceType === "criticism");
+        const allRequiredPenaltyRemedies = remedyItems.filter((item) => item.sourceType === "task_required_penalty");
         await ensureRequiredTaskSchema(env);
         const requiredRows = (await env.DB.prepare(`SELECT t.id task_id, t.period, ta.child_id
 FROM tasks t

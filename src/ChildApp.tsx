@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar, Bold, Italic, Underline, List, Eye, EyeOff } from "lucide-react";
-import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildDashboardSummary, ChildScheduleData, ChildScheduleSlot } from "./types/api";
+import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildScheduleData, ChildScheduleSlot } from "./types/api";
 import { api } from "./api/client";
 import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle } from "./components/UI";
 import { LedgerModal } from "./components/LedgerModal";
@@ -60,11 +60,9 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [warehouse, setWarehouse] = useState<WarehouseItem[]>([]);
   const [warehouseAchievements, setWarehouseAchievements] = useState<any[]>([]);
   const [warehouseTab, setWarehouseTab] = useState<"rewards" | "achievements">("rewards");
-  const [summary, setSummary] = useState<ChildDashboardSummary>({ balance: 0, frozenPoints: 0, aiGreeting: "", aiRefreshPending: false, child: null });
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [achievementTipId, setAchievementTipId] = useState("");
   const [tick, setTick] = useState(0);
-  const loadSummaryLockRef = useRef(false);
   const loadDashLockRef = useRef(false);
   const pollingRef = useRef<number | null>(null);
 
@@ -194,23 +192,6 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
   }
 
-  async function loadSummary() {
-    if (loadSummaryLockRef.current) return;
-    loadSummaryLockRef.current = true;
-    try {
-      const data = await api<ChildDashboardSummary>("/dashboard/child-summary").catch(() => ({ balance: 0, frozenPoints: 0, aiGreeting: "", aiRefreshPending: false, child: null }));
-      setSummary(data);
-      setDash((current: any) => ({
-        ...current,
-        balance: data.balance,
-        aiGreeting: data.aiGreeting,
-        aiRefreshPending: data.aiRefreshPending
-      }));
-    } finally {
-      loadSummaryLockRef.current = false;
-    }
-  }
-
   async function loadDashboard() {
     if (loadDashLockRef.current) return;
     loadDashLockRef.current = true;
@@ -221,18 +202,12 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         return { tasks: [], rewards: [], achievements: [], notifications: [], timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00", balance: 0, warehouse_count: 0, greeting: "", child: null };
       });
       setDash(dashData);
-      await loadWarehouse();
       if (hasError) setError("部分数据加载失败，可点击重试");
     } catch (err) {
       setError("加载数据失败，可点击重试");
     } finally {
       loadDashLockRef.current = false;
     }
-  }
-
-  async function refreshAll() {
-    await loadSummary();
-    await loadDashboard();
   }
 
   async function loadSchedule() {
@@ -401,20 +376,19 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     return Boolean((html || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim());
   }
 
-  function load() {
-    void Promise.all([refreshAll(), loadSchedule()]);
+  async function load() {
+    await Promise.all([loadDashboard(), loadSchedule()]);
   }
   useEffect(() => {
-    void loadSummary();
     void loadDashboard();
     void loadSchedule();
-    pollingRef.current = window.setInterval(() => void refreshAll(), REFRESH_INTERVAL_MS);
+    pollingRef.current = window.setInterval(() => void loadDashboard(), REFRESH_INTERVAL_MS);
     function onVisibility() {
       if (document.hidden) {
         if (pollingRef.current !== null) { window.clearInterval(pollingRef.current); pollingRef.current = null; }
       } else if (pollingRef.current === null) {
-        void refreshAll();
-        pollingRef.current = window.setInterval(() => void refreshAll(), REFRESH_INTERVAL_MS);
+        void loadDashboard();
+        pollingRef.current = window.setInterval(() => void loadDashboard(), REFRESH_INTERVAL_MS);
       }
     }
     document.addEventListener("visibilitychange", onVisibility);
@@ -423,6 +397,9 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
+  useEffect(() => {
+    if (activeTab === "warehouse") void loadWarehouse();
+  }, [activeTab]);
   useEffect(() => {
     const timer = window.setInterval(() => setTick((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
@@ -498,15 +475,15 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           <p>孩子面板</p>
           <h1>{me.displayName}</h1>
         </div>
-        {(summary.aiGreeting || dash.aiGreeting)
-          ? <p className="ai-greeting">{summary.aiGreeting || dash.aiGreeting}{summary.aiRefreshPending || dash.aiRefreshPending ? " · 等待定时更新" : ""}</p>
-          : (summary.aiRefreshPending || dash.aiRefreshPending) ? <p className="ai-greeting muted">AI 寄语等待定时生成</p> : null
+        {dash.aiGreeting
+          ? <p className="ai-greeting">{dash.aiGreeting}{dash.aiRefreshPending ? " · 等待定时更新" : ""}</p>
+          : dash.aiRefreshPending ? <p className="ai-greeting muted">AI 寄语等待定时生成</p> : null
         }
         <button className="metric large clickable" onClick={() => void openLedger()}>
           <Star />
-          <strong>{summary.balance || dash.balance}</strong>
+          <strong>{dash.balance}</strong>
           <span>积分</span>
-          {(summary.frozenPoints || dash.frozenPoints || 0) > 0 && <span className="frozen-tag">{summary.frozenPoints || dash.frozenPoints}积分冻结中</span>}
+          {(dash.frozenPoints || 0) > 0 && <span className="frozen-tag">{dash.frozenPoints}积分冻结中</span>}
         </button>
       </section>
       <FeedbackToast message={message} error={error} onDismiss={() => { setMessage(""); setError(""); }} />

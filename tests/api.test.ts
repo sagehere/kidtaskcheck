@@ -250,7 +250,7 @@ describe("Parent delegate accounts", () => {
 
   it("exports required task settings and child assignment names", async () => {
     const parentActor = { type: "user", role: "parent", id: pid, displayName: "Parent A", operatorLabel: "妈妈" };
-    env.DB.prepare("UPDATE tasks SET is_required=1, required_count=3, required_penalty_points=4 WHERE id=?").bind(tid).run();
+    env.DB.prepare("UPDATE tasks SET is_required=1, required_count=3, required_penalty_points=4, required_remedy_enabled=1, required_remedy_condition='收拾书桌', required_remedy_points=2, required_remedy_deadline_hours=12 WHERE id=?").bind(tid).run();
     const rid = id();
     env.DB.prepare("INSERT INTO rewards (id, parent_id, title, cost_points, limit_period, redeem_weekdays) VALUES (?, ?, 'Snack', 8, 'daily', '[1,2,3,4,5,6,0]')").bind(rid, pid).run();
     env.DB.prepare("INSERT INTO reward_assignees (reward_id, child_id) VALUES (?, ?)").bind(rid, cid).run();
@@ -265,6 +265,10 @@ describe("Parent delegate accounts", () => {
       is_required: 1,
       required_count: 3,
       required_penalty_points: 4,
+      required_remedy_enabled: 1,
+      required_remedy_condition: "收拾书桌",
+      required_remedy_points: 2,
+      required_remedy_deadline_hours: 12,
       assignee_names: ["Child A"]
     });
     const reward = payload.data.rewards.find((item: any) => item.title === "Snack");

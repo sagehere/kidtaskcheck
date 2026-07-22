@@ -431,6 +431,10 @@ export async function ensureRequiredTaskSchema(env) {
     await ensureColumn(env, "tasks", "is_required", "is_required INTEGER NOT NULL DEFAULT 0");
     await ensureColumn(env, "tasks", "required_count", "required_count INTEGER NOT NULL DEFAULT 0");
     await ensureColumn(env, "tasks", "required_penalty_points", "required_penalty_points INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "tasks", "required_remedy_enabled", "required_remedy_enabled INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "tasks", "required_remedy_condition", "required_remedy_condition TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(env, "tasks", "required_remedy_points", "required_remedy_points INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(env, "tasks", "required_remedy_deadline_hours", "required_remedy_deadline_hours INTEGER NOT NULL DEFAULT 24");
     await ensureColumn(env, "tasks", "grading_mode", "grading_mode TEXT NOT NULL DEFAULT 'fixed'");
     await ensureColumn(env, "tasks", "completion_standards_json", "completion_standards_json TEXT NOT NULL DEFAULT '[]'");
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_required_penalties (
@@ -583,7 +587,7 @@ export async function settleExpiredCriticismFreezes(env, at = nowIso()) {
     await ensureCriticismRemedySchema(env);
     const rows = (await env.DB.prepare(`SELECT id, child_id, parent_id, frozen_amount
 FROM point_ledger
-WHERE source_type='criticism'
+WHERE source_type IN ('criticism', 'task_required_penalty')
   AND freeze_status='frozen'
   AND revoked_at IS NULL
   AND remedied_at IS NULL
@@ -603,6 +607,7 @@ WHERE id=? AND freeze_status='frozen' AND revoked_at IS NULL`)
 }
 export async function settleRequiredTaskPenalties(env, at = nowIso()) {
     await ensureRequiredTaskSchema(env);
+    await ensureCriticismRemedySchema(env);
     const offset = await timezoneOffsetMinutes(env);
     const now = new Date(at);
     const nowZoned = new Date(now.getTime() + offset * 60000);
@@ -620,7 +625,7 @@ export async function settleRequiredTaskPenalties(env, at = nowIso()) {
     const shouldSettleMonthly = dayOfMonth === 1 && hour >= 0;
     if (!shouldSettleDaily && !shouldSettleWeekly && !shouldSettleMonthly)
         return { settled: 0 };
-    const tasks = (await env.DB.prepare(`SELECT t.id, t.parent_id, t.period, t.required_count, t.required_penalty_points, t.title, t.created_at, t.updated_at,
+    const tasks = (await env.DB.prepare(`SELECT t.id, t.parent_id, t.period, t.required_count, t.required_penalty_points, t.required_remedy_enabled, t.required_remedy_condition, t.required_remedy_points, t.required_remedy_deadline_hours, t.title, t.created_at, t.updated_at,
   ta.child_id
 FROM tasks t
 JOIN task_assignees ta ON ta.task_id=t.id
@@ -670,9 +675,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`)
             continue;
         }
         const ledgerId = id();
-        await env.DB.prepare(`INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, created_at)
-VALUES (?, ?, ?, ?, 'task_required_penalty', ?, ?, ?, ?)`)
-            .bind(ledgerId, task.child_id, task.parent_id, -actualPenalty, task.id, periodKeyValue, `必做任务未达标扣分`, at)
+        const remediable = Number(task.required_remedy_enabled || 0) === 1;
+        const remedyPoints = remediable ? Math.min(actualPenalty, Math.max(0, Number(task.required_remedy_points || 0))) : 0;
+        const remedyDeadlineHours = remediable ? Math.max(1, Number(task.required_remedy_deadline_hours || 24)) : 0;
+        const remedyDeadlineAt = remediable ? new Date(new Date(at).getTime() + remedyDeadlineHours * 3600000).toISOString() : null;
+        await env.DB.prepare(`INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, effective_amount, frozen_amount, freeze_status, remedy_condition, remedy_points, remedy_deadline_at, created_at)
+VALUES (?, ?, ?, ?, 'task_required_penalty', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .bind(ledgerId, task.child_id, task.parent_id, remediable ? 0 : -actualPenalty, task.id, periodKeyValue, `必做任务未达标扣分`, remediable ? 0 : -actualPenalty, remediable ? actualPenalty : 0, remediable ? "frozen" : "", remediable ? String(task.required_remedy_condition || "").trim() : "", remedyPoints, remedyDeadlineAt, at)
             .run();
         await notify(env, {
             recipientType: "child",
@@ -680,7 +689,7 @@ VALUES (?, ?, ?, ?, 'task_required_penalty', ?, ?, ?, ?)`)
             actorType: "system",
             actorId: null,
             title: "必做任务未达标扣分",
-            body: `必做任务「${task.title}」未达标，扣除 ${actualPenalty} 积分。`,
+            body: remediable ? `必做任务「${task.title}」未达标，冻结 ${actualPenalty} 积分；完成补救可挽回 ${remedyPoints} 积分。` : `必做任务「${task.title}」未达标，扣除 ${actualPenalty} 积分。`,
             eventType: "task_required_penalty",
             relatedType: "point_ledger",
             relatedId: ledgerId,
@@ -697,19 +706,28 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 }
 export async function activeRemedyCriticisms(env, childId, offset, at = nowIso()) {
     await settleExpiredCriticismFreezes(env, at);
-    const rows = (await env.DB.prepare(`SELECT pl.*, ft.title template_title
+    return activeRemedyItems(env, childId, offset, "criticism", at);
+}
+export async function activeRequiredPenaltyRemedies(env, childId, offset, at = nowIso()) {
+    await settleExpiredCriticismFreezes(env, at);
+    return activeRemedyItems(env, childId, offset, "task_required_penalty", at);
+}
+async function activeRemedyItems(env, childId, offset, sourceType, at) {
+    const rows = (await env.DB.prepare(`SELECT pl.*, COALESCE(ft.title, t.title) template_title
 FROM point_ledger pl
-LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
+LEFT JOIN feedback_templates ft ON pl.source_type='criticism' AND ft.id=pl.source_id
+LEFT JOIN tasks t ON pl.source_type='task_required_penalty' AND t.id=pl.source_id
 WHERE pl.child_id=?
-  AND pl.source_type='criticism'
+  AND pl.source_type=?
   AND pl.freeze_status='frozen'
   AND pl.revoked_at IS NULL
   AND pl.remedied_at IS NULL
   AND pl.remedy_deadline_at>?
-ORDER BY pl.remedy_deadline_at ASC`).bind(childId, at).all()).results;
+ORDER BY pl.remedy_deadline_at ASC`).bind(childId, sourceType, at).all()).results;
     const nowMs = Date.parse(at);
     return rows.map((row) => ({
         id: row.id,
+        sourceType,
         title: row.template_title || row.note || "批评补救",
         note: row.note || "",
         frozenAmount: Number(row.frozen_amount || 0),
@@ -1530,10 +1548,14 @@ export async function insertTaskFromConfig(env, parentId, item, categoryMap, chi
     const isRequired = period !== "once" && item.is_required ? 1 : 0;
     const requiredCount = isRequired ? Math.max(1, Number(item.required_count || item.requiredCount || 1)) : 0;
     const requiredPenaltyPoints = isRequired ? Math.max(0, Number(item.required_penalty_points || item.requiredPenaltyPoints || 0)) : 0;
+    const requiredRemedyEnabled = isRequired && requiredPenaltyPoints > 0 && Number(item.required_remedy_enabled ?? item.requiredRemedyEnabled ?? 0) === 1 ? 1 : 0;
+    const requiredRemedyCondition = requiredRemedyEnabled ? String(item.required_remedy_condition ?? item.requiredRemedyCondition ?? "").trim() : "";
+    const requiredRemedyPoints = requiredRemedyEnabled ? Math.min(requiredPenaltyPoints, Math.max(0, Number(item.required_remedy_points ?? item.requiredRemedyPoints ?? 0))) : 0;
+    const requiredRemedyDeadlineHours = requiredRemedyEnabled ? Math.max(1, Number(item.required_remedy_deadline_hours ?? item.requiredRemedyDeadlineHours ?? 24)) : 24;
     const gradingMode = item.grading_mode === "completion" || item.gradingMode === "completion" ? "completion" : "fixed";
     const completionStandards = gradingMode === "completion" ? normalizeCompletionStandards(item.completionStandards || item.completion_standards || JSON.parse(item.completion_standards_json || "[]")) : [];
-    await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), importedActive(item), isRequired, requiredCount, requiredPenaltyPoints, gradingMode, JSON.stringify(completionStandards))
+    await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), importedActive(item), isRequired, requiredCount, requiredPenaltyPoints, requiredRemedyEnabled, requiredRemedyCondition, requiredRemedyPoints, requiredRemedyDeadlineHours, gradingMode, JSON.stringify(completionStandards))
         .run();
     const requestedAssignees = item.assignee_names || item.assigneeNames || [];
     await replaceAssignees(env, parentId, "task_assignees", "task_id", taskId, requestedAssignees.map((name) => childMap.get(name)).filter(Boolean));
@@ -1713,10 +1735,14 @@ export async function applyConfigGroupSnapshot(env, parentId, snapshot) {
             const isRequired = period !== "once" && Number(item.is_required ?? item.isRequired ?? 0) ? 1 : 0;
             const requiredCount = isRequired ? Math.max(1, Number(item.required_count ?? item.requiredCount ?? 1)) : 0;
             const requiredPenaltyPoints = isRequired ? Math.max(0, Number(item.required_penalty_points ?? item.requiredPenaltyPoints ?? 0)) : 0;
+            const requiredRemedyEnabled = isRequired && requiredPenaltyPoints > 0 && Number(item.required_remedy_enabled ?? item.requiredRemedyEnabled ?? 0) === 1 ? 1 : 0;
+            const requiredRemedyCondition = requiredRemedyEnabled ? String(item.required_remedy_condition ?? item.requiredRemedyCondition ?? "").trim() : "";
+            const requiredRemedyPoints = requiredRemedyEnabled ? Math.min(requiredPenaltyPoints, Math.max(0, Number(item.required_remedy_points ?? item.requiredRemedyPoints ?? 0))) : 0;
+            const requiredRemedyDeadlineHours = requiredRemedyEnabled ? Math.max(1, Number(item.required_remedy_deadline_hours ?? item.requiredRemedyDeadlineHours ?? 24)) : 24;
             const gradingMode = item.grading_mode === "completion" || item.gradingMode === "completion" ? "completion" : "fixed";
             const completionStandards = gradingMode === "completion" ? normalizeCompletionStandards(item.completionStandards || item.completion_standards || JSON.parse(item.completion_standards_json || "[]")) : [];
-            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(taskId, parentId, categoryId, String(item.title || "未命名任务").trim() || "未命名任务", item.description || "", period, Number(item.points || 0), item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "✅", Math.max(1, Number(item.limit_count ?? item.limitCount ?? 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, gradingMode, JSON.stringify(completionStandards))
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, parentId, categoryId, String(item.title || "未命名任务").trim() || "未命名任务", item.description || "", period, Number(item.points || 0), item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "✅", Math.max(1, Number(item.limit_count ?? item.limitCount ?? 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, requiredRemedyEnabled, requiredRemedyCondition, requiredRemedyPoints, requiredRemedyDeadlineHours, gradingMode, JSON.stringify(completionStandards))
                 .run();
             const assigned = snapshotAssignees(item, children);
             stats.skippedAssignments += assigned.skipped;
@@ -2070,7 +2096,7 @@ export async function ledgerSource(env, row) {
     }
     if (row.source_type === "task_required_penalty") {
         const found = await env.DB.prepare("SELECT title FROM tasks WHERE id=?").bind(row.source_id).first();
-        const label = Number(row.amount) > 0 ? "必做扣分退回" : "必做扣分";
+        const label = Number(row.amount) > 0 ? "必做扣分退回" : row.freeze_status === "frozen" ? "必做扣分冻结" : row.freeze_status === "remedied" ? "必做补救" : row.freeze_status === "settled" ? "必做扣分结算" : "必做扣分";
         if (found?.title)
             return { sourceTypeLabel: label, sourceLabel: `任务：${found.title}` };
         return { sourceTypeLabel: label, sourceLabel: label };

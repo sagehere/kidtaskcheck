@@ -285,6 +285,45 @@ describe("Required Task Penalties", () => {
     expect(penaltyRow.sourceLabel).toBe("任务：TT");
   });
 
+  it("freezes a remediable required penalty until parent confirms it", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, created_at, updated_at) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 2, 5, 1, '整理书包', 3, 24, '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z')").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 10, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const { settleRequiredTaskPenalties } = await import("../server/api/utils.js");
+    await settleRequiredTaskPenalties(env);
+    const frozen = env.DB.prepare("SELECT id, amount, frozen_amount, freeze_status, remedy_condition, remedy_points FROM point_ledger WHERE child_id=? AND source_type='task_required_penalty'").bind(cid).first() as any;
+    expect(frozen).toMatchObject({ amount: 0, frozen_amount: 5, freeze_status: "frozen", remedy_condition: "整理书包", remedy_points: 3 });
+
+    const childActor = { type: "child", role: "child", id: cid, parent_id: pid, displayName: "TC" };
+    const childDashReq = makeRequest("GET", "/dashboard/child");
+    const childDashRes = await safe(handleChildRoutes, norm(new URL(childDashReq.url).pathname), "GET", childDashReq, env, childActor, new URL(childDashReq.url));
+    const childDash = await childDashRes!.json();
+    expect(childDash.data.balance).toBe(5);
+    expect(childDash.data.frozenPoints).toBe(5);
+    expect(childDash.data.requiredPenaltyRemedies).toHaveLength(1);
+
+    const parentActor = { type: "user", role: "parent", id: pid };
+    const remedyReq = makeRequest("PATCH", `/task-required-penalties/${frozen.id}/remedy`, {});
+    const remedyRes = await safe(handleSharedRoutes, norm(new URL(remedyReq.url).pathname), "PATCH", remedyReq, env, parentActor);
+    expect(remedyRes!.status).toBe(200);
+    const remedied = env.DB.prepare("SELECT amount, effective_amount, freeze_status FROM point_ledger WHERE id=?").bind(frozen.id).first() as any;
+    expect(remedied).toMatchObject({ amount: -2, effective_amount: -2, freeze_status: "remedied" });
+  });
+
+  it("settles an expired remediable required penalty", async () => {
+    tid = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, created_at, updated_at) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 1, 4, 1, '整理书包', 4, 24, '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z')").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
+    env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key) VALUES (?, ?, ?, 10, 'manual', 'seed', '2026-06-03')").bind(id(), cid, pid).run();
+    const { settleRequiredTaskPenalties, settleExpiredCriticismFreezes } = await import("../server/api/utils.js");
+    await settleRequiredTaskPenalties(env);
+    const frozen = env.DB.prepare("SELECT id FROM point_ledger WHERE child_id=? AND source_type='task_required_penalty'").bind(cid).first() as any;
+    env.DB.prepare("UPDATE point_ledger SET remedy_deadline_at='2000-01-01T00:00:00.000Z' WHERE id=?").bind(frozen.id).run();
+    await settleExpiredCriticismFreezes(env);
+    expect(env.DB.prepare("SELECT amount, freeze_status FROM point_ledger WHERE id=?").bind(frozen.id).first()).toMatchObject({ amount: -4, freeze_status: "settled" });
+  });
+
   it("does not deduct previous period for newly created required tasks", async () => {
     tid = id();
     env.DB.prepare("INSERT INTO tasks (id, parent_id, title, points, period, limit_count, point_type, enabled_weekdays, category_id, is_required, required_count, required_penalty_points, created_at, updated_at) VALUES (?, ?, 'TT', 10, 'daily', 10, 'earn', '[1,2,3,4,5,6,0]', 'cat-1', 1, 1, 5, '2026-06-11T00:00:00.000Z', '2026-06-11T00:00:00.000Z')").bind(tid, pid).run();

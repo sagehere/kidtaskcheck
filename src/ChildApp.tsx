@@ -177,6 +177,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const pinnedReward = rewardRows.find((reward: any) => reward.isPinned);
   const pinnedCount = Number(Boolean(pinnedTask)) + Number(Boolean(pinnedReward));
   const remedyCriticisms = dash.remedyCriticisms || [];
+  const remedyItems = [...remedyCriticisms, ...(dash.requiredPenaltyRemedies || [])];
   const activeTasks = taskRows.filter((task: any) => task.is_active !== 0);
   const sortedTasks = [...taskRows].sort((a: any, b: any) => (b.is_required || 0) - (a.is_required || 0));
   const taskById = new Map(taskRows.map((task: any) => [task.id, task]));
@@ -443,8 +444,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     }
   }, [schedule.slots, activeScheduleSlotId]);
   useEffect(() => {
-    if (remedyCriticisms.some((item: any) => item.remedyDeadlineAt && Date.parse(item.remedyDeadlineAt) - Date.now() <= 0)) void loadDashboard();
-  }, [tick, remedyCriticisms.map((item: any) => `${item.id}:${item.remedyDeadlineAt}`).join("|")]);
+    if (remedyItems.some((item: any) => item.remedyDeadlineAt && Date.parse(item.remedyDeadlineAt) - Date.now() <= 0)) void loadDashboard();
+  }, [tick, remedyItems.map((item: any) => `${item.id}:${item.remedyDeadlineAt}`).join("|")]);
   useEffect(() => {
     if (ledgerOpen) void api<LedgerResponse>("/points/ledger").then((data) => setLedger(data.items)).catch(() => setLedger([]));
   }, [dash, ledgerOpen]);
@@ -541,16 +542,16 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           )}
         </section>
       )}
-      {remedyCriticisms.length > 0 && (
-        <section className="panel remedy-panel" aria-label="待补救批评">
-          <div className="panel-title"><AlertTriangle /><h2>待补救批评</h2></div>
+      {remedyItems.length > 0 && (
+        <section className="panel remedy-panel" aria-label="待补救">
+          <div className="panel-title"><AlertTriangle /><h2>待补救</h2></div>
           <div className="list">
-            {remedyCriticisms.map((item: any) => {
+            {remedyItems.map((item: any) => {
               const deadlineMs = item.remedyDeadlineAt ? Date.parse(item.remedyDeadlineAt) - Date.now() : Number(item.remainingMs || 0);
               return (
                 <article className="row remedy-card" key={item.id}>
                   <div>
-                    <strong>{item.title}</strong>
+                    <strong>{item.sourceType === "task_required_penalty" ? "必做扣分 · " : ""}{item.title}</strong>
                     <span>{item.remedyCondition || "请按家长要求完成补救"} · 预扣冻结 {item.frozenAmount || 0} 积分 · 可挽回 {item.remedyPoints || 0} 积分</span>
                     <small>截止：{item.localRemedyDeadlineAt || formatTime(item.remedyDeadlineAt)}</small>
                   </div>

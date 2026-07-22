@@ -1,6 +1,50 @@
 import { periodKey } from "../../../src/lib/domain.js";
 import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup, clearCurrentConfig, ensureRequiredTaskSchema } from "../utils.js";
-import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes, activeRemedyCriticisms } from "../utils.js";
+import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies } from "../utils.js";
+
+async function confirmFrozenRemedy(env, actor, ledgerId, sourceType) {
+    await ensureCriticismRemedySchema(env);
+    await settleExpiredCriticismFreezes(env);
+    const audit = actorAudit(actor);
+    const row = await env.DB.prepare(`SELECT pl.*, c.id child_id
+FROM point_ledger pl
+JOIN children c ON c.id=pl.child_id
+WHERE pl.id=? AND pl.parent_id=? AND c.parent_id=? AND pl.source_type=?`)
+        .bind(ledgerId, actor.id, actor.id, sourceType)
+        .first();
+    if (!row)
+        return fail("NOT_FOUND", sourceType === "criticism" ? "批评记录不存在" : "必做扣分记录不存在", 404);
+    if (row.revoked_at)
+        return fail("ALREADY_RECALLED", "该记录已经撤回", 409);
+    if (row.freeze_status !== "frozen")
+        return fail("NOT_REMEDIABLE", "该记录不在可补救状态", 409);
+    if (row.remedy_deadline_at && row.remedy_deadline_at <= nowIso())
+        return fail("REMEDY_EXPIRED", "补救时限已过", 409);
+    const now = nowIso();
+    const frozen = Math.abs(Number(row.frozen_amount || 0));
+    const recovered = Math.max(0, Math.min(frozen, Number(row.remedy_points || 0)));
+    const finalAmount = -Math.max(0, frozen - recovered);
+    await env.DB.prepare(`UPDATE point_ledger
+SET amount=?, effective_amount=?, freeze_status='remedied', remedied_at=?, settled_at=?
+WHERE id=? AND freeze_status='frozen'`)
+        .bind(finalAmount, finalAmount, now, now, row.id)
+        .run();
+    const title = sourceType === "criticism" ? "批评补救已确认" : "必做补救已确认";
+    await notify(env, {
+        recipientType: "child",
+        recipientId: row.child_id,
+        actorType: audit.type,
+        actorId: audit.id || actor.id,
+        actorLabel: audit.label,
+        title,
+        body: `家长已确认补救完成，挽回 ${recovered} 积分。`,
+        eventType: sourceType,
+        relatedType: "point_ledger",
+        relatedId: row.id
+    });
+    await recalcAchievements(env, actor.id, row.child_id);
+    return ok(true);
+}
 
 export async function handleSharedRoutes(path, method, request, env, actor, url) {
     if (path === "/notifications" && method === "GET") {
@@ -65,6 +109,10 @@ LIMIT 50`)
                 is_required: item.is_required,
                 required_count: item.required_count,
                 required_penalty_points: item.required_penalty_points,
+                required_remedy_enabled: item.required_remedy_enabled,
+                required_remedy_condition: item.required_remedy_condition,
+                required_remedy_points: item.required_remedy_points,
+                required_remedy_deadline_hours: item.required_remedy_deadline_hours,
                 assignee_names: assigneeNames(item),
                 icon_type: item.icon_type,
                 icon_value: item.icon_value
@@ -205,46 +253,12 @@ WHERE pl.id=? AND pl.parent_id=? AND c.parent_id=? AND pl.source_type IN ('prais
     const feedbackRemedy = path.match(/^\/feedback-events\/([^/]+)\/remedy$/);
     if (feedbackRemedy && method === "PATCH") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
-        await ensureCriticismRemedySchema(env);
-        await settleExpiredCriticismFreezes(env);
-        const audit = actorAudit(a);
-        const row = await env.DB.prepare(`SELECT pl.*, c.id child_id
-FROM point_ledger pl
-JOIN children c ON c.id=pl.child_id
-WHERE pl.id=? AND pl.parent_id=? AND c.parent_id=? AND pl.source_type='criticism'`)
-            .bind(feedbackRemedy[1], a.id, a.id)
-            .first();
-        if (!row)
-            return fail("NOT_FOUND", "批评记录不存在", 404);
-        if (row.revoked_at)
-            return fail("ALREADY_RECALLED", "该记录已经撤回", 409);
-        if (row.freeze_status !== "frozen")
-            return fail("NOT_REMEDIABLE", "该批评不在可补救状态", 409);
-        if (row.remedy_deadline_at && row.remedy_deadline_at <= nowIso())
-            return fail("REMEDY_EXPIRED", "补救时限已过", 409);
-        const now = nowIso();
-        const frozen = Math.abs(Number(row.frozen_amount || 0));
-        const recovered = Math.max(0, Math.min(frozen, Number(row.remedy_points || 0)));
-        const finalAmount = -Math.max(0, frozen - recovered);
-        await env.DB.prepare(`UPDATE point_ledger
-SET amount=?, effective_amount=?, freeze_status='remedied', remedied_at=?, settled_at=?
-WHERE id=? AND freeze_status='frozen'`)
-            .bind(finalAmount, finalAmount, now, now, row.id)
-            .run();
-        await notify(env, {
-            recipientType: "child",
-            recipientId: row.child_id,
-            actorType: audit.type,
-            actorId: audit.id || a.id,
-            actorLabel: audit.label,
-            title: "批评补救已确认",
-            body: `家长已确认补救完成，挽回 ${recovered} 积分。`,
-            eventType: "criticism",
-            relatedType: "point_ledger",
-            relatedId: row.id
-        });
-        await recalcAchievements(env, a.id, row.child_id);
-        return ok(true);
+        return confirmFrozenRemedy(env, a, feedbackRemedy[1], "criticism");
+    }
+    const requiredPenaltyRemedy = path.match(/^\/task-required-penalties\/([^/]+)\/remedy$/);
+    if (requiredPenaltyRemedy && method === "PATCH") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        return confirmFrozenRemedy(env, a, requiredPenaltyRemedy[1], "task_required_penalty");
     }
     const redemptionRefundWithRetention = path.match(/^\/reward-redemptions\/([^/]+)\/refund$/);
     if (redemptionRefundWithRetention && method === "PATCH") {
@@ -320,10 +334,15 @@ WHERE id=? AND freeze_status='frozen'`)
         ]);
         const offset = await timezoneOffsetMinutes(env);
         const allRemedy = [];
+        const allRequiredPenaltyRemedies = [];
         for (const child of children) {
             const items = await activeRemedyCriticisms(env, child.id, offset);
             for (const item of items) {
                 allRemedy.push({ ...item, childId: child.id, childName: child.display_name });
+            }
+            const requiredItems = await activeRequiredPenaltyRemedies(env, child.id, offset);
+            for (const item of requiredItems) {
+                allRequiredPenaltyRemedies.push({ ...item, childId: child.id, childName: child.display_name });
             }
         }
         await ensureRequiredTaskSchema(env);
@@ -340,6 +359,7 @@ WHERE t.parent_id=? AND t.is_required=1 AND t.is_active=1 AND t.deleted_at IS NU
         return ok({
             children: childCards,
             remedyCriticisms: allRemedy,
+            requiredPenaltyRemedies: allRequiredPenaltyRemedies,
             requiredPenaltyExemptions,
             pendingSubmissions: (await env.DB.prepare("SELECT s.*, t.title, t.points, t.grading_mode, t.completion_standards_json, c.display_name child_name FROM task_submissions s JOIN tasks t ON t.id=s.task_id JOIN children c ON c.id=s.child_id WHERE s.parent_id=? AND s.status='pending' ORDER BY s.submitted_at").bind(a.id).all()).results,
             pendingRedemptions: (await env.DB.prepare("SELECT rr.*, r.title, r.redeem_weekdays, c.display_name child_name FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id JOIN children c ON c.id=rr.child_id WHERE rr.parent_id=? AND rr.status='pending' ORDER BY rr.requested_at").bind(a.id).all()).results

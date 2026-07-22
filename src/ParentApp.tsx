@@ -608,9 +608,9 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     setFeedbackRows([]);
   }
 
-  async function confirmRemedy(id: string) {
+  async function confirmRemedy(id: string, sourceType = "criticism") {
     await run(
-      () => api(`/feedback-events/${encodeURIComponent(id)}/remedy`, { method: "PATCH", body: JSON.stringify({}) }),
+      () => api(sourceType === "task_required_penalty" ? `/task-required-penalties/${encodeURIComponent(id)}/remedy` : `/feedback-events/${encodeURIComponent(id)}/remedy`, { method: "PATCH", body: JSON.stringify({}) }),
       "补救已确认，冻结积分已结算"
     );
   }
@@ -684,7 +684,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             <RedemptionPanel items={dashboard.pendingRedemptions || []} onFinish={finishRedemption} />
           </div>
           <div className="grid two">
-            <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} remedyItems={dashboard.remedyCriticisms || []} onRemedy={(id) => void confirmRemedy(id)} />
+            <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} remedyItems={[...(dashboard.remedyCriticisms || []), ...(dashboard.requiredPenaltyRemedies || [])]} onRemedy={(id, sourceType) => void confirmRemedy(id, sourceType)} />
             <RequiredPenaltyExemptionPanel children={children} tasks={tasks} exemptions={dashboard.requiredPenaltyExemptions || []} onSubmit={exemptRequiredPenalty} onRevoke={revokeRequiredPenaltyExemption} />
           </div>
         </>
@@ -1152,7 +1152,7 @@ export function RedemptionPanel({ items, onFinish }: { items: any[]; onFinish: (
   );
 }
 
-export function PraiseCriticismPanel({ children, templates, onSubmit, remedyItems, onRemedy }: { children: Child[]; templates: FeedbackTemplate[]; onSubmit: (data: { childId: string; templateId: string }) => void; remedyItems?: RemedyCriticismItem[]; onRemedy?: (id: string) => void }) {
+export function PraiseCriticismPanel({ children, templates, onSubmit, remedyItems, onRemedy }: { children: Child[]; templates: FeedbackTemplate[]; onSubmit: (data: { childId: string; templateId: string }) => void; remedyItems?: RemedyCriticismItem[]; onRemedy?: (id: string, sourceType?: string) => void }) {
   const [data, setData] = useState({ childId: "", templateId: "" });
   const [kind, setKind] = useState<"praise" | "criticism">("praise");
   const childId = data.childId || children[0]?.id || "";
@@ -1205,11 +1205,11 @@ export function PraiseCriticismPanel({ children, templates, onSubmit, remedyItem
           {remedyItems.map((item) => (
             <article className="row remedy-item" key={item.id}>
               <div>
-                <strong>{item.childName} · {item.title}</strong>
+                <strong>{item.childName} · {item.sourceType === "task_required_penalty" ? "必做扣分 · " : ""}{item.title}</strong>
                 <span>{item.remedyCondition || "请按家长要求完成补救"} · 预扣冻结 {item.frozenAmount} 积分 · 可挽回 {item.remedyPoints} 积分</span>
                 <small>截止：{item.localRemedyDeadlineAt}</small>
               </div>
-              <button type="button" className="secondary" onClick={() => onRemedy(item.id)}>
+              <button type="button" className="secondary" onClick={() => onRemedy(item.id, item.sourceType)}>
                 <Check size={16} />确认补救
               </button>
             </article>
@@ -1533,7 +1533,7 @@ function CompletionStandardsEditor({ value, onChange }: { value: CompletionStand
   );
 }
 export function CreateTask({ children, categories, onCreate }: { children: Child[]; categories: Category[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, enabledWeekdays: [...DEFAULT_WEEKDAYS], iconValue: "✅", isActive: true, childIds: [] as string[], isRequired: false, requiredCount: 1, requiredPenaltyPoints: 0, gradingMode: "fixed", completionStandards: [{ label: "完成", points: 5 }] });
+  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, enabledWeekdays: [...DEFAULT_WEEKDAYS], iconValue: "✅", isActive: true, childIds: [] as string[], isRequired: false, requiredCount: 1, requiredPenaltyPoints: 0, requiredRemedyEnabled: false, requiredRemedyCondition: "", requiredRemedyPoints: 0, requiredRemedyDeadlineHours: 24, gradingMode: "fixed", completionStandards: [{ label: "完成", points: 5 }] });
   const categoryId = data.categoryId || categories[0]?.id || "";
   const showRequired = data.period !== "once";
   return (
@@ -1564,10 +1564,20 @@ export function CreateTask({ children, categories, onCreate }: { children: Child
         <>
           <Toggle label="必做任务" checked={data.isRequired} onChange={(isRequired) => setData({ ...data, isRequired })} />
           {data.isRequired && (
-            <div className="grid two compact-fields">
-              <Field label="必做次数"><input type="number" min="1" value={data.requiredCount} onChange={(e) => setData({ ...data, requiredCount: Number(e.target.value) })} /></Field>
-              <Field label="未达标扣分"><input type="number" min="0" value={data.requiredPenaltyPoints} onChange={(e) => setData({ ...data, requiredPenaltyPoints: Number(e.target.value) })} /></Field>
-            </div>
+            <>
+              <div className="grid two compact-fields">
+                <Field label="必做次数"><input type="number" min="1" value={data.requiredCount} onChange={(e) => setData({ ...data, requiredCount: Number(e.target.value) })} /></Field>
+                <Field label="未达标扣分"><input type="number" min="0" value={data.requiredPenaltyPoints} onChange={(e) => setData({ ...data, requiredPenaltyPoints: Number(e.target.value) })} /></Field>
+              </div>
+              <Toggle label="扣分后可补救" checked={data.requiredRemedyEnabled} onChange={(requiredRemedyEnabled) => setData({ ...data, requiredRemedyEnabled })} />
+              {data.requiredRemedyEnabled && <>
+                <Field label="补救条件"><textarea value={data.requiredRemedyCondition} onChange={(e) => setData({ ...data, requiredRemedyCondition: e.target.value })} /></Field>
+                <div className="grid two compact-fields">
+                  <Field label="挽回积分"><input type="number" min="1" max={data.requiredPenaltyPoints} value={data.requiredRemedyPoints} onChange={(e) => setData({ ...data, requiredRemedyPoints: Number(e.target.value) })} /></Field>
+                  <Field label="补救时限（小时）"><input type="number" min="1" value={data.requiredRemedyDeadlineHours} onChange={(e) => setData({ ...data, requiredRemedyDeadlineHours: Number(e.target.value) })} /></Field>
+                </div>
+              </>}
+            </>
           )}
         </>
       )}
@@ -2026,7 +2036,7 @@ export function Overview({ title, items, kind, children = [], categories = [], t
                 <strong>{kind === "reward" ? rewardDisplayTitle(item) : item.title}</strong>
                 {item.description && <span>{item.description}</span>}
                 <small>
-                  {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · ${item.grading_mode === "completion" ? "完成程度给分" : `+${item.points}`} · ${item.limit_count || 1}次 · ${weekdayLabel(item.enabled_weekdays || item.enabledWeekdays)}${item.is_required === 1 ? ` · 必做 ${item.required_count || 1} 次 · 未达标扣 ${item.required_penalty_points || 0} 分` : ""}`}
+                  {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · ${item.grading_mode === "completion" ? "完成程度给分" : `+${item.points}`} · ${item.limit_count || 1}次 · ${weekdayLabel(item.enabled_weekdays || item.enabledWeekdays)}${item.is_required === 1 ? ` · 必做 ${item.required_count || 1} 次 · 未达标扣 ${item.required_penalty_points || 0} 分${item.required_remedy_enabled === 1 ? ` · 可补救 ${item.required_remedy_points || 0} 分 / ${item.required_remedy_deadline_hours || 24} 小时` : ""}` : ""}`}
                   {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`} · 核销${weekdayLabel(item.redeem_weekdays || item.redeemWeekdays)}${item.requiredAchievementTitle ? ` · 解锁${item.requiredAchievementTitle}` : ""}`}
                   {kind === "achievement" && formatAchievementRule(item, tasks, categories)}
                 </small>
@@ -2075,6 +2085,10 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
     isRequired: item.is_required === 1,
     requiredCount: item.required_count || 1,
     requiredPenaltyPoints: item.required_penalty_points || 0,
+    requiredRemedyEnabled: item.required_remedy_enabled === 1,
+    requiredRemedyCondition: item.required_remedy_condition || "",
+    requiredRemedyPoints: item.required_remedy_points || 0,
+    requiredRemedyDeadlineHours: item.required_remedy_deadline_hours || 24,
     gradingMode: item.grading_mode || "fixed",
     completionStandards: parseCompletionStandards(item).length ? parseCompletionStandards(item) : [{ label: "完成", points: item.points || 0 }]
   }));
@@ -2096,10 +2110,20 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
             <>
               <Toggle label="必做任务" checked={data.isRequired} onChange={(isRequired) => setData({ ...data, isRequired })} />
               {data.isRequired && (
-                <div className="grid two compact-fields">
-                  <Field label="必做次数"><input type="number" min="1" value={data.requiredCount} onChange={(e) => setData({ ...data, requiredCount: Number(e.target.value) })} /></Field>
-                  <Field label="未达标扣分"><input type="number" min="0" value={data.requiredPenaltyPoints} onChange={(e) => setData({ ...data, requiredPenaltyPoints: Number(e.target.value) })} /></Field>
-                </div>
+                <>
+                  <div className="grid two compact-fields">
+                    <Field label="必做次数"><input type="number" min="1" value={data.requiredCount} onChange={(e) => setData({ ...data, requiredCount: Number(e.target.value) })} /></Field>
+                    <Field label="未达标扣分"><input type="number" min="0" value={data.requiredPenaltyPoints} onChange={(e) => setData({ ...data, requiredPenaltyPoints: Number(e.target.value) })} /></Field>
+                  </div>
+                  <Toggle label="扣分后可补救" checked={data.requiredRemedyEnabled} onChange={(requiredRemedyEnabled) => setData({ ...data, requiredRemedyEnabled })} />
+                  {data.requiredRemedyEnabled && <>
+                    <Field label="补救条件"><textarea value={data.requiredRemedyCondition} onChange={(e) => setData({ ...data, requiredRemedyCondition: e.target.value })} /></Field>
+                    <div className="grid two compact-fields">
+                      <Field label="挽回积分"><input type="number" min="1" max={data.requiredPenaltyPoints} value={data.requiredRemedyPoints} onChange={(e) => setData({ ...data, requiredRemedyPoints: Number(e.target.value) })} /></Field>
+                      <Field label="补救时限（小时）"><input type="number" min="1" value={data.requiredRemedyDeadlineHours} onChange={(e) => setData({ ...data, requiredRemedyDeadlineHours: Number(e.target.value) })} /></Field>
+                    </div>
+                  </>}
+                </>
               )}
             </>
           )}

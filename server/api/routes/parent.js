@@ -33,6 +33,17 @@ function taskGrading(input) {
     if (gradingMode === "completion" && !standards.length) return { error: "完成程度给分至少需要一个标准" };
     return { gradingMode, standards };
 }
+function taskRequiredRemedy(input, isRequired, requiredPenaltyPoints) {
+    const enabled = isRequired && (input.requiredRemedyEnabled === true || input.required_remedy_enabled === 1 || input.required_remedy_enabled === "1");
+    if (!enabled) return { enabled: 0, condition: "", points: 0, deadlineHours: 24 };
+    const condition = String(input.requiredRemedyCondition ?? input.required_remedy_condition ?? "").trim();
+    const points = Number(input.requiredRemedyPoints ?? input.required_remedy_points);
+    const deadlineHours = Number(input.requiredRemedyDeadlineHours ?? input.required_remedy_deadline_hours);
+    if (!condition) return { error: "请填写必做扣分补救条件" };
+    if (!Number.isInteger(points) || points < 1 || points > requiredPenaltyPoints) return { error: "可挽回积分需在 1 到未达标扣分之间" };
+    if (!Number.isInteger(deadlineHours) || deadlineHours < 1) return { error: "补救时限至少为 1 小时" };
+    return { enabled: 1, condition, points, deadlineHours };
+}
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/profile" && method === "PATCH") {
         const a = requireRole(actor, ["parent"]);
@@ -897,10 +908,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             const isRequired = period !== "once" && input.isRequired ? 1 : 0;
             const requiredCount = isRequired ? Math.max(1, Number(input.requiredCount || 1)) : 0;
             const requiredPenaltyPoints = isRequired ? Math.max(0, Number(input.requiredPenaltyPoints || 0)) : 0;
+            const requiredRemedy = taskRequiredRemedy(input, isRequired, requiredPenaltyPoints);
+            if (requiredRemedy.error) return fail("BAD_REQUEST", requiredRemedy.error, 400);
             const grading = taskGrading(input);
             if (grading.error) return fail("BAD_REQUEST", grading.error, 400);
-            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(taskId, a.id, input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, grading.gradingMode, JSON.stringify(grading.standards))
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, a.id, input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, requiredRemedy.enabled, requiredRemedy.condition, requiredRemedy.points, requiredRemedy.deadlineHours, grading.gradingMode, JSON.stringify(grading.standards))
                 .run();
             await replaceAssignees(env, a.id, "task_assignees", "task_id", taskId, input.childIds || []);
             return ok(true);
@@ -961,10 +974,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         const isRequired = period !== "once" && input.isRequired ? 1 : 0;
         const requiredCount = isRequired ? Math.max(1, Number(input.requiredCount || 1)) : 0;
         const requiredPenaltyPoints = isRequired ? Math.max(0, Number(input.requiredPenaltyPoints || 0)) : 0;
+        const requiredRemedy = taskRequiredRemedy(input, isRequired, requiredPenaltyPoints);
+        if (requiredRemedy.error) return fail("BAD_REQUEST", requiredRemedy.error, 400);
         const grading = taskGrading(input);
         if (grading.error) return fail("BAD_REQUEST", grading.error, 400);
-        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, enabled_weekdays=?, is_active=?, is_required=?, required_count=?, required_penalty_points=?, grading_mode=?, completion_standards_json=?, updated_at=? WHERE id=?")
-            .bind(input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, grading.gradingMode, JSON.stringify(grading.standards), nowIso(), taskPatch[1])
+        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, enabled_weekdays=?, is_active=?, is_required=?, required_count=?, required_penalty_points=?, required_remedy_enabled=?, required_remedy_condition=?, required_remedy_points=?, required_remedy_deadline_hours=?, grading_mode=?, completion_standards_json=?, updated_at=? WHERE id=?")
+            .bind(input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, requiredRemedy.enabled, requiredRemedy.condition, requiredRemedy.points, requiredRemedy.deadlineHours, grading.gradingMode, JSON.stringify(grading.standards), nowIso(), taskPatch[1])
             .run();
         await replaceAssignees(env, a.id, "task_assignees", "task_id", taskPatch[1], input.childIds || []);
         return ok(true);

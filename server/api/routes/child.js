@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -246,6 +246,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             tasks: taskRows,
             rewards,
             remedyCriticisms: await activeRemedyCriticisms(env, a.id, offset),
+            requiredPenaltyRemedies: await activeRequiredPenaltyRemedies(env, a.id, offset),
             aiGreeting: "",
             aiRefreshPending: false,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? AND ca.hidden_from_child_at IS NULL ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results

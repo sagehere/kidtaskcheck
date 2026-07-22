@@ -75,6 +75,7 @@ export type MaintenanceStats = {
 
 export type RemedyCriticismItem = {
   id: string;
+  sourceType?: "criticism" | "task_required_penalty";
   childId: string;
   childName: string;
   title: string;

@@ -1,3 +1,12 @@
+# 2026-07-22
+
+- 类型：功能新增
+- 任务：必做任务未达标扣分支持按条件补救。
+- 修改文件：`server/api/utils.js`、`server/api/routes/parent.js`、`server/api/routes/shared.js`、`server/api/routes/child.js`、`src/ParentApp.tsx`、`src/ChildApp.tsx`、`src/types/api.ts`。
+- 数据库：新增 `migrations/0030_required_task_penalty_remedies.sql`，为任务补齐补救规则字段。
+- 行为：周期结算可将扣分冻结；家长可在截止前确认补救并挽回配置积分；超时后结算为正式扣分。
+- 验证：`rtk npm run build`；`rtk npm test -- --run tests/ledger.test.ts tests/migration.test.ts tests/api.test.ts`。
+
 # 2026-07-19
 
 - 类型：缺陷修复

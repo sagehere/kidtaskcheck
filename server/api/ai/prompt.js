@@ -2,15 +2,15 @@ import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
 import { nowIso, DAY_MS } from "../utils.js";
 
 export const DEFAULT_WEEKLY_REPORT_PROMPT = `你是一位育儿教育专家。请根据以下孩子本周的表现数据，生成一份周报评语。
-要求：1. 先简要总结本周整体表现 2. 指出本周最值得表扬的亮点
-3. 温和地指出需要改进的地方 4. 给出针对性的具体建议
-5. 语言温暖鼓励、有洞察力 6. 长度500-800字 7. 用中文输出`;
+要求：1. 按“本周总结、成长亮点、需要关注、下周行动”四部分输出
+2. 只依据提供的数据，不把提交次数称为目标完成率 3. 对比上周变化
+4. 建议必须具体可执行 5. 语言温暖鼓励 6. 长度350-600字 7. 用中文输出`;
 
 export const DEFAULT_MONTHLY_REPORT_PROMPT = `你是一位有经验的儿童成长顾问。请根据以下孩子本月的表现数据，生成一份月报评语。
-要求：1. 分析本月整体表现趋势 2. 与上一周期对比进步和不足
-3. 多维度评价（任务完成、奖励兑换、品德表现等）4. 指出最值得表扬的亮点
-5. 温和地指出需要改进的地方 6. 给出下个月的成长建议
-7. 语言温暖鼓励、有洞察力 8. 长度800-1200字 9. 用中文输出`;
+要求：1. 按“本月总结、趋势变化、成长亮点、需要关注、下月行动”五部分输出
+2. 与上月对比，但只依据提供的数据 3. 不把提交次数称为目标完成率
+4. 从任务、积分、奖励、品德和成就多维评价 5. 建议必须具体可执行
+6. 语言温暖鼓励、有洞察力 7. 长度500-800字 8. 用中文输出`;
 
 export async function previousWeekReportSummary(env, childId, offset) {
     const now = nowIso();
@@ -158,27 +158,31 @@ export function buildReportAiPrompt(child, reportData, config, periodType, offse
         .replace("{child_name}", child.display_name)
         .replace("{gender}", child.gender === "male" ? "男" : child.gender === "female" ? "女" : "孩子")
         .replace("{age}", child.birth_date ? String(Math.floor((Date.now() - new Date(child.birth_date).getTime()) / 31557600000)) : "未知");
-    const approved = reportData.tasks.filter((t) => t.status === "approved").length;
-    const rejected = reportData.tasks.filter((t) => t.status === "rejected").length;
-    const total = reportData.tasks.length;
-    const completionRate = total > 0 ? Math.round(approved / total * 100) : 0;
-    const praiseCount = reportData.feedback.filter((f) => f.source_type === "praise").length;
-    const criticismCount = reportData.feedback.filter((f) => f.source_type === "criticism").length;
+    const summary = reportData.summary || {};
+    const previous = reportData.previousSummary || {};
     const achievementTitles = reportData.achievements.map((a) => a.title);
     const periodLabel = periodType === "monthly" ? "本月" : "本周";
     const parts = [`孩子姓名：${child.display_name}`, `${periodLabel}${periodType === "monthly" ? "月" : "周"}报期间：${reportData?.range?.label || ""}`];
-    parts.push(`任务完成情况：共 ${total} 项任务，通过 ${approved} 项（${completionRate}%），${rejected > 0 ? `未通过 ${rejected} 项` : "全部通过"}。`);
+    parts.push(`任务审核：通过 ${summary.approved || 0} 项，驳回 ${summary.rejected || 0} 项，待审核 ${summary.pending || 0} 项；已审核通过率 ${summary.approvalRate === null || summary.approvalRate === undefined ? "暂无已审核记录" : `${summary.approvalRate}%`}。`);
+    parts.push(`上期对比：通过 ${previous.approved || 0} 项（变化 ${(summary.approved || 0) - (previous.approved || 0) >= 0 ? "+" : ""}${(summary.approved || 0) - (previous.approved || 0)}），已审核通过率 ${previous.approvalRate === null || previous.approvalRate === undefined ? "暂无" : `${previous.approvalRate}%`}，净积分 ${previous.netPoints > 0 ? "+" : ""}${previous.netPoints || 0}。`);
     if (reportData.categoryCounts?.length)
         parts.push(`各分类完成：${reportData.categoryCounts.map(([cat, count]) => `${cat} ${count}项`).join("，")}。`);
-    if (praiseCount || criticismCount)
-        parts.push(`品德评价：${praiseCount} 次表扬，${criticismCount} 次批评。`);
+    parts.push(`品德评价：${summary.praiseCount || 0} 次表扬，${summary.criticismCount || 0} 次批评；上期为 ${previous.praiseCount || 0} 次表扬、${previous.criticismCount || 0} 次批评。`);
+    const rejectedDetails = reportData.tasks.filter((item) => item.status === "rejected").slice(0, 5)
+        .map((item) => `${item.title}${item.review_note ? `（${item.review_note}）` : ""}`);
+    if (rejectedDetails.length) parts.push(`需要关注的任务：${rejectedDetails.join("、")}。`);
+    const requiredEvents = (reportData.requiredEvents || []).slice(0, 5)
+        .map((item) => `${item.title}实际${item.actual_count}/${item.required_count}${Number(item.penalty_points) > 0 ? `，扣分${item.penalty_points}` : "，已记录未扣分"}`);
+    if (requiredEvents.length) parts.push(`必做任务异常：${requiredEvents.join("；")}。`);
     if (achievementTitles.length)
         parts.push(`解锁成就：${achievementTitles.join("、")}。`);
-    parts.push(`积分变化：${periodLabel}净获得 ${reportData.netPoints > 0 ? "+" : ""}${reportData.netPoints} 分，当前余额 ${reportData.currentBalance} 分。`);
+    parts.push(`积分变化：${periodLabel}净获得 ${summary.netPoints > 0 ? "+" : ""}${summary.netPoints || 0} 分，当前余额 ${reportData.currentBalance} 分。`);
+    if (reportData.pointBreakdown?.length)
+        parts.push(`积分来源：${reportData.pointBreakdown.map((item) => `${item.label}${item.points >= 0 ? "+" : ""}${item.points}分`).join("，")}。`);
     if (reportData.rewards?.length)
         parts.push(`兑换奖励：${reportData.rewards.map((r) => r.title).join("、")}。`);
     const activeTasks = (reportData.assignments?.tasks || []).filter((t) => t.is_active).length;
     const activeRewards = (reportData.assignments?.rewards || []).filter((r) => r.is_active).length;
-    parts.push(`当前设置有 ${activeTasks} 个活跃任务、${activeRewards} 个活跃奖励。`);
+    parts.push(`当前设置有 ${activeTasks} 个活跃任务、${activeRewards} 个活跃奖励。请最后给出下一周期可执行的1至3项行动。`);
     return `${userPrompt}\n\n孩子${periodLabel}表现数据：\n${parts.join("\n")}`;
 }

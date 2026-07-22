@@ -17,7 +17,7 @@ export {
 
 export {
     generateParentAiGreeting, generateReportCommentary, generateCartoonReportImage, generatePrintChecklistImage, generateScheduleImage,
-    previousCompletedReportRange, collectReportData, buildCartoonReportPrompt,
+    previousCompletedReportRange, collectReportData, collectReportComparison, buildCartoonReportPrompt,
 } from "./orchestrator.js";
 
 export {

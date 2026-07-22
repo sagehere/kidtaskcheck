@@ -1,6 +1,8 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
 import { nowIso, ensureColumn, oncePerDb } from "../utils.js";
 
+const REPORT_CONTENT_VERSION = "report-content-v2";
+
 export function aiConfigHash(config) {
     const hash = ["sha256", config.baseUrl || "", config.model || "", config.prompt || ""].join("|");
     const chars = [];
@@ -15,7 +17,7 @@ export function aiConfigHash(config) {
 
 export function aiReportConfigHash(config, periodType) {
     const promptKey = periodType === "monthly" ? "monthlyPrompt" : "reportPrompt";
-    const hash = ["sha256", config.baseUrl || "", config.model || "", config[promptKey] || ""].join("|");
+    const hash = ["sha256", REPORT_CONTENT_VERSION, config.baseUrl || "", config.model || "", config[promptKey] || ""].join("|");
     const chars = [];
     let h = 0;
     for (let i = 0; i < hash.length; i++) {

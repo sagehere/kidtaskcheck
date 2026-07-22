@@ -1,5 +1,5 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
-import { nowIso, balance, timezoneOffsetMinutes, ensureChildScheduleSchema, schedulePlanHtmlToText } from "../utils.js";
+import { nowIso, balance, timezoneOffsetMinutes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, withLedgerSources } from "../utils.js";
 import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries } from "./cache.js";
 import { buildDailyGreetingPrompt, buildReportAiPrompt, previousDayReportSummary } from "./prompt.js";
 import { callParentAiService, callParentAiServiceForReport, callParentImageService } from "./providers.js";
@@ -17,28 +17,65 @@ export function previousCompletedReportRange(periodType, input, offset) {
     return reportWindowRange(periodType, previousAnchor, offset);
 }
 
-export async function collectReportData(env, child, parentId, range) {
-    const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows, assignedTasks, assignedRewards, feedbackTemplates] = await Promise.all([
-        env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC")
+function reportSummary(tasks, ledger, feedback, achievements) {
+    const approved = tasks.filter((row) => row.status === "approved").length;
+    const rejected = tasks.filter((row) => row.status === "rejected").length;
+    const pending = tasks.filter((row) => row.status === "pending").length;
+    const reviewed = approved + rejected;
+    return {
+        approved,
+        rejected,
+        pending,
+        reviewed,
+        approvalRate: reviewed ? Math.round(approved / reviewed * 100) : null,
+        netPoints: ledger.reduce((sum, row) => sum + Number(row.amount || 0), 0),
+        praiseCount: feedback.filter((row) => row.source_type === "praise").length,
+        criticismCount: feedback.filter((row) => row.source_type === "criticism").length,
+        achievementCount: achievements.length,
+    };
+}
+
+function reportPeriodKeys(range, offset) {
+    const keys = new Set();
+    for (let at = new Date(range.start).getTime(); at < new Date(range.end).getTime(); at += 86400000) {
+        const input = new Date(at).toISOString();
+        keys.add(periodKey("daily", input, offset));
+        for (const period of ["weekly", "monthly"]) {
+            const itemRange = reportWindowRange(period, input, offset);
+            if (itemRange.start >= range.start && itemRange.end <= range.end) keys.add(itemRange.label);
+        }
+    }
+    return [...keys];
+}
+
+export async function collectReportData(env, child, parentId, range, offset = 480) {
+    await ensureRequiredTaskSchema(env);
+    const requiredKeys = reportPeriodKeys(range, offset);
+    const requiredQuery = requiredKeys.length
+        ? env.DB.prepare(`SELECT trp.*, t.title, t.period FROM task_required_penalties trp
+JOIN tasks t ON t.id=trp.task_id
+WHERE trp.child_id=? AND trp.parent_id=? AND trp.period_key IN (${requiredKeys.map(() => "?").join(",")})
+ORDER BY trp.period_key DESC, t.title`).bind(child.id, parentId, ...requiredKeys).all()
+        : Promise.resolve({ results: [] });
+    const [ledgerRows, taskRows, rewardRows, achievementRows, assignedTasks, assignedRewards, feedbackTemplates, requiredRows] = await Promise.all([
+        env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND datetime(created_at)>=datetime(?) AND datetime(created_at)<datetime(?) ORDER BY datetime(created_at) DESC, created_at DESC, id DESC")
             .bind(child.id, parentId, range.start, range.end).all(),
-        env.DB.prepare(`SELECT s.*, t.title, tc.name category_name
+        env.DB.prepare(`SELECT s.*, t.title, t.is_required, t.required_count, tc.name category_name,
+  (SELECT pl.amount FROM point_ledger pl WHERE pl.parent_id=s.parent_id AND pl.source_type='task' AND pl.source_id=s.id ORDER BY datetime(pl.created_at) DESC LIMIT 1) awarded_points,
+  (SELECT pl.note FROM point_ledger pl WHERE pl.parent_id=s.parent_id AND pl.source_type='task' AND pl.source_id=s.id ORDER BY datetime(pl.created_at) DESC LIMIT 1) award_note
 FROM task_submissions s JOIN tasks t ON t.id=s.task_id
 LEFT JOIN task_categories tc ON tc.id=t.category_id
-WHERE s.child_id=? AND s.parent_id=? AND s.submitted_at>=? AND s.submitted_at<? ORDER BY s.submitted_at DESC`)
+WHERE s.child_id=? AND s.parent_id=? AND datetime(s.submitted_at)>=datetime(?) AND datetime(s.submitted_at)<datetime(?) ORDER BY datetime(s.submitted_at) DESC, s.submitted_at DESC`)
             .bind(child.id, parentId, range.start, range.end).all(),
         env.DB.prepare(`SELECT rr.*, r.title, r.cost_points
 FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id
-WHERE rr.child_id=? AND rr.parent_id=? AND rr.requested_at>=? AND rr.requested_at<? ORDER BY rr.requested_at DESC`)
-            .bind(child.id, parentId, range.start, range.end).all(),
-        env.DB.prepare(`SELECT pl.*, ft.title template_title
-FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
-WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND pl.created_at>=? AND pl.created_at<? ORDER BY pl.created_at DESC`)
+WHERE rr.child_id=? AND rr.parent_id=? AND datetime(rr.requested_at)>=datetime(?) AND datetime(rr.requested_at)<datetime(?) ORDER BY datetime(rr.requested_at) DESC, rr.requested_at DESC`)
             .bind(child.id, parentId, range.start, range.end).all(),
         env.DB.prepare(`SELECT a.title, ca.unlocked_at
 FROM child_achievements ca JOIN achievements a ON a.id=ca.achievement_id
-WHERE ca.child_id=? AND a.parent_id=? AND ca.unlocked_at>=? AND ca.unlocked_at<? ORDER BY ca.unlocked_at DESC`)
+WHERE ca.child_id=? AND a.parent_id=? AND datetime(ca.unlocked_at)>=datetime(?) AND datetime(ca.unlocked_at)<datetime(?) ORDER BY datetime(ca.unlocked_at) DESC`)
             .bind(child.id, parentId, range.start, range.end).all(),
-        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description
+        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description, t.is_required, t.required_count, t.required_penalty_points, t.grading_mode, t.completion_standards_json
 FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
 LEFT JOIN task_categories tc ON tc.id=t.category_id
 WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL
@@ -48,21 +85,40 @@ FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id
 WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL
 ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, parentId).all(),
         env.DB.prepare("SELECT kind, title, points, is_active, description FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(parentId).all(),
+        requiredQuery,
     ]);
-    const tasks = taskRows.results;
-    const ledger = ledgerRows.results;
-    const netPoints = ledger.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const ledger = await withLedgerSources(env, ledgerRows.results, offset);
+    const awards = new Map(ledger.filter((row) => row.source_type === "task").map((row) => [row.source_id, row]));
+    const tasks = taskRows.results.map((row) => ({
+        ...row,
+        awardedPoints: Number(row.awarded_points ?? awards.get(row.id)?.amount ?? 0),
+        awardNote: row.award_note || awards.get(row.id)?.note || "",
+    }));
+    const feedback = ledger.filter((row) => (row.source_type === "praise" || row.source_type === "criticism") && !row.revoked_at);
+    const achievements = achievementRows.results;
+    const summary = reportSummary(tasks, ledger, feedback, achievements);
     const currentBalance = await balance(env, child.id);
     const categoryCounts = [...tasks.filter((row) => row.status === "approved").reduce((map, row) => map.set(row.category_name || "未分类", (map.get(row.category_name || "未分类") || 0) + 1), new Map()).entries()];
+    const pointBreakdown = [...ledger.reduce((map, row) => {
+        const key = row.sourceTypeLabel || row.source_type;
+        const item = map.get(key) || { label: key, count: 0, points: 0 };
+        item.count += 1;
+        item.points += Number(row.amount || 0);
+        map.set(key, item);
+        return map;
+    }, new Map()).values()];
     return {
         tasks,
         rewards: rewardRows.results,
         ledger,
-        feedback: feedbackRows.results,
-        achievements: achievementRows.results,
-        netPoints,
+        feedback,
+        achievements,
+        requiredEvents: requiredRows.results,
+        summary,
+        netPoints: summary.netPoints,
         currentBalance,
         categoryCounts,
+        pointBreakdown,
         range,
         assignments: {
             tasks: assignedTasks.results,
@@ -72,7 +128,18 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, parentId).all(),
     };
 }
 
-function truncatePrompt(userPrompt, summary, maxLength = 1000) {
+export async function collectReportComparison(env, child, periodType, range, offset) {
+    const previousRange = previousCompletedReportRange(periodType, range.start, offset);
+    const [current, previous] = await Promise.all([
+        collectReportData(env, child, child.parent_id, range, offset),
+        collectReportData(env, child, child.parent_id, previousRange, offset),
+    ]);
+    current.previousSummary = previous.summary;
+    current.previousRange = previousRange;
+    return current;
+}
+
+function truncatePrompt(userPrompt, summary, maxLength = 1800) {
     const prefix = String(userPrompt || "").trim();
     if (!prefix) return "";
     const separator = "\n\n报表内容：\n";
@@ -81,29 +148,34 @@ function truncatePrompt(userPrompt, summary, maxLength = 1000) {
     return `${prefix}${separator}${summary.slice(0, budget)}`;
 }
 
+function compactList(items, limit, format, empty) {
+    if (!items.length) return empty;
+    const shown = items.slice(0, limit).map(format).join("；");
+    return items.length > limit ? `${shown}；另有${items.length - limit}项未列出` : shown;
+}
+
 export function buildCartoonReportPrompt(child, reportData, config, periodType) {
     const userPrompt = config?.imagePrompt || "";
-    const approved = reportData.tasks.filter((row) => row.status === "approved").length;
-    const rejected = reportData.tasks.filter((row) => row.status === "rejected").length;
-    const pending = reportData.tasks.filter((row) => row.status === "pending").length;
-    const praiseCount = reportData.feedback.filter((row) => row.source_type === "praise").length;
-    const criticismCount = reportData.feedback.filter((row) => row.source_type === "criticism").length;
+    const current = reportData.summary || {};
+    const previous = reportData.previousSummary || {};
     const categories = reportData.categoryCounts?.length ? reportData.categoryCounts.map(([name, count]) => `${name}${count}项`).join("，") : "暂无分类完成";
-    const rewards = reportData.rewards?.slice(0, 5).map((row) => row.title).filter(Boolean).join("，") || "暂无奖励兑换";
-    const achievements = reportData.achievements?.slice(0, 5).map((row) => row.title).filter(Boolean).join("，") || "暂无新成就";
-    const commentary = reportData.aiCommentary || "暂无AI评语";
+    const rejected = compactList(reportData.tasks.filter((row) => row.status === "rejected"), 3, (row) => row.title, "暂无驳回任务");
+    const required = compactList(reportData.requiredEvents || [], 3, (row) => `${row.title}${Number(row.penalty_points) > 0 ? `扣${row.penalty_points}分` : "已记录未扣分"}`, "暂无必做异常");
+    const rewards = compactList(reportData.rewards || [], 5, (row) => row.title, "暂无奖励兑换");
+    const achievements = compactList(reportData.achievements || [], 5, (row) => row.title, "暂无新成就");
+    const commentary = String(reportData.aiCommentary || "暂无AI评语").slice(0, 240);
     const periodLabel = periodType === "monthly" ? "上月月报" : "上周周报";
     const summary = [
         `孩子：${child.display_name}`,
         `报告：${periodLabel}，周期 ${reportData.range?.label || ""}`,
-        `任务：通过${approved}项，待审${pending}项，驳回${rejected}项`,
-        `分类亮点：${categories}`,
-        `表扬批评：表扬${praiseCount}次，批评${criticismCount}次`,
-        `积分：本期${reportData.netPoints >= 0 ? "+" : ""}${reportData.netPoints}，当前余额${reportData.currentBalance}`,
-        `AI评语：${commentary}`,
+        `亮点：通过${current.approved || 0}项，已审核通过率${current.approvalRate === null || current.approvalRate === undefined ? "暂无" : `${current.approvalRate}%`}，分类${categories}，成就${achievements}`,
+        `对比：上期通过${previous.approved || 0}项、净积分${previous.netPoints > 0 ? "+" : ""}${previous.netPoints || 0}`,
+        `问题：待审${current.pending || 0}项，驳回${current.rejected || 0}项（${rejected}），${required}`,
+        `品德：表扬${current.praiseCount || 0}次，批评${current.criticismCount || 0}次`,
+        `积分：本期${current.netPoints >= 0 ? "+" : ""}${current.netPoints || 0}，当前余额${reportData.currentBalance}`,
         `奖励：${rewards}`,
-        `成就：${achievements}`,
-        "请画成适合孩子看的卡通报告画面，画面要积极、清晰、避免出现真实个人隐私文字。"
+        `下一步参考：${commentary}`,
+        "画面按“成长亮点、需要关注、下一步”三块组织；适合孩子阅读，可显示昵称，不显示账号等敏感信息，短标签必须清晰。"
     ].join("\n");
     return truncatePrompt(userPrompt, summary);
 }
@@ -162,7 +234,7 @@ export async function generateReportCommentary(env, child, periodType, periodKey
         if (cached?.commentary && !forceRefresh) return cached.commentary;
     }
     const range = options.range || reportWindowRange(periodType, now, offset);
-    const reportData = await collectReportData(env, child, child.parent_id, range);
+    const reportData = await collectReportComparison(env, child, periodType, range, offset);
     const aiPrompt = buildReportAiPrompt(child, reportData, config, periodType, offset);
     if (!aiPrompt) return "";
     const commentary = options.ai
@@ -182,12 +254,12 @@ export async function generateCartoonReportImage(env, child, periodType, range) 
     if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.imagePrompt) {
         throw new NonRetryableError("ai_image_config_incomplete");
     }
-    const reportData = await collectReportData(env, child, child.parent_id, range);
+    const offset = await timezoneOffsetMinutes(env);
+    const reportData = await collectReportComparison(env, child, periodType, range, offset);
     let aiCommentary = "";
     try {
         const textConfig = await getParentAiServiceConfig(env, child.parent_id);
         if (textConfig.baseUrl && textConfig.apiKey && textConfig.model) {
-            const offset = await timezoneOffsetMinutes(env);
             aiCommentary = await generateReportCommentary(env, child, periodType, range.label, offset, false, { range });
         }
     } catch {
@@ -210,11 +282,11 @@ export async function generateScheduleImage(env, child) {
     if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.scheduleImagePrompt) {
         throw new NonRetryableError("ai_schedule_image_config_incomplete");
     }
-    await ensureChildScheduleSchema(env);
+    await Promise.all([ensureRequiredTaskSchema(env), ensureChildScheduleSchema(env)]);
     const slots = (await env.DB.prepare("SELECT * FROM child_schedule_slots WHERE child_id=? ORDER BY sort_order, created_at")
         .bind(child.id).all()).results;
     const items = slots.length
-        ? (await env.DB.prepare(`SELECT csi.*, t.title, t.points, t.period, t.is_required, t.required_count, tc.name category_name
+        ? (await env.DB.prepare(`SELECT csi.*, t.title, t.points, t.period, t.limit_count, t.is_required, t.required_count, tc.name category_name
 FROM child_schedule_items csi
 JOIN tasks t ON t.id=csi.task_id
 LEFT JOIN task_categories tc ON tc.id=t.category_id
@@ -225,12 +297,12 @@ WHERE csi.child_id=? ORDER BY csi.sort_order, csi.created_at`).bind(child.id).al
         const min = m % 60;
         return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
     };
-    const scheduleLines = slots.map((slot) => {
+    const scheduleRows = slots.map((slot) => {
         const slotItems = items.filter((item) => item.slot_id === slot.id);
-        const taskDesc = slotItems.map((item) => `${item.title}(${item.category_name || "未分类"},${item.points}分,${item.period === "daily" ? "每日" : item.period === "weekly" ? "每周" : "每月"}${item.is_required ? ",必做" : ""})`).join("；");
+        const taskDesc = compactList(slotItems, 6, (item) => `${item.title}(${item.category_name || "未分类"},${item.points}分,${item.period === "daily" ? "每日" : item.period === "weekly" ? "每周" : "每月"}最多${item.limit_count || 1}次${item.is_required ? `,必做${item.required_count || 1}次` : ""})`, "空闲");
         const planText = schedulePlanHtmlToText(slot.plan_html || "");
-        return `${fmtTime(slot.start_minutes)}-${fmtTime(slot.end_minutes)} ${slot.title || "未命名时段"}: 计划=${planText || "暂无"}; 可完成任务=${taskDesc || "空闲"}`;
-    }).join("\n");
+        return `${fmtTime(slot.start_minutes)}-${fmtTime(slot.end_minutes)} ${slot.title || "未命名时段"}: 计划=${planText || "暂无"}; 可完成任务=${taskDesc}`;
+    });
     const unscheduled = (await env.DB.prepare(`SELECT t.title, t.points, tc.name category_name
 FROM tasks t
 JOIN task_assignees ta ON ta.task_id=t.id
@@ -238,14 +310,14 @@ LEFT JOIN task_categories tc ON tc.id=t.category_id
 WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL AND t.is_active=1
 ORDER BY tc.name, t.created_at DESC`).bind(child.id, child.parent_id).all()).results;
     const scheduledTaskIds = new Set(items.map((item) => item.task_id));
-    const unscheduledLines = unscheduled.filter((t) => !scheduledTaskIds.has(t.id))
-        .map((t) => `${t.title}(${t.category_name || "未分类"},${t.points}分)`).join("；");
+    const unscheduledTasks = unscheduled.filter((t) => !scheduledTaskIds.has(t.id));
+    const unscheduledLines = compactList(unscheduledTasks, 8, (t) => `${t.title}(${t.category_name || "未分类"},${t.points}分)`, "");
     const prompt = truncatePrompt(config.scheduleImagePrompt, [
         `孩子：${child.display_name}`,
-        `日程表：`,
-        scheduleLines,
+        `当前日程模板：`,
+        ...scheduleRows,
         unscheduledLines ? `未安排任务：${unscheduledLines}` : "",
-        "请画成适合孩子查看的日程表插画，清晰展示各时段安排，积极、避免真实个人隐私文字。"
+        "按时间顺序绘制清晰日程表，突出必做任务和空闲时段；可显示昵称，不显示账号等敏感信息。"
     ].join("\n"));
     if (!prompt) throw new NonRetryableError("ai_schedule_image_prompt_empty");
     const imageUrl = await callParentImageService(env, prompt, config);
@@ -262,32 +334,36 @@ export async function generatePrintChecklistImage(env, child) {
     if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.checklistImagePrompt) {
         throw new NonRetryableError("ai_checklist_image_config_incomplete");
     }
+    await ensureRequiredTaskSchema(env);
     const [tasks, rewards, feedbackTemplates] = await Promise.all([
-        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description
+        env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description, t.is_required, t.required_count
 FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
 LEFT JOIN task_categories tc ON tc.id=t.category_id
-WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL
-ORDER BY tc.name, t.created_at DESC`).bind(child.id, child.parent_id).all(),
-        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period, r.limit_count, r.redeem_weekdays, r.is_active, r.description
+WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL AND t.is_active=1
+ORDER BY t.is_required DESC, tc.name, t.created_at DESC`).bind(child.id, child.parent_id).all(),
+        env.DB.prepare(`SELECT r.title, r.cost_points, r.limit_period, r.limit_count, r.redeem_weekdays, r.is_active, r.description,
+  (SELECT GROUP_CONCAT(t.title || '×' || rp.required_count, '、') FROM reward_prerequisites rp JOIN tasks t ON t.id=rp.task_id WHERE rp.reward_id=r.id) prerequisites,
+  (SELECT a.title FROM achievements a WHERE a.unlock_reward_id=r.id AND a.is_active=1 AND a.deleted_at IS NULL LIMIT 1) required_achievement
 FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id
-WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL
+WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL AND r.is_active=1
 ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(),
         env.DB.prepare(`SELECT kind, title, points, is_active, description, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours
-FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC`).bind(child.parent_id).all(),
+FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL AND is_active=1 ORDER BY kind, created_at DESC`).bind(child.parent_id).all(),
     ]);
-    const taskSummary = tasks.results.slice(0, 12).map((row) => `${row.category_name || "未分类"}-${row.title}(${row.period}, ${row.points}分)`).join("；") || "暂无任务";
-    const rewardSummary = rewards.results.slice(0, 12).map((row) => `${row.title}(${row.cost_points}分)`).join("；") || "暂无奖励";
-    const feedbackSummary = feedbackTemplates.results.slice(0, 12).map((row) => {
+    const periodLabel = (value) => value === "daily" ? "每日" : value === "weekly" ? "每周" : value === "monthly" ? "每月" : value === "once" ? "一次性" : "不限周期";
+    const taskSummary = compactList(tasks.results, 12, (row) => `${row.category_name || "未分类"}-${row.title}(${periodLabel(row.period)}最多${row.limit_count || 1}次,${row.points}分${row.is_required ? `,必做${row.required_count || 1}次` : ""})`, "暂无任务");
+    const rewardSummary = compactList(rewards.results, 12, (row) => `${row.title}(${row.cost_points}分,${periodLabel(row.limit_period)}${row.limit_count ? `最多${row.limit_count}次` : ""}${row.prerequisites ? `,前置${row.prerequisites}` : ""}${row.required_achievement ? `,需成就${row.required_achievement}` : ""})`, "暂无奖励");
+    const feedbackSummary = compactList(feedbackTemplates.results, 12, (row) => {
         const type = row.kind === "praise" ? "表扬" : "批评";
         const remedy = row.kind === "criticism" && row.is_remediable ? `，可补救：${row.remedy_condition || "按要求补救"}，挽回${row.remedy_points || 0}分，${row.remedy_deadline_hours || 24}小时` : "";
-        return `${type}-${row.title}(${row.points}分${remedy})`;
-    }).join("；") || "暂无表扬批评条款";
+        return `${type}-${row.title}(${type === "表扬" ? "+" : "-"}${Math.abs(Number(row.points || 0))}分${remedy})`;
+    }, "暂无表扬批评条款");
     const prompt = truncatePrompt(config.checklistImagePrompt, [
         `孩子：${child.display_name}`,
         `任务清单：${taskSummary}`,
         `奖励清单：${rewardSummary}`,
         `表扬批评条款：${feedbackSummary}`,
-        "请画成适合孩子查看的清单插画，清晰、积极、避免真实个人隐私文字。"
+        "按“任务目标、可兑换奖励、行为约定”三块绘制清单插画；突出必做任务与奖励条件，可显示昵称，不显示账号等敏感信息。"
     ].join("\n"));
     if (!prompt) throw new NonRetryableError("ai_checklist_image_prompt_empty");
     const imageUrl = await callParentImageService(env, prompt, config);

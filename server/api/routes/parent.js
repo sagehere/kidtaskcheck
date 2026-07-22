@@ -1,12 +1,20 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
 import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards } from "../utils.js";
-import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs, enqueueScheduleImageJob, loadScheduleImageJob, publicScheduleImageJob, processScheduleImageJobs } from "../ai/index.js";
+import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, collectReportComparison, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs, enqueueScheduleImageJob, loadScheduleImageJob, publicScheduleImageJob, processScheduleImageJobs } from "../ai/index.js";
 
-const PRINT_A4_STYLE = '@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933;line-height:1.5}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:24px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px;page-break-inside:auto}th,td{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}th{background:#f0f0f0}.print-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.print-task-card{border:1px solid #a7b0c0;border-radius:6px;padding:8px;background:#f8fafc;break-inside:avoid;page-break-inside:avoid}.print-task-card strong{display:block}.print-task-card small{display:block;color:#64748b}.print-plan{border:1px solid #cbd5e1;border-radius:6px;padding:8px;min-height:36px;background:#fff}.print-plan :first-child{margin-top:0}.print-plan :last-child{margin-bottom:0}.schedule-print-slot{break-inside:avoid;page-break-inside:avoid;margin-top:14px}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}.ai-commentary{background:#f0f4ff;border-left:4px solid #6366f1;padding:16px 20px;margin:18px 0;border-radius:4px}.ai-commentary h2{margin:0 0 8px;border:none;padding:0}.ai-commentary p{margin:4px 0;line-height:1.8}.ai-commentary .note{font-size:12px;color:#888;margin-top:8px}@media print{button{display:none}body{margin:0}.summary{grid-template-columns:repeat(2,1fr)}table,.print-task-card,.schedule-print-slot{break-inside:avoid;page-break-inside:avoid}}';
+const PRINT_A4_STYLE = '@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933;line-height:1.5}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:24px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px;page-break-inside:auto}th,td{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}th{background:#f0f0f0}tr{break-inside:avoid}.print-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.print-task-card{border:1px solid #a7b0c0;border-radius:6px;padding:8px;background:#f8fafc;break-inside:avoid;page-break-inside:avoid}.print-task-card strong{display:block}.print-task-card small{display:block;color:#64748b}.print-plan{border:1px solid #cbd5e1;border-radius:6px;padding:8px;min-height:36px;background:#fff}.print-plan :first-child{margin-top:0}.print-plan :last-child{margin-bottom:0}.schedule-print-slot{break-inside:avoid;page-break-inside:avoid;margin-top:14px}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}.attention{background:#fff7ed;border-left:4px solid #f97316;padding:12px 16px;margin:18px 0}.ai-commentary{background:#f0f4ff;border-left:4px solid #6366f1;padding:16px 20px;margin:18px 0;border-radius:4px}.ai-commentary h2{margin:0 0 8px;border:none;padding:0}.ai-commentary p{margin:4px 0;line-height:1.8;white-space:pre-line}.ai-commentary .note{font-size:12px;color:#888;margin-top:8px}@media print{button{display:none}body{margin:0}.summary{grid-template-columns:repeat(3,1fr)}table,.print-task-card,.schedule-print-slot{break-inside:avoid;page-break-inside:avoid}}';
+
+const PERIOD_LABELS = { none: "不限周期", daily: "每日", weekly: "每周", monthly: "每月", once: "一次性" };
+const WEEKDAY_LABELS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+const TASK_STATUS_LABELS = { approved: "通过", pending: "待审核", rejected: "未通过" };
+const REWARD_STATUS_LABELS = { pending: "待核销", redeemed: "已核销", cancelled: "已取消" };
+const periodText = (value) => PERIOD_LABELS[value] || String(value || "");
+const weekdaysText = (value) => normalizeWeekdays(value).map((day) => WEEKDAY_LABELS[day]).join("、");
+const signedText = (value) => `${Number(value || 0) > 0 ? "+" : ""}${Number(value || 0)}`;
+const reportDateText = (value, offset) => localTimeText(value, offset).slice(0, 10);
 
 function scheduleTaskCardHtml(item) {
-    const period = item.period === "daily" ? "每日" : item.period === "weekly" ? "每周" : item.period === "monthly" ? "每月" : "一次性";
-    const meta = escapeHtml(item.category_name || "未分类") + " · " + escapeHtml(period) + " · " + Number(item.points || 0) + "分" + (item.is_required ? " · 必做" : "");
+    const meta = escapeHtml(item.category_name || "未分类") + " · " + escapeHtml(periodText(item.period)) + "最多" + Number(item.limit_count || 1) + "次 · " + Number(item.points || 0) + "分" + (item.is_required ? " · 必做" + Number(item.required_count || 1) + "次" : "");
     const description = item.description ? '<small>' + escapeHtml(item.description) + '</small>' : '';
     return '<div class="print-task-card"><strong>' + escapeHtml(item.title) + '</strong><small>' + meta + '</small>' + description + '</div>';
 }
@@ -454,6 +462,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
     if (childExport && method === "GET") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         await settleExpiredCriticismFreezes(env);
+        await ensureRequiredTaskSchema(env);
         const child = await env.DB.prepare("SELECT id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(childExport[1], a.id)
             .first();
@@ -463,16 +472,32 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             env.DB.prepare(`SELECT t.*, tc.name category_name FROM tasks t
 JOIN task_assignees ta ON ta.task_id=t.id
 LEFT JOIN task_categories tc ON tc.id=t.category_id
-WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL
-ORDER BY tc.name, t.created_at DESC`).bind(child.id, a.id).all(),
-            env.DB.prepare(`SELECT r.* FROM rewards r
+WHERE ta.child_id=? AND t.parent_id=? AND t.deleted_at IS NULL AND t.is_active=1
+ORDER BY t.is_required DESC, tc.name, t.created_at DESC`).bind(child.id, a.id).all(),
+            env.DB.prepare(`SELECT r.*,
+  (SELECT GROUP_CONCAT(t.title || '×' || rp.required_count, '、') FROM reward_prerequisites rp JOIN tasks t ON t.id=rp.task_id WHERE rp.reward_id=r.id) prerequisites,
+  (SELECT a2.title FROM achievements a2 WHERE a2.unlock_reward_id=r.id AND a2.is_active=1 AND a2.deleted_at IS NULL LIMIT 1) required_achievement
+FROM rewards r
 JOIN reward_assignees ra ON ra.reward_id=r.id
-WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL
+WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL AND r.is_active=1
 ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
-            env.DB.prepare("SELECT * FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(a.id).all()
+            env.DB.prepare("SELECT * FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL AND is_active=1 ORDER BY kind, created_at DESC").bind(a.id).all()
         ]);
         const table = (headers, rows) => `<table><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
-        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 打印清单</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务</h2>${table(["标题","分类","周期","次数","积分","周","状态","说明"], tasks.results.map((item) => [item.title, item.category_name || "", item.period, item.limit_count || 1, item.points, normalizeWeekdays(item.enabled_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>奖励</h2>${table(["名称","所需积分","限制周期","次数","核销周几","状态","说明"], rewards.results.map((item) => [item.title, item.cost_points, item.limit_period, item.limit_count || "", normalizeWeekdays(item.redeem_weekdays).join(","), item.is_active ? "启用" : "停用", item.description || ""]))}<h2>表扬与批评条款</h2>${table(["类型","标题","积分","补救","状态","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, item.points, item.kind === "criticism" && item.is_remediable ? `${item.remedy_condition || "可补救"}；挽回${item.remedy_points || 0}分；${item.remedy_deadline_hours || 24}小时` : "", item.is_active ? "启用" : "停用", item.description || ""]))}</body></html>`;
+        const taskRule = (item) => {
+            const grading = item.grading_mode === "completion"
+                ? completionStandards(item).map((rule) => `${rule.label}${rule.points}分`).join("；")
+                : `固定${item.points}分`;
+            const required = item.is_required ? `；必做${item.required_count || 1}次，未达标扣${item.required_penalty_points || 0}分` : "";
+            const remedy = item.is_required && item.required_remedy_enabled ? `；补救：${item.required_remedy_condition || "按要求完成"}，可挽回${item.required_remedy_points || 0}分/${item.required_remedy_deadline_hours || 24}小时` : "";
+            return `${periodText(item.period)}最多${item.limit_count || 1}次；${grading}${required}${remedy}`;
+        };
+        const rewardRule = (item) => [
+            `${periodText(item.limit_period)}${item.limit_count ? `最多${item.limit_count}次` : ""}`,
+            item.prerequisites ? `前置任务：${item.prerequisites}` : "",
+            item.required_achievement ? `所需成就：${item.required_achievement}` : "",
+        ].filter(Boolean).join("；");
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 当前规则清单</h1><p>仅展示当前启用内容；导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务目标</h2>${table(["任务","分类","规则与积分","可做星期","说明"], tasks.results.map((item) => [item.title, item.category_name || "未分类", taskRule(item), weekdaysText(item.enabled_weekdays), item.description || ""]))}<h2>可兑换奖励</h2>${table(["奖励","所需积分","兑换规则","可兑换星期","说明"], rewards.results.map((item) => [item.title, item.cost_points, rewardRule(item), weekdaysText(item.redeem_weekdays), item.description || ""]))}<h2>行为约定</h2>${table(["类型","条款","积分","补救规则","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, `${item.kind === "praise" ? "+" : "-"}${Math.abs(Number(item.points || 0))}`, item.kind === "criticism" && item.is_remediable ? `${item.remedy_condition || "按要求补救"}；可挽回${item.remedy_points || 0}分；限时${item.remedy_deadline_hours || 24}小时` : "无", item.description || ""]))}</body></html>`;
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     const childPrintImage = path.match(/^\/children\/([^/]+)\/print-checklist-image$/);
@@ -515,7 +540,7 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
     const childSchedulePrint = path.match(/^\/children\/([^/]+)\/schedule-print$/);
     if (childSchedulePrint && method === "GET") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
-        await ensureChildScheduleSchema(env);
+        await Promise.all([ensureRequiredTaskSchema(env), ensureChildScheduleSchema(env)]);
         const child = await env.DB.prepare("SELECT id, display_name FROM children WHERE id=? AND parent_id=? AND deleted_at IS NULL")
             .bind(childSchedulePrint[1], a.id)
             .first();
@@ -554,7 +579,7 @@ ORDER BY tc.name, t.created_at DESC`).bind(child.id, a.id).all()).results
             return `<section class="schedule-print-slot"><h2>${escapeHtml(fmtTime(slot.start_minutes))} - ${escapeHtml(fmtTime(slot.end_minutes))} ${escapeHtml(slot.title || "未命名时段")}</h2><h3>计划</h3>${schedulePlanBlockHtml(slot)}<h3>可完成任务</h3>${taskCards}</section>`;
         });
         const unscheduledHtml = unscheduled.length ? `<h2>未安排任务</h2><div class="print-card-grid">${unscheduled.map(scheduleTaskCardHtml).join("")}</div>` : "";
-        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 日程表</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 日程表</h1><p>导出时间：${escapeHtml(localTimeText(nowIso(), offset))}</p>${slots.length ? slotBlocks.join("") : "<p>暂无日程安排</p>"}${unscheduledHtml}</body></html>`;
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 当前日程模板</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 当前日程模板</h1><p>这是当前每日安排模板，并非历史执行记录；导出时间：${escapeHtml(localTimeText(nowIso(), offset))}</p>${slots.length ? slotBlocks.join("") : "<p>暂无日程安排</p>"}${unscheduledHtml}</body></html>`;
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     const childScheduleImage = path.match(/^\/children\/([^/]+)\/schedule-image$/);
@@ -608,35 +633,8 @@ ORDER BY tc.name, t.created_at DESC`).bind(child.id, a.id).all()).results
         const anchor = url.searchParams.get("anchor");
         const range = anchor ? reportWindowRange(period, anchor, offset) : previousCompletedReportRange(period, nowIso(), offset);
         const periodKey = range.label;
-        const [ledgerRows, taskRows, rewardRows, feedbackRows, achievementRows] = await Promise.all([
-            env.DB.prepare("SELECT * FROM point_ledger WHERE child_id=? AND parent_id=? AND datetime(created_at)>=datetime(?) AND datetime(created_at)<datetime(?) ORDER BY datetime(created_at) DESC, created_at DESC, id DESC").bind(child.id, a.id, range.start, range.end).all(),
-            env.DB.prepare(`SELECT s.*, t.title, tc.name category_name
-FROM task_submissions s
-JOIN tasks t ON t.id=s.task_id
-LEFT JOIN task_categories tc ON tc.id=t.category_id
-WHERE s.child_id=? AND s.parent_id=? AND s.submitted_at>=? AND s.submitted_at<?
-ORDER BY s.submitted_at DESC`).bind(child.id, a.id, range.start, range.end).all(),
-            env.DB.prepare(`SELECT rr.*, r.title, r.cost_points
-FROM reward_redemptions rr
-JOIN rewards r ON r.id=rr.reward_id
-WHERE rr.child_id=? AND rr.parent_id=? AND rr.requested_at>=? AND rr.requested_at<?
-ORDER BY rr.requested_at DESC`).bind(child.id, a.id, range.start, range.end).all(),
-            env.DB.prepare(`SELECT pl.*, ft.title template_title
-FROM point_ledger pl
-LEFT JOIN feedback_templates ft ON ft.id=pl.source_id
-WHERE pl.child_id=? AND pl.parent_id=? AND pl.source_type IN ('praise','criticism') AND pl.revoked_at IS NULL AND datetime(pl.created_at)>=datetime(?) AND datetime(pl.created_at)<datetime(?)
-ORDER BY datetime(pl.created_at) DESC, pl.created_at DESC, pl.id DESC`).bind(child.id, a.id, range.start, range.end).all(),
-            env.DB.prepare(`SELECT a.title, ca.unlocked_at
-FROM child_achievements ca
-JOIN achievements a ON a.id=ca.achievement_id
-WHERE ca.child_id=? AND a.parent_id=? AND ca.unlocked_at>=? AND ca.unlocked_at<?
-ORDER BY ca.unlocked_at DESC`).bind(child.id, a.id, range.start, range.end).all()
-        ]);
-        const ledger = ledgerRows.results;
-        const tasks = taskRows.results;
-        const rewards = rewardRows.results;
-        const feedback = feedbackRows.results;
-        const achievements = achievementRows.results;
+        const reportData = await collectReportComparison(env, child, period, range, offset);
+        const { ledger, tasks, rewards, feedback, achievements, requiredEvents, summary, previousSummary, pointBreakdown } = reportData;
         await ensureChildScheduleSchema(env);
         const scheduleSlots = (await env.DB.prepare("SELECT * FROM child_schedule_slots WHERE child_id=? ORDER BY sort_order, created_at").bind(child.id).all()).results;
         const scheduleItems = scheduleSlots.length
@@ -647,19 +645,29 @@ LEFT JOIN task_categories tc ON tc.id=t.category_id
 WHERE csi.child_id=? ORDER BY csi.sort_order, csi.created_at`).bind(child.id).all()).results
             : [];
         const fmtScheduleTime = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-        const scheduleSection = scheduleSlots.length ? `<h2>日程安排</h2>${scheduleSlots.map((slot) => {
+        const scheduleSection = scheduleSlots.length ? `<h2>当前日程模板（参考）</h2><p>以下为当前每日安排，不代表本报告周期的历史执行记录。</p>${scheduleSlots.map((slot) => {
             const slotItems = scheduleItems.filter((item) => item.slot_id === slot.id);
             const taskCards = slotItems.length ? `<div class="print-card-grid">${slotItems.map(scheduleTaskCardHtml).join("")}</div>` : '<p style="color:#777">暂无可完成任务</p>';
             return `<section class="schedule-print-slot"><h3>${escapeHtml(fmtScheduleTime(slot.start_minutes))} - ${escapeHtml(fmtScheduleTime(slot.end_minutes))} ${escapeHtml(slot.title || "未命名时段")}</h3><h4>计划</h4>${schedulePlanBlockHtml(slot)}<h4>可完成任务</h4>${taskCards}</section>`;
         }).join("")}` : "";
-        const netPoints = ledger.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-        const currentBalance = await balance(env, child.id);
-        const approved = tasks.filter((row) => row.status === "approved").length;
-        const rejected = tasks.filter((row) => row.status === "rejected").length;
-        const pending = tasks.filter((row) => row.status === "pending").length;
-        const categoryCounts = [...tasks.filter((row) => row.status === "approved").reduce((map, row) => map.set(row.category_name || "未分类", (map.get(row.category_name || "未分类") || 0) + 1), new Map()).entries()];
         const tableHtml = (headers, rows) => `<table><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("") : `<tr><td colspan="${headers.length}">暂无记录</td></tr>`}</tbody></table>`;
         const reportTitle = period === "monthly" ? "月度报告" : "周度报告";
+        const rateText = (value) => value === null || value === undefined ? "暂无已审核记录" : `${value}%`;
+        const deltaText = (current, previous) => signedText(Number(current || 0) - Number(previous || 0));
+        const actionItems = [];
+        if (summary.pending) actionItems.push(`有 ${summary.pending} 项任务待审核，请先完成审核后再做最终复盘。`);
+        for (const item of tasks.filter((row) => row.status === "rejected").slice(0, 5))
+            actionItems.push(`关注任务「${item.title}」${item.review_note ? `：${item.review_note}` : "，明确下次完成标准。"}`);
+        for (const item of requiredEvents.slice(0, 5))
+            actionItems.push(`必做任务「${item.title}」实际 ${item.actual_count}/${item.required_count}${Number(item.penalty_points) > 0 ? `，记录扣分 ${item.penalty_points}` : "，已记录未扣分"}。`);
+        if (!actionItems.length) actionItems.push("本期没有待审核、驳回或必做异常记录，可从表现最好的分类继续巩固。 ");
+        const actionSection = `<div class="attention"><strong>待处理与改进</strong><ul>${actionItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
+        const rewardImpact = (item) => ledger.filter((row) => row.source_id === item.id && ["reward", "reward_cancel", "reward_refund"].includes(row.source_type)).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        const requiredStatus = (item) => {
+            if (!Number(item.penalty_points)) return "已记录未扣分";
+            const ledgerItem = ledger.find((row) => row.source_type === "task_required_penalty" && row.source_id === item.task_id && row.period_key === item.period_key);
+            return ledgerItem?.freeze_status === "frozen" ? `未达标，冻结${item.penalty_points}分待补救` : `未达标，扣${item.penalty_points}分`;
+        };
         let commentary = "";
         if (child.ai_enabled) {
             try {
@@ -678,7 +686,16 @@ WHERE csi.child_id=? ORDER BY csi.sort_order, csi.created_at`).bind(child.id).al
             }
         }
         const commentarySection = commentary ? `<div class="ai-commentary"><h2>AI 评语</h2><p>${escapeHtml(commentary)}</p><p class="note">* 评语由 AI 生成，仅供参考</p></div>` : "";
-        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} ${reportTitle}</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} ${reportTitle}</h1><p>周期：${escapeHtml(localTimeText(range.start, offset))} 至 ${escapeHtml(localTimeText(range.end, offset))}；生成时间：${escapeHtml(localTimeText(nowIso(), offset))}</p>${commentarySection}<div class="summary"><div><span>当前积分</span><strong>${currentBalance}</strong></div><div><span>本期积分</span><strong>${netPoints >= 0 ? "+" : ""}${netPoints}</strong></div><div><span>任务通过</span><strong>${approved}</strong></div><div><span>成就解锁</span><strong>${achievements.length}</strong></div></div>${scheduleSection}<h2>任务概览</h2>${tableHtml(["通过","待审","驳回"], [[approved, pending, rejected]])}<h2>分类完成</h2>${tableHtml(["分类","通过次数"], categoryCounts)}<h2>奖励记录</h2>${tableHtml(["奖励","状态","积分","申请时间"], rewards.map((item) => [item.title, item.status, item.cost_points, localTimeText(item.requested_at, offset)]))}<h2>表扬与批评</h2>${tableHtml(["类型","条款","积分","时间"], feedback.map((item) => [item.source_type === "praise" ? "表扬" : "批评", item.template_title || item.note || "", item.amount, localTimeText(item.created_at, offset)]))}<h2>成就解锁</h2>${tableHtml(["成就","解锁时间"], achievements.map((item) => [item.title, localTimeText(item.unlocked_at, offset)]))}</body></html>`;
+        const inclusiveEnd = new Date(new Date(range.end).getTime() - 1).toISOString();
+        const comparisonRows = [
+            ["任务通过", summary.approved, previousSummary.approved, deltaText(summary.approved, previousSummary.approved)],
+            ["已审核通过率", rateText(summary.approvalRate), rateText(previousSummary.approvalRate), summary.approvalRate === null || previousSummary.approvalRate === null ? "—" : `${deltaText(summary.approvalRate, previousSummary.approvalRate)}个百分点`],
+            ["净积分", signedText(summary.netPoints), signedText(previousSummary.netPoints), deltaText(summary.netPoints, previousSummary.netPoints)],
+            ["表扬", summary.praiseCount, previousSummary.praiseCount, deltaText(summary.praiseCount, previousSummary.praiseCount)],
+            ["批评", summary.criticismCount, previousSummary.criticismCount, deltaText(summary.criticismCount, previousSummary.criticismCount)],
+            ["解锁成就", summary.achievementCount, previousSummary.achievementCount, deltaText(summary.achievementCount, previousSummary.achievementCount)],
+        ];
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} ${reportTitle}</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} ${reportTitle}</h1><p>周期：${escapeHtml(reportDateText(range.start, offset))} 至 ${escapeHtml(reportDateText(inclusiveEnd, offset))}；生成时间：${escapeHtml(localTimeText(nowIso(), offset))}</p><div class="summary"><div><span>当前积分</span><strong>${reportData.currentBalance}</strong></div><div><span>本期净积分</span><strong>${signedText(summary.netPoints)}</strong></div><div><span>已审核通过率</span><strong>${rateText(summary.approvalRate)}</strong></div><div><span>待审核</span><strong>${summary.pending}</strong></div><div><span>任务通过</span><strong>${summary.approved}</strong></div><div><span>成就解锁</span><strong>${summary.achievementCount}</strong></div></div>${actionSection}${commentarySection}<h2>与上一周期对比</h2>${tableHtml(["指标","本期","上期","变化"], comparisonRows)}<h2>任务明细</h2>${tableHtml(["任务","分类","状态","实际积分","审核意见","提交时间"], tasks.map((item) => [item.title, item.category_name || "未分类", TASK_STATUS_LABELS[item.status] || item.status, item.status === "approved" ? signedText(item.awardedPoints) : "—", item.review_note || item.awardNote || "", localTimeText(item.submitted_at, offset)]))}<h2>分类完成</h2>${tableHtml(["分类","通过次数"], reportData.categoryCounts)}<h2>积分来源</h2>${tableHtml(["来源","记录数","积分变化"], pointBreakdown.map((item) => [item.label, item.count, signedText(item.points)]))}${requiredEvents.length ? `<h2>必做任务异常</h2>${tableHtml(["任务","周期","实际/要求","结果"], requiredEvents.map((item) => [item.title, item.period_key, `${item.actual_count}/${item.required_count}`, requiredStatus(item)]))}` : ""}<h2>积分明细</h2>${tableHtml(["来源","内容","积分变化","时间"], ledger.map((item) => [item.sourceTypeLabel, item.sourceLabel, item.frozen_amount ? `冻结${item.frozen_amount}（账面${signedText(item.amount)}）` : signedText(item.amount), item.localCreatedAt]))}<h2>奖励记录</h2>${tableHtml(["奖励","状态","积分影响","申请时间"], rewards.map((item) => [item.title, REWARD_STATUS_LABELS[item.status] || item.status, signedText(rewardImpact(item)), localTimeText(item.requested_at, offset)]))}<h2>表扬与批评</h2>${tableHtml(["类型","条款","积分影响","状态","时间"], feedback.map((item) => [item.source_type === "praise" ? "表扬" : "批评", item.sourceLabel || item.note || "", item.frozen_amount ? `冻结${item.frozen_amount}` : signedText(item.amount), item.freeze_status === "frozen" ? "待补救" : item.freeze_status === "remedied" ? "已补救" : item.freeze_status === "settled" ? "已结算" : "已生效", item.localCreatedAt]))}<h2>成就解锁</h2>${tableHtml(["成就","解锁时间"], achievements.map((item) => [item.title, localTimeText(item.unlocked_at, offset)]))}${scheduleSection}</body></html>`;
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     const childWarehouse = path.match(/^\/children\/([^/]+)\/warehouse$/);

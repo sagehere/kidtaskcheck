@@ -123,7 +123,7 @@
 
 ## 10. 积分账本、报表、打印与归档
 
-- 功能说明：家长/孩子查看积分账本，家长导出孩子打印清单和周/月报表，系统保留活动归档。
+- 功能说明：家长/孩子查看积分账本，家长导出当前启用规则清单和已完成周/月成长报告，系统保留活动归档。周/月报统一展示已审核通过率、上期对比、行动项、任务实际积分、积分来源、奖励/反馈/成就和当前日程模板参考。
 - 用户入口：家长孩子卡片中的账本/打印/报表按钮，孩子积分账本；周/月报表与打印输出包含日程计划并适配 A4。
 - P0：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`server/api/routes/parent.js`、`server/api/routes/shared.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`server/api/ai/cache.js`、`src/types/api.ts`
@@ -131,7 +131,7 @@
 - 主要调用链：ledger modal -> `/points/ledger`; print -> `/children/:id/export-print`; report -> `/children/:id/report?period=weekly|monthly`; report may read cached AI commentary.
 - 相关状态：`point_ledger`、`activity_archives`、`ai_report_commentaries`、`system_settings.timezone_offset_minutes`
 - 相关接口：`GET /api/points/ledger`、`GET /api/children/:id/export-print`、`GET /api/children/:id/report`
-- 修改注意事项：报表应使用已完成周期语义；所有报表打印应适配 A4；AI 评论缺失不能让基础 HTML 报表 500；时区变化影响周期窗口；账本和通知来源补全必须批量查询，不能按列表行数逐条查库；`ledgerSource` 支持 `task_required_penalty` 来源类型，展示"必做扣分 / 任务：{title}"；`/points/ledger` 按 `datetime(created_at) DESC, created_at DESC, id DESC` 排序，报表账本窗口用 `datetime(created_at)` 过滤，`localTimeText` 将旧 `YYYY-MM-DD HH:mm:ss` 视为 UTC 后再应用系统时区；积分清单 UI 使用共享 `LedgerModal`，默认按今天/昨天/日期分组，支持收入、支出、冻结/补救、任务、奖励、反馈、必做扣分筛选，不显示顶部汇总卡片。
+- 修改注意事项：报表应使用已完成周期语义；任务指标只按 `approved / (approved + rejected)` 计算已审核通过率，待审单列，不能称为目标完成率；必做任务仅展示可核实的未达标/未扣分记录，不推算历史达标率；周/月报复用 `collectReportComparison` 和批量账本来源补全，窗口查询使用 `datetime(...)` 兼容旧时间文本；周期结束日按半开区间的最后一天展示；日程在成长报告中必须标记为当前模板而非历史快照；打印规则清单只展示启用配置并包含必做、完成档位、奖励前置与补救规则；所有打印适配 A4，AI 评论缺失不能让基础 HTML 报表 500；积分清单 UI 使用共享 `LedgerModal`。
 - 最近更新时间：2026-07-22
 
 - Maintenance note (2026-06-30): long-running SQLite cleanup keeps detailed ledger/submission/redemption rows for `detail_retention_days` (default 365) and summarizes old ledger rows into `activity_archives`. `archiveOldActivity` must update existing monthly archives and the matching `activity_archive` ledger row when late old rows appear, because `point_ledger` remains the balance source of truth. `db:compact` is the low-frequency maintenance-window command for shrinking the SQLite file after cleanup; do not run VACUUM on the normal request/bootstrap path. Report/ledger window queries are supported by `idx_ledger_child_parent_created`, `idx_submissions_child_parent_submitted`, `idx_redemptions_child_parent_requested`, and `idx_child_achievements_child_unlocked`; keep runtime `ensureReportWindowIndexes` in sync with migration 0028.
@@ -159,7 +159,7 @@
 - 主要调用链：settings load/save -> `/parent/ai-service`; model/test -> `/parent/ai-service/models|test`; preview -> `/parent/ai-service/preview`; preview/cache -> `/parent/ai-service/preview/cache`; scheduler -> `server/api/ai/scheduled.js` -> queue/orchestrator/cache。
 - 相关状态：`parent_ai_service_settings`、`ai_child_greetings`、`ai_report_commentaries`、`ai_generation_queue`、`ai_scheduled_refresh_runs`、`system_error_logs`、`system_settings.cleanup_last_stats_json`
 - 相关接口：`GET/PATCH /api/parent/ai-service`、`POST /api/parent/ai-service/models`、`POST /api/parent/ai-service/test`、`POST /api/parent/ai-service/preview`、`POST /api/parent/ai-service/preview/cache`
-- 修改注意事项：AI 预览默认不写缓存（`{ cache: false }`）；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure，且同一 DB 实例只执行一次、失败后允许下次重试；scheduled 使用管理员时区和已完成周期；模型字段使用 `<input list>` 支持手动输入；预览替换缓存使用 `INSERT OR REPLACE` 只替换当前配置 hash 下的缓存，不触发新 AI 调用；管理员维护统计读取 AI 队列 pending/processing 积压和近 7 天终态失败率，不触发 AI 生成。
+- 修改注意事项：AI 预览默认不写缓存（`{ cache: false }`）；设置页 draft state 不能被轮询覆盖；新增 schema 要同时考虑 runtime ensure，且同一 DB 实例只执行一次、失败后允许下次重试；scheduled 使用管理员时区和已完成周期；周/月评语与 HTML/卡通报告复用同一份当前及上期数据，使用已审核通过率，并包含驳回原因、积分来源、必做异常和下一周期行动；报告内容版本参与 `aiReportConfigHash`，内容口径升级后旧缓存不会命中；预览替换缓存仍只替换当前配置 hash 下的缓存，不触发新 AI 调用。
 - 最近更新时间：2026-07-22
 
 ## 13. AI 图片、漫画报告、打印清单图与日程表图
@@ -172,7 +172,7 @@
 - 主要调用链：`ParentApp.generateCartoonReport` -> `/parent/ai-service/cartoon-report` -> queue -> provider image generation -> polling `/parent/ai-service/cartoon-report/:jobId`; checklist image -> `/children/:id/print-checklist-image` -> polling job endpoint; schedule image -> `/children/:id/schedule-image` -> polling job endpoint。
 - 相关状态：`parent_ai_service_settings.image_*`、`ai_cartoon_report_jobs`、`ai_print_checklist_image_jobs`、`ai_schedule_image_jobs`、`system_settings.cleanup_last_stats_json`
 - 相关接口：`POST /api/parent/ai-service/cartoon-report`、`GET /api/parent/ai-service/cartoon-report/:jobId`、`POST /api/children/:id/print-checklist-image`、`GET /api/children/:id/print-checklist-image/:jobId`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
-- 修改注意事项：图片 AI 配置和文本 AI 配置分开；前端轮询有 abort controller；不要把生成结果持久化到新存储，除非用户明确要求。日程表图使用独立 `ai_schedule_image_jobs` 表和独立提示词 `schedule_image_prompt`；scheduler 与常规 AI 队列共同处理其 pending 或锁超时的 processing 作业，避免服务中断后遗留；生成 prompt 时将 `plan_html` 转为纯文本，避免把 HTML 标签直接交给图片模型。
+- 修改注意事项：图片 AI 配置和文本 AI 配置分开；前端轮询有 abort controller；不要把生成结果持久化到新存储，除非用户明确要求。卡通报告按亮点/问题/下一步组织并带上上期对比；清单图只使用启用配置并突出必做和奖励条件；所有图片 prompt 对超量内容明确写出省略数量，不静默截断；日程图将 `plan_html` 转为纯文本并标记当前模板；已有完成图片保留，重新生成后才使用新内容。
 - 最近更新时间：2026-07-22
 
 - Maintenance note (2026-06-30): AI queue/job history uses `ai_job_retention_days` (default 92). Daily maintenance deletes only completed/failed rows older than the cutoff from `ai_generation_queue`, `ai_scheduled_refresh_runs`, `ai_cartoon_report_jobs`, `ai_print_checklist_image_jobs`, and `ai_schedule_image_jobs`; pending/processing rows and user-visible AI content caches are retained. Admin `/admin/maintenance-stats` surfaces latest cleanup counts, backlog, and recent failure rate across these tables.
@@ -187,7 +187,7 @@
 - 主要调用链：`ChildApp.scheduleTab` -> GET/PUT `/children/:id/schedule`; `ParentApp.exportChildSchedulePrint` -> window.open `/children/:id/schedule-print`; `ParentApp.generateScheduleImage` -> POST `/children/:id/schedule-image` -> queue -> polling -> GET `/children/:id/schedule-image/:jobId`
 - 相关状态：`child_schedule_slots.plan_html`、`child_schedule_items`、`ai_schedule_image_jobs`、`parent_ai_service_settings.schedule_image_prompt`
 - 相关接口：`GET/PUT /api/children/:id/schedule`、`GET /api/children/:id/schedule-print`、`POST /api/children/:id/schedule-image`、`GET /api/children/:id/schedule-image/:jobId`
-- 修改注意事项：日程表只有孩子可编辑、家长只读查看；每个时段包含“计划”和“可完成任务”两行；计划富文本保存为受限 HTML，前端编辑器避免在输入中重写 DOM 以保留光标位置，加载日程时必须映射后端 `plan_html`；任务拖入日程表不改变积分/任务提交流程；任务卡片池使用任务自身 `limitCount/limit_count` 作为可安排次数口径，不使用必做 `required_count`；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表并由 scheduler 恢复过期任务；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。新数据库迁移 0023/0025 需 bootstrap 运行 ensureChildScheduleSchema。
+- 修改注意事项：日程表只有孩子可编辑、家长只读查看；每个时段包含“计划”和“可完成任务”两行；计划富文本保存为受限 HTML，前端编辑器避免在输入中重写 DOM 以保留光标位置，加载日程时必须映射后端 `plan_html`；打印和绘图都必须标记为当前每日模板，任务卡片显示周期最多次数及必做次数；任务拖入日程表不改变积分/任务提交流程；任务卡片池使用任务自身 `limitCount/limit_count` 作为可安排次数口径，不使用必做 `required_count`；日程表绘图排队使用独立 `ai_schedule_image_jobs` 表并由 scheduler 恢复过期任务；`PUT schedule` 原子替换事务；验证时段不重叠、任务属于该孩子。
 - 最近更新时间：2026-07-22
 
 ## 15. 配置导入导出与开发测试入口

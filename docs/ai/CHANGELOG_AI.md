@@ -1,5 +1,12 @@
 # 2026-07-22
 
+- 类型：报表内容优化
+- 任务：统一打印清单、周/月成长报告、日程表和三类 AI 图片的数据口径，让报表支持复盘、比较和下一步行动。
+- 修改文件：`server/api/routes/parent.js`、`server/api/ai/{orchestrator,prompt,cache,index}.js`、`tests/{api,ai}.test.ts`、`docs/ai/FEATURE_INDEX.md`。
+- 行为：已审核通过率排除待审；周/月报增加上期对比、任务实际积分、账本来源、必做异常和行动项；规则清单只打印启用配置；日程标记为当前模板；AI 报告复用相同数据并通过内容版本失效旧评语缓存。
+- 兼容性：现有接口、数据库和前端入口不变；已有图片保留，重新生成后使用新提示词。
+- 验证：`rtk npm test`（147 项）；`rtk npm run build`。
+
 - 类型：全项目保守优化
 - 任务：降低家长/孩子空闲轮询、批量消除列表来源和配置关系的 N+1 查询、缓存 SQLite schema 自修复、让 scheduler 恢复日程图片队列，并缩减生产镜像运行层。
 - 修改文件：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`src/components/Shell.tsx`、`server/api/utils.js`、`server/api/routes/shared.js`、`server/api/routes/child.js`、`server/api/ai/{cache,queue,scheduled,cartoon-queue}.js`、`server/scheduler-tick.mjs`、`Dockerfile`、`.dockerignore` 与相关测试/索引。

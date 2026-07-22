@@ -1,5 +1,10 @@
 # 2026-07-22
 
+- 类型：维护规则
+- 任务：后续推送默认直接推送 `main`，未经用户明确要求不得创建分支。
+- 修改文件：`AGENTS.md`。
+- 验证：规则文本检查。
+
 - 类型：功能新增
 - 任务：必做任务未达标扣分支持按条件补救。
 - 修改文件：`server/api/utils.js`、`server/api/routes/parent.js`、`server/api/routes/shared.js`、`server/api/routes/child.js`、`src/ParentApp.tsx`、`src/ChildApp.tsx`、`src/types/api.ts`。

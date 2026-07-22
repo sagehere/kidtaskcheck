@@ -35,6 +35,11 @@ Do not read these directories unless the user explicitly asks and gives a specif
 - Use `rg` for targeted literal searches after the feature unit is identified.
 - Prefer precise file reads over broad exploration.
 
+## Git Publishing
+
+- Default all user-requested pushes to the remote `main` branch.
+- Do not create, switch to, or push a feature branch unless the user explicitly requests a branch or pull request workflow.
+
 ## Project Overview
 
 This is a Docker-first Node.js + React + SQLite family task check-in app. There is no legacy hosted-platform deployment path in this repository.

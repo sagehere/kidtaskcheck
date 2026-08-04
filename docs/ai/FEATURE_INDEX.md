@@ -1,6 +1,6 @@
 # FEATURE_INDEX
 
-最近更新：2026-06-30
+最近更新：2026-08-04
 
 本文件按“用户可感知功能”组织维护入口。P0 是默认必须读取文件；P1 是实现跨界或需要上下文时再读；P2 是 schema、测试、部署或高风险排查时谨慎读取。
 
@@ -58,15 +58,15 @@
 
 ## 5. 任务与分类配置
 
-- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制、展示图标和按完成程度给分标准。每日、周、月、一次性任务可设置可选提交截止时间：每日按时分且次日零点解锁，周按星期和时分、月按日期和时分（短月按月末）、一次性按完整日期时间；过期后儿童端禁止新提交，周期任务显示至下一周期的解锁倒计时，一次性显示已截止；已设置截止时间的儿童任务卡按系统时区显示截止时刻和秒级剩余倒计时。Emoji vendor 数据仅在 `EmojiSelect` 打开选择器时动态加载。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算；可为必做扣分设置补救条件、可挽回积分和小时期限，扣分时先冻结可用积分，家长确认后结算未挽回部分，超时则正式扣除；新建/修改后的任务不补扣上一周期；家长可在待处理页为孩子的必做任务当前周期豁免一次扣分，已豁免的当前周期任务在家长豁免面板和孩子任务显示中标记“已豁免”。现有任务列表中显示必做和截止规则摘要。
+- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制、展示图标和按完成程度给分标准。每日、周、月、一次性任务可设置可选提交截止时间：每日按时分且次日零点解锁，周按星期和时分、月按日期和时分（短月按月末）、一次性按完整日期时间；过期后儿童端禁止新提交，周期任务显示至下一周期的解锁倒计时，一次性显示已截止；家长可在待处理页按孩子和任务解除当前周期提交截止时间或撤销解除，解除仅跳过截止校验、不跳过星期和次数限制，周期任务到下一周期自动失效，一次性任务持续到撤销。已设置截止时间的儿童任务卡按系统时区显示截止时刻和秒级剩余倒计时。Emoji vendor 数据仅在 `EmojiSelect` 打开选择器时动态加载。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算；可为必做扣分设置补救条件、可挽回积分和小时期限，扣分时先冻结可用积分，家长确认后结算未挽回部分，超时则正式扣除；新建/修改后的任务不补扣上一周期；家长可在待处理页为孩子的必做任务当前周期豁免一次扣分，已豁免的当前周期任务在家长豁免面板和孩子任务显示中标记“已豁免”。现有任务列表中显示必做和截止规则摘要。
 - 用户入口：家长设置/配置区域中的任务和分类表单。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/EmojiSelect.tsx`
-- P2：`migrations/0001_initial.sql`、`migrations/0002_limits_and_repeat_submissions.sql`、`migrations/0005_feedback_templates_and_timezone.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`migrations/0022_required_tasks.sql`、`migrations/0030_required_task_penalty_remedies.sql`、`migrations/0031_task_submission_deadlines.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
+- P2：`migrations/0001_initial.sql`、`migrations/0002_limits_and_repeat_submissions.sql`、`migrations/0005_feedback_templates_and_timezone.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`migrations/0022_required_tasks.sql`、`migrations/0030_required_task_penalty_remedies.sql`、`migrations/0031_task_submission_deadlines.sql`、`migrations/0032_task_submission_deadline_exemptions.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
 - 主要调用链：`ParentApp.load` -> `/task-categories`、`/tasks`; `create/update/remove` -> `/task-categories`、`/tasks`; 孩子端从 `/dashboard/child` 接收可提交任务；必做结算 `settleRequiredTaskPenalties` 由 `server/scheduler-tick.mjs` 的共享 `schedulerTick` 函数（被内置 scheduler 和独立 scheduler 共同调用）每次 tick 显式触发，同时受 `maybeRunMaintenance` 的 24 小时清理闸门间接触发。
-- 相关状态：`task_categories`、`tasks`、`tasks.submission_deadline_json`、`task_assignees`、`task_submissions`、`task_required_penalties`、`tasks.grading_mode`、`tasks.completion_standards_json`
-- 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`、`POST /api/task-submissions`、`GET /api/dashboard/child`、`POST/DELETE /api/tasks/:id/required-penalty-exemptions`、`PATCH /api/task-required-penalties/:ledgerId/remedy`
-- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；截止时间以系统时区解释，每日任务在当天对应时刻截止并于次日零点解锁，周任务用 ISO 周一至周日，月末日期自动收敛；必须在儿童仪表盘和提交写入前复用同一截止判定，不能只依赖前端倒计时；缺失/旧截止配置均视为无限制；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；补救配置只在扣分生成时快照到 `point_ledger`，后续修改任务不影响既有补救；家长确认仅接受所属家庭、仍冻结且未超时的账本记录；家长任务列表 small 标签中追加必做规则摘要；完成程度给分使用任务行 JSON 档位，不拆独立表；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶；必做扣分按 `task_id + child_id + period_key` 每周期幂等结算，同周期不重复扣、不同周期各自生成独立扣分和账本记录；当前周期豁免复用 `task_required_penalties` 写入 0 分记录，撤销只删除当前周期 `penalty_points=0` 的豁免记录，前端只将 `penalty_points=0` 的当前周期记录显示为“已豁免”。
+- 相关状态：`task_categories`、`tasks`、`tasks.submission_deadline_json`、`task_assignees`、`task_submissions`、`task_submission_deadline_exemptions`、`task_required_penalties`、`tasks.grading_mode`、`tasks.completion_standards_json`
+- 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`、`POST /api/task-submissions`、`GET /api/dashboard/child`、`POST/DELETE /api/tasks/:id/submission-deadline-exemptions`、`POST/DELETE /api/tasks/:id/required-penalty-exemptions`、`PATCH /api/task-required-penalties/:ledgerId/remedy`
+- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；截止时间以系统时区解释，每日任务在当天对应时刻截止并于次日零点解锁，周任务用 ISO 周一至周日，月末日期自动收敛；必须在儿童仪表盘和提交写入前复用同一截止判定，不能只依赖前端倒计时；当前周期截止解除以 `task_id + child_id + period_key` 保存，提交和仪表盘均只在存在对应记录时跳过截止校验，撤销仅删除当前周期记录；缺失/旧截止配置均视为无限制；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；补救配置只在扣分生成时快照到 `point_ledger`，后续修改任务不影响既有补救；家长确认仅接受所属家庭、仍冻结且未超时的账本记录；家长任务列表 small 标签中追加必做规则摘要；完成程度给分使用任务行 JSON 档位，不拆独立表；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶；必做扣分按 `task_id + child_id + period_key` 每周期幂等结算，同周期不重复扣、不同周期各自生成独立扣分和账本记录；当前周期豁免复用 `task_required_penalties` 写入 0 分记录，撤销只删除当前周期 `penalty_points=0` 的豁免记录，前端只将 `penalty_points=0` 的当前周期记录显示为“已豁免”。
 - 最近更新时间：2026-08-04
 
 ## 6. 奖励、兑换、仓库与退款
@@ -110,7 +110,7 @@
 
 ## 9. 孩子端任务、积分与固定卡片
 
-- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候；成就墙支持隐藏称号，隐藏后可在仓库成就标签中展示回来。必做任务在任务墙中靠前排序并以醒目标记标识，卡片上提示"须完成X次"，当前周期已豁免时显示“已豁免”；设置提交截止时间的任务卡按系统时区显示截止时刻和秒级剩余倒计时，到期立即显示“已截止”并禁用提交。发生可补救的必做扣分时，在“待补救”面板显示条件、冻结积分、可挽回积分和倒计时。任务墙右上角支持"日程表显示"开关，打开后按已设置的日程时段组织任务，显示每个时段的计划内容，并保留未安排任务分组。
+- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候；成就墙支持隐藏称号，隐藏后可在仓库成就标签中展示回来。必做任务在任务墙中靠前排序并以醒目标记标识，卡片上提示"须完成X次"，当前周期已豁免时显示“已豁免”；设置提交截止时间的任务卡按系统时区显示截止时刻和秒级剩余倒计时，到期立即显示“已截止”并禁用提交；家长解除当前周期截止后显示“截止已解除”且允许提交。发生可补救的必做扣分时，在“待补救”面板显示条件、冻结积分、可挽回积分和倒计时。任务墙右上角支持"日程表显示"开关，打开后按已设置的日程时段组织任务，显示每个时段的计划内容，并保留未安排任务分组。
 - 用户入口：孩子登录后的首页、积分账本弹层、固定按钮。
 - P0：`src/ChildApp.tsx`、`server/api/routes/child.js`、`server/api/routes/shared.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/Shell.tsx`
@@ -118,7 +118,7 @@
 - 主要调用链：`ChildApp.load` -> `/dashboard/child`（任务、积分、冻结积分和 AI 问候）；submit -> `/task-submissions`; pin -> `/child-pins/:kind`; ledger -> `/points/ledger`; 仅进入仓库或相关操作后请求 `/warehouse`。
 - 相关状态：`task_submissions`、`point_ledger.freeze_status`、`child_pins`、`ai_child_greetings`
 - 相关接口：`GET /api/dashboard/child`、`GET /api/dashboard/child-summary`（兼容保留）、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`PATCH /api/child-achievements/:achievementId/visibility`、`GET /api/points/ledger`
-- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；`/dashboard/child` 返回 AI 缓存问候与刷新等待标记，孩子端不再重复请求 summary；任务卡的 `deadlineAt` 用于浏览器本地秒级倒计时，`localDeadlineAt` 必须由后端按系统时区格式化，不能使用设备时区重算截止时刻；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；孩子面板每日寄语显示上限为 200 个字符；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色；当前周期 0 分豁免记录在任务墙和日程任务卡显示绿色底色的“已豁免”；`requiredPenaltyRemedies` 与批评补救共用待补救展示，孩子不能自行确认。
+- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；`/dashboard/child` 返回 AI 缓存问候与刷新等待标记，孩子端不再重复请求 summary；任务卡的 `deadlineAt` 用于浏览器本地秒级倒计时，`localDeadlineAt` 必须由后端按系统时区格式化，不能使用设备时区重算截止时刻；`submissionDeadlineExempted` 只跳过当前周期截止校验，不能跳过任务星期或次数限制；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；孩子面板每日寄语显示上限为 200 个字符；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色；当前周期 0 分豁免记录在任务墙和日程任务卡显示绿色底色的“已豁免”；`requiredPenaltyRemedies` 与批评补救共用待补救展示，孩子不能自行确认。
 - 最近更新时间：2026-08-04
 
 ## 10. 积分账本、报表、打印与归档

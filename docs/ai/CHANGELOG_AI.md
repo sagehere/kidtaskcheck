@@ -1,5 +1,11 @@
 # 2026-08-04
 
+- 类型：功能新增
+- 任务：家长可解除或撤销当前周期的任务提交截止时间。
+- 修改文件：`src/{ParentApp,ChildApp}.tsx`、`server/api/{utils.js,routes/{parent,child,shared}.js}`、`migrations/0032_task_submission_deadline_exemptions.sql`、相关 API/迁移测试和功能索引。
+- 行为：按任务自身周期保存解除记录；提交接口和孩子任务卡同步跳过截止锁定，但继续执行星期和次数限制；周期任务自动随下一周期失效，一次性任务持续到撤销。
+- 验证：`rtk npm test -- tests/api.test.ts tests/migration.test.ts`（73 项）、`rtk npm run build` 通过。
+
 - 类型：维护规约
 - 任务：记录 GitHub HTTPS 推送故障的代理与认证排查顺序。
 - 修改文件：`AGENTS.md`。

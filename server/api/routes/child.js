@@ -14,11 +14,14 @@ export async function handleChildRoutes(path, method, request, env, actor, ctx) 
             return fail("NOT_ASSIGNED", "任务不存在或未分配给当前孩子", 404);
         const submittedAt = nowIso();
         const offset = await timezoneOffsetMinutes(env);
-        if (taskSubmissionDeadlineState(task.period, task.submission_deadline_json, submittedAt, offset).locked)
+        const pkey = periodKey(task.period, submittedAt, offset);
+        const deadlineExempted = await env.DB.prepare("SELECT 1 FROM task_submission_deadline_exemptions WHERE task_id=? AND child_id=? AND parent_id=? AND period_key=?")
+            .bind(task.id, a.id, a.parent_id, pkey)
+            .first();
+        if (taskSubmissionDeadlineState(task.period, task.submission_deadline_json, submittedAt, offset).locked && !deadlineExempted)
             return fail("TASK_SUBMISSION_DEADLINE_EXCEEDED", "已超过任务提交截止时间", 409);
         if (!isWeekdayAllowed(task.enabled_weekdays, submittedAt, offset))
             return fail("TASK_NOT_ENABLED_TODAY", "该任务今天未启用", 409);
-        const pkey = periodKey(task.period, submittedAt, offset);
         const used = await childUsageForPeriod(env, "task_submissions", "task_id", task.id, a.id, pkey, ["pending", "approved"]);
         if (used >= Number(task.limit_count || 1))
             return fail("LIMIT_REACHED", "已达到本周期提交次数限制", 409);
@@ -181,14 +184,18 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
         const enabledTasks = currentTasks.results.filter((task) => isWeekdayAllowed(task.enabled_weekdays, undefined, offset));
         const taskPeriods = enabledTasks.map((task) => ({ itemId: task.id, periodKey: periodKey(task.period, undefined, offset) }));
         const periodKeys = [...new Set(taskPeriods.map((task) => task.periodKey))];
-        const [taskUsageCounts, taskStatuses, exemptionRows] = await Promise.all([
+        const [taskUsageCounts, taskStatuses, exemptionRows, deadlineExemptionRows] = await Promise.all([
             childUsageCountsForPeriods(env, "task_submissions", "task_id", a.id, taskPeriods, ["pending", "approved"]),
             childLatestTaskStatuses(env, a.id, taskPeriods),
             periodKeys.length
                 ? env.DB.prepare(`SELECT task_id, period_key FROM task_required_penalties WHERE child_id=? AND penalty_points=0 AND period_key IN (${periodKeys.map(() => "?").join(",")})`).bind(a.id, ...periodKeys).all()
+                : { results: [] },
+            periodKeys.length
+                ? env.DB.prepare(`SELECT task_id, period_key FROM task_submission_deadline_exemptions WHERE child_id=? AND parent_id=? AND period_key IN (${periodKeys.map(() => "?").join(",")})`).bind(a.id, a.parent_id, ...periodKeys).all()
                 : { results: [] }
         ]);
         const exempted = new Set(exemptionRows.results.map((row) => `${row.task_id}:${row.period_key}`));
+        const deadlineExempted = new Set(deadlineExemptionRows.results.map((row) => `${row.task_id}:${row.period_key}`));
         const taskRows = enabledTasks.map((task, index) => {
             const pkey = taskPeriods[index].periodKey;
             const key = `${task.id}:${pkey}`;
@@ -197,6 +204,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             const rejected = taskStatuses.rejected.get(key);
             const limitCount = Number(task.limit_count || 1);
             const deadline = taskSubmissionDeadlineState(task.period, task.submission_deadline_json, undefined, offset);
+            const submissionDeadlineExempted = deadlineExempted.has(key);
             const limitReached = activeCount >= limitCount;
             return {
                 ...task,
@@ -205,14 +213,15 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
                 limitCount,
                 usedCount: activeCount,
                 remainingCount: Math.max(0, limitCount - activeCount),
-                canSubmit: !limitReached && !deadline.locked,
+                canSubmit: !limitReached && (!deadline.locked || submissionDeadlineExempted),
                 deadlineAt: deadline.deadlineAt,
                 localDeadlineAt: deadline.deadlineAt ? localTimeText(deadline.deadlineAt, offset) : "",
                 resetAt: deadline.locked ? deadline.unlockAt : nextPeriodReset(task.period, undefined, offset),
-                submitLockReason: deadline.locked ? "deadline" : limitReached ? "limit" : null,
+                submitLockReason: deadline.locked && !submissionDeadlineExempted ? "deadline" : limitReached ? "limit" : null,
                 submissionStatus: latest?.status || null,
                 rejectionNote: rejected?.review_note || "",
                 requiredPenaltyExempted: exempted.has(key),
+                submissionDeadlineExempted,
                 isPinned: task.id === pinnedTaskId
             };
         });

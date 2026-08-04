@@ -9,7 +9,7 @@ const MIGRATIONS_DIR = join(__dirname, "../migrations");
 describe("Task 35: Migration Smoke Test", () => {
   it("all migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(31);
+    expect(files.length).toBe(32);
     const db = new SqliteTestDb();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
@@ -66,6 +66,7 @@ describe("Task 35: Migration Smoke Test", () => {
     const reportIndexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_ledger_child_parent_created'").first() as any;
     expect(reportIndexes?.name).toBe("idx_ledger_child_parent_created");
     expect(tableNames).toContain("task_required_penalties");
+    expect(tableNames).toContain("task_submission_deadline_exemptions");
     const taskColumns = db.prepare("PRAGMA table_info(tasks)").all().results as any[];
     const taskColumnNames = taskColumns.map((column: any) => column.name);
     expect(taskColumnNames).toContain("is_required");

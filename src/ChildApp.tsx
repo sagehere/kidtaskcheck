@@ -118,7 +118,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     const deadlineAt = task.deadlineAt ? Date.parse(task.deadlineAt) : NaN;
     const resetAt = task.resetAt ? Date.parse(task.resetAt) : NaN;
     const deadlineActive = Number.isFinite(deadlineAt) && (!Number.isFinite(resetAt) || now < resetAt);
-    const deadlineLocked = deadlineActive && deadlineAt <= now || task.submitLockReason === "deadline" && (!Number.isFinite(resetAt) || now < resetAt);
+    const deadlineLocked = !task.submissionDeadlineExempted && (deadlineActive && deadlineAt <= now || task.submitLockReason === "deadline" && (!Number.isFinite(resetAt) || now < resetAt));
     const limited = deadlineLocked || task.submitLockReason !== "deadline" && !task.canSubmit;
     const busyId = busy === "task:" + task.id;
     const points = (task.point_type === "earn" ? "+" : "-") + task.points;
@@ -139,9 +139,10 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           <span>{task.usedCount}/{task.limitCount} 次</span>
           {isRequired && <span className="required-tag">须完成{task.required_count || 1}次</span>}
           {task.requiredPenaltyExempted && <span className="exempted-tag">已豁免</span>}
+          {task.submissionDeadlineExempted && <span className="exempted-tag">截止已解除</span>}
           <span>{task.periodKey}</span>
           {deadlineActive && <span>截止：{task.localDeadlineAt || formatTime(task.deadlineAt)}</span>}
-          {deadlineActive && <span className={deadlineLocked ? "negative" : ""}>{deadlineLocked ? "已截止" : `剩余：${formatCountdown(deadlineAt - now, true)}`}</span>}
+          {deadlineActive && <span className={deadlineLocked ? "negative" : ""}>{task.submissionDeadlineExempted ? "本周期截止已解除" : deadlineLocked ? "已截止" : `剩余：${formatCountdown(deadlineAt - now, true)}`}</span>}
         </div>
         <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
           {busyId ? "提交中..." : limited ? deadlineLocked ? formatReset(task.resetAt, "距提交解锁", "已截止") : formatReset(task.resetAt) : "提交完成"}

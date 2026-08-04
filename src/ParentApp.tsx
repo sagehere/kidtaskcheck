@@ -454,6 +454,20 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     );
   }
 
+  async function exemptSubmissionDeadline(data: { childId: string; taskId: string }) {
+    await run(
+      () => api(`/tasks/${data.taskId}/submission-deadline-exemptions`, { method: "POST", body: JSON.stringify({ childId: data.childId }) }),
+      "本周期提交截止时间已解除"
+    );
+  }
+
+  async function revokeSubmissionDeadlineExemption(data: { childId: string; taskId: string }) {
+    await run(
+      () => api(`/tasks/${data.taskId}/submission-deadline-exemptions`, { method: "DELETE", body: JSON.stringify({ childId: data.childId }) }),
+      "本周期提交截止时间解除已撤销"
+    );
+  }
+
   function exportChildPrint(child: Child) {
     window.open(`/api/children/${encodeURIComponent(child.id)}/export-print`, "_blank", "noopener,noreferrer");
   }
@@ -725,6 +739,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           <div className="grid two">
             <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} remedyItems={[...(dashboard.remedyCriticisms || []), ...(dashboard.requiredPenaltyRemedies || [])]} onRemedy={(id, sourceType) => void confirmRemedy(id, sourceType)} />
             <RequiredPenaltyExemptionPanel children={children} tasks={tasks} exemptions={dashboard.requiredPenaltyExemptions || []} onSubmit={exemptRequiredPenalty} onRevoke={revokeRequiredPenaltyExemption} />
+            <SubmissionDeadlineExemptionPanel children={children} tasks={tasks} exemptions={dashboard.submissionDeadlineExemptions || []} onSubmit={exemptSubmissionDeadline} onRevoke={revokeSubmissionDeadlineExemption} />
           </div>
         </>
       )}
@@ -1285,6 +1300,38 @@ export function RequiredPenaltyExemptionPanel({ children, tasks, exemptions = []
           {!requiredTasks.length && <Empty text="该孩子暂无可豁免的必做任务" />}
           {selectedExempted && <span className="exempted-tag">已豁免</span>}
           {selectedExempted ? <button type="button" className="secondary" disabled={!taskId} onClick={() => onRevoke({ childId, taskId })}><RotateCcw size={18} />撤销豁免</button> : <button className="secondary" disabled={!taskId}><BadgeCheck size={18} />豁免本周期</button>}
+        </form>
+      )}
+    </section>
+  );
+}
+
+export function SubmissionDeadlineExemptionPanel({ children, tasks, exemptions = [], onSubmit, onRevoke }: { children: Child[]; tasks: Task[]; exemptions?: { childId: string; taskId: string }[]; onSubmit: (data: { childId: string; taskId: string }) => void; onRevoke: (data: { childId: string; taskId: string }) => void }) {
+  const [data, setData] = useState({ childId: "", taskId: "" });
+  const childId = data.childId || children[0]?.id || "";
+  const deadlineTasks = tasks.filter((task) => task.is_active !== 0 && (task.assignees || []).includes(childId) && !!parseSubmissionDeadline(task));
+  const taskId = deadlineTasks.some((task) => task.id === data.taskId) ? data.taskId : "";
+  const exemptedTaskIds = new Set(exemptions.filter((item) => item.childId === childId).map((item) => item.taskId));
+  const selectedExempted = taskId ? exemptedTaskIds.has(taskId) : false;
+  return (
+    <section className="panel">
+      <div className="panel-title"><BadgeCheck /><h2>提交截止解除</h2></div>
+      {!children.length ? <Empty text="先创建孩子账号后再操作" /> : (
+        <form className="stack compact" onSubmit={(event) => { event.preventDefault(); if (childId && taskId && !selectedExempted) onSubmit({ childId, taskId }); }}>
+          <Field label="孩子">
+            <select value={childId} onChange={(e) => setData({ childId: e.target.value, taskId: "" })}>
+              {children.map((child) => <option key={child.id} value={child.id}>{child.display_name}</option>)}
+            </select>
+          </Field>
+          <Field label="有截止时间的任务">
+            <select value={taskId} onChange={(e) => setData({ ...data, taskId: e.target.value })} disabled={!deadlineTasks.length}>
+              <option value="">请选择本周期解除任务</option>
+              {deadlineTasks.map((task) => <option key={task.id} value={task.id}>{task.title} · {submissionDeadlineText(task.period || "daily", parseSubmissionDeadline(task))}{exemptedTaskIds.has(task.id) ? " · 已解除" : ""}</option>)}
+            </select>
+          </Field>
+          {!deadlineTasks.length && <Empty text="该孩子暂无设置提交截止时间的任务" />}
+          {selectedExempted && <span className="exempted-tag">截止已解除</span>}
+          {selectedExempted ? <button type="button" className="secondary" disabled={!taskId} onClick={() => onRevoke({ childId, taskId })}><RotateCcw size={18} />撤销解除</button> : <button className="secondary" disabled={!taskId}><BadgeCheck size={18} />解除本周期截止</button>}
         </form>
       )}
     </section>

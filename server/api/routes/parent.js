@@ -981,6 +981,35 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run();
         return ok(true);
     }
+    const deadlineExemption = path.match(/^\/tasks\/([^/]+)\/submission-deadline-exemptions$/);
+    if (deadlineExemption && (method === "POST" || method === "DELETE")) {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const input = await body(request);
+        await ensureRequiredTaskSchema(env);
+        const task = await env.DB.prepare("SELECT t.* FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id AND ta.child_id=? JOIN children c ON c.id=ta.child_id AND c.parent_id=t.parent_id AND c.status='active' AND c.deleted_at IS NULL WHERE t.id=? AND t.parent_id=? AND t.is_active=1 AND t.deleted_at IS NULL")
+            .bind(input.childId, deadlineExemption[1], a.id)
+            .first();
+        if (!task || !normalizeTaskSubmissionDeadline(task.period, task.submission_deadline_json))
+            return fail("NOT_FOUND", "可解除截止时间的任务不存在", 404);
+        const periodKeyValue = periodKey(task.period, nowIso(), await timezoneOffsetMinutes(env));
+        if (method === "DELETE") {
+            const removed = await env.DB.prepare("DELETE FROM task_submission_deadline_exemptions WHERE task_id=? AND child_id=? AND parent_id=? AND period_key=?")
+                .bind(task.id, input.childId, a.id, periodKeyValue)
+                .run();
+            if (!(removed.meta?.changes || 0))
+                return fail("NOT_FOUND", "本周期未解除提交截止时间", 404);
+            return ok(true);
+        }
+        const existing = await env.DB.prepare("SELECT 1 FROM task_submission_deadline_exemptions WHERE task_id=? AND child_id=? AND parent_id=? AND period_key=?")
+            .bind(task.id, input.childId, a.id, periodKeyValue)
+            .first();
+        if (existing)
+            return fail("ALREADY_SETTLED", "该任务本周期提交截止时间已解除", 409);
+        await env.DB.prepare("INSERT INTO task_submission_deadline_exemptions (task_id, child_id, parent_id, period_key) VALUES (?, ?, ?, ?)")
+            .bind(task.id, input.childId, a.id, periodKeyValue)
+            .run();
+        return ok(true);
+    }
     const taskPatch = path.match(/^\/tasks\/([^/]+)$/);
     if (taskPatch && method === "PATCH") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);

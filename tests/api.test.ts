@@ -189,9 +189,43 @@ describe("Real Child Session Integration", () => {
       expect(blocked!.status).toBe(409);
       expect((await blocked!.json()).error.code).toBe("TASK_SUBMISSION_DEADLINE_EXCEEDED");
 
+      const parent = { type: "user", role: "parent", id: pid, displayName: "P" };
+      const unlock = await safe(handleParentRoutes, `/tasks/${task.id}/submission-deadline-exemptions`, "POST", makeRequest("POST", `/tasks/${task.id}/submission-deadline-exemptions`, { childId: cid }), env, parent);
+      expect(unlock!.status).toBe(200);
+      const duplicateUnlock = await safe(handleParentRoutes, `/tasks/${task.id}/submission-deadline-exemptions`, "POST", makeRequest("POST", `/tasks/${task.id}/submission-deadline-exemptions`, { childId: cid }), env, parent);
+      expect(duplicateUnlock!.status).toBe(409);
+      const parentDashboard = await safe(handleSharedRoutes, "/dashboard/parent", "GET", makeRequest("GET", "/dashboard/parent"), env, parent, { waitUntil: () => {} });
+      expect((await parentDashboard!.json()).data.submissionDeadlineExemptions).toContainEqual(expect.objectContaining({ childId: cid, taskId: task.id }));
+      const unlockedDashboard = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, actor, { waitUntil: () => {} });
+      expect((await unlockedDashboard!.json()).data.tasks[0]).toMatchObject({ canSubmit: true, submitLockReason: null, submissionDeadlineExempted: true });
+
+      const revoke = await safe(handleParentRoutes, `/tasks/${task.id}/submission-deadline-exemptions`, "DELETE", makeRequest("DELETE", `/tasks/${task.id}/submission-deadline-exemptions`, { childId: cid }), env, parent);
+      expect(revoke!.status).toBe(200);
+      const missingRevoke = await safe(handleParentRoutes, `/tasks/${task.id}/submission-deadline-exemptions`, "DELETE", makeRequest("DELETE", `/tasks/${task.id}/submission-deadline-exemptions`, { childId: cid }), env, parent);
+      expect(missingRevoke!.status).toBe(404);
+      const relockedDashboard = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, actor, { waitUntil: () => {} });
+      expect((await relockedDashboard!.json()).data.tasks[0]).toMatchObject({ canSubmit: false, submitLockReason: "deadline", submissionDeadlineExempted: false });
+
+      const foreignParent = id();
+      const foreignChild = id();
+      env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, ?, 'x', 'parent', 'Other')").bind(foreignParent, "other-parent").run();
+      env.DB.prepare("INSERT INTO children (id, parent_id, username, password_hash, display_name, status) VALUES (?, ?, ?, 'x', 'Other child', 'active')").bind(foreignChild, foreignParent, "other-child").run();
+      env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(task.id, foreignChild).run();
+      const foreignUnlock = await safe(handleParentRoutes, `/tasks/${task.id}/submission-deadline-exemptions`, "POST", makeRequest("POST", `/tasks/${task.id}/submission-deadline-exemptions`, { childId: foreignChild }), env, parent);
+      expect(foreignUnlock!.status).toBe(404);
+
+      const secondUnlock = await safe(handleParentRoutes, `/tasks/${task.id}/submission-deadline-exemptions`, "POST", makeRequest("POST", `/tasks/${task.id}/submission-deadline-exemptions`, { childId: cid }), env, parent);
+      expect(secondUnlock!.status).toBe(200);
       vi.setSystemTime(new Date("2026-05-26T16:01:00.000Z"));
-      const reopened = await safe(handleChildRoutes, "/task-submissions", "POST", makeRequest("POST", "/task-submissions", { taskId: task.id }), env, actor);
-      expect(reopened!.status).toBe(200);
+      const nextPeriodDashboard = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, actor, { waitUntil: () => {} });
+      expect((await nextPeriodDashboard!.json()).data.tasks[0]).toMatchObject({ canSubmit: true, submissionDeadlineExempted: false });
+
+      env.DB.prepare("UPDATE tasks SET period='once', submission_deadline_json=? WHERE id=?").bind(JSON.stringify({ at: "2026-05-26T09:00" }), task.id).run();
+      const onceUnlock = await safe(handleParentRoutes, `/tasks/${task.id}/submission-deadline-exemptions`, "POST", makeRequest("POST", `/tasks/${task.id}/submission-deadline-exemptions`, { childId: cid }), env, parent);
+      expect(onceUnlock!.status).toBe(200);
+      vi.setSystemTime(new Date("2026-05-27T16:01:00.000Z"));
+      const onceDashboard = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, actor, { waitUntil: () => {} });
+      expect((await onceDashboard!.json()).data.tasks[0]).toMatchObject({ canSubmit: true, submissionDeadlineExempted: true });
     } finally {
       vi.useRealTimers();
     }

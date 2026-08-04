@@ -172,10 +172,16 @@ describe("Real Child Session Integration", () => {
   it("locks expired daily deadlines in the dashboard and submission endpoint", async () => {
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(new Date("2026-05-26T02:00:00.000Z"));
+      vi.setSystemTime(new Date("2026-05-26T00:59:00.000Z"));
       const task = env.DB.prepare("SELECT id FROM tasks WHERE parent_id=?").bind(pid).first() as any;
-      env.DB.prepare("UPDATE tasks SET period='daily', submission_deadline_json=? WHERE id=?").bind(JSON.stringify({ time: "09:00" }), task.id).run();
       const actor = { type: "child", role: "child", id: cid, parent_id: pid, parentId: pid, displayName: "Child" };
+      const noDeadlineDashboard = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, actor, { waitUntil: () => {} });
+      expect((await noDeadlineDashboard!.json()).data.tasks[0]).toMatchObject({ deadlineAt: null, localDeadlineAt: "" });
+      env.DB.prepare("UPDATE tasks SET period='daily', submission_deadline_json=? WHERE id=?").bind(JSON.stringify({ time: "09:00" }), task.id).run();
+      const beforeDeadline = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, actor, { waitUntil: () => {} });
+      expect((await beforeDeadline!.json()).data.tasks[0]).toMatchObject({ canSubmit: true, deadlineAt: "2026-05-26T01:00:00.000Z", localDeadlineAt: "2026-05-26 09:00:00" });
+
+      vi.setSystemTime(new Date("2026-05-26T02:00:00.000Z"));
       const dashboard = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, actor, { waitUntil: () => {} });
       const item = (await dashboard!.json()).data.tasks[0];
       expect(item).toMatchObject({ canSubmit: false, submitLockReason: "deadline", resetAt: "2026-05-26T16:00:00.000Z" });

@@ -114,8 +114,12 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   }
 
   function renderTaskCard(task: any, pinned = false) {
-    const deadlineLocked = task.submitLockReason === "deadline" && (!task.resetAt || new Date(task.resetAt).getTime() > Date.now());
-    const limited = task.submitLockReason === "deadline" ? deadlineLocked : !task.canSubmit;
+    const now = Date.now();
+    const deadlineAt = task.deadlineAt ? Date.parse(task.deadlineAt) : NaN;
+    const resetAt = task.resetAt ? Date.parse(task.resetAt) : NaN;
+    const deadlineActive = Number.isFinite(deadlineAt) && (!Number.isFinite(resetAt) || now < resetAt);
+    const deadlineLocked = deadlineActive && deadlineAt <= now || task.submitLockReason === "deadline" && (!Number.isFinite(resetAt) || now < resetAt);
+    const limited = deadlineLocked || task.submitLockReason !== "deadline" && !task.canSubmit;
     const busyId = busy === "task:" + task.id;
     const points = (task.point_type === "earn" ? "+" : "-") + task.points;
     const isRequired = task.is_required === 1;
@@ -136,9 +140,11 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           {isRequired && <span className="required-tag">须完成{task.required_count || 1}次</span>}
           {task.requiredPenaltyExempted && <span className="exempted-tag">已豁免</span>}
           <span>{task.periodKey}</span>
+          {deadlineActive && <span>截止：{task.localDeadlineAt || formatTime(task.deadlineAt)}</span>}
+          {deadlineActive && <span className={deadlineLocked ? "negative" : ""}>{deadlineLocked ? "已截止" : `剩余：${formatCountdown(deadlineAt - now, true)}`}</span>}
         </div>
         <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
-          {busyId ? "提交中..." : limited ? task.submitLockReason === "deadline" ? formatReset(task.resetAt, "距提交解锁", "已截止") : formatReset(task.resetAt) : "提交完成"}
+          {busyId ? "提交中..." : limited ? deadlineLocked ? formatReset(task.resetAt, "距提交解锁", "已截止") : formatReset(task.resetAt) : "提交完成"}
         </button>
       </article>
     );
@@ -184,13 +190,21 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const availableScheduleTasks = activeTasks.filter((task: any) => scheduledCountForTask(task.id) < getTaskScheduleLimit(task.id));
   const selectedScheduleSlot = schedule.slots.find((slot) => slot.id === activeScheduleSlotId);
 
-  function formatCountdown(ms: number) {
+  function formatCountdown(ms: number, clock = false) {
     const total = Math.max(0, Math.floor(ms / 1000));
-    const hours = Math.floor(total / 3600);
+    if (!clock) {
+      const hours = Math.floor(total / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      const seconds = total % 60;
+      if (hours > 0) return `${hours}小时${String(minutes).padStart(2, "0")}分`;
+      return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
+    }
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor(total % 86400 / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const seconds = total % 60;
-    if (hours > 0) return `${hours}小时${String(minutes).padStart(2, "0")}分`;
-    return `${minutes}分${String(seconds).padStart(2, "0")}秒`;
+    const time = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    return days ? `${days}天 ${time}` : time;
   }
 
   async function loadDashboard() {

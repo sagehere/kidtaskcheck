@@ -1,5 +1,11 @@
 # 2026-08-04
 
+- 类型：维护规约
+- 任务：记录 GitHub HTTPS 推送故障的代理与认证排查顺序。
+- 修改文件：`AGENTS.md`。
+- 行为：本机 GitHub 流量固定使用 `socks5://127.0.0.1:10808`；先验证 `git ls-remote`，不再仅因 `gh auth status` 失败要求重复授权。
+- 验证：`git ls-remote origin HEAD` 与 `git push origin main` 已确认成功。
+
 - 类型：功能修复
 - 任务：每日任务支持按时分设置提交截止时间，截止后于次日零点自动解锁。
 - 修改文件：`src/ParentApp.tsx`、`src/lib/domain.{ts,js}`、`server/api/routes/parent.js`、相关 API/领域测试和功能索引。
@@ -398,6 +404,18 @@
 - 业务代码：`server/api/routes/child.js`、`server/api/routes/shared.js`、`src/ChildApp.tsx`、`src/ParentApp.tsx`、`src/styles.css`、`src/types/api.ts`
 - 测试：`tests/ledger.test.ts`
 - 验证：待运行 `npm.cmd test -- --run tests/ledger.test.ts`
+
+## 2026-08-04
+
+- 类型：功能增强
+- 范围：儿童任务墙截止时间与倒计时
+- 摘要：
+  - `/dashboard/child` 为任务返回 UTC `deadlineAt` 与系统时区 `localDeadlineAt`。
+  - 普通、日程分组和置顶任务卡复用同一渲染逻辑显示截止时刻和秒级倒计时，到期即时显示“已截止”。
+  - 扩展截止 API 测试，覆盖无截止、截止前展示字段与截止后锁定。
+- 业务代码：`server/api/routes/child.js`、`src/ChildApp.tsx`
+- 测试：`tests/api.test.ts`
+- 验证：`npm test -- tests/api.test.ts`（69 passed）；`npm run build`（通过）
 
 
 ## 2026-07-07

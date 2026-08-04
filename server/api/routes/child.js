@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, taskSubmissionDeadlineState } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, localTimeText, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -206,6 +206,8 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
                 usedCount: activeCount,
                 remainingCount: Math.max(0, limitCount - activeCount),
                 canSubmit: !limitReached && !deadline.locked,
+                deadlineAt: deadline.deadlineAt,
+                localDeadlineAt: deadline.deadlineAt ? localTimeText(deadline.deadlineAt, offset) : "",
                 resetAt: deadline.locked ? deadline.unlockAt : nextPeriodReset(task.period, undefined, offset),
                 submitLockReason: deadline.locked ? "deadline" : limitReached ? "limit" : null,
                 submissionStatus: latest?.status || null,

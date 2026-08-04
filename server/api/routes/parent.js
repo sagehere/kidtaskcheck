@@ -16,7 +16,7 @@ const reportDateText = (value, offset) => localTimeText(value, offset).slice(0, 
 function taskSubmissionDeadline(input, period) {
     const value = input.submissionDeadline;
     const deadline = normalizeTaskSubmissionDeadline(period, value);
-    if (period !== "daily" && value !== null && value !== undefined && value !== "" && !deadline)
+    if (value !== null && value !== undefined && value !== "" && !deadline)
         return { error: "提交截止时间格式无效" };
     return { value: JSON.stringify(deadline) };
 }

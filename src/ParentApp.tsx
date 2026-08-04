@@ -27,17 +27,20 @@ function parseSubmissionDeadline(item: any): SubmissionDeadline | null {
   try { return JSON.parse(item?.submission_deadline_json || "null"); } catch { return null; }
 }
 function defaultSubmissionDeadline(period: string): SubmissionDeadline {
+  if (period === "daily") return { time: "23:59" };
   if (period === "weekly") return { weekday: 7, time: "23:59" };
   if (period === "monthly") return { day: 31, time: "23:59" };
   return { at: "" };
 }
 function submissionDeadlineText(period: string, value: SubmissionDeadline | null) {
   if (!value) return "";
+  if (period === "daily") return value.time ? `提交截止：每日 ${value.time}` : "";
   if (period === "weekly") return `提交截止：周${["日", "一", "二", "三", "四", "五", "六"][Number(value.weekday || 7) % 7]} ${value.time || ""}`;
   if (period === "monthly") return `提交截止：每月${value.day}日 ${value.time || ""}`;
   return value.at ? `提交截止：${value.at.replace("T", " ")}` : "";
 }
 function SubmissionDeadlineFields({ period, value, onChange }: { period: string; value: SubmissionDeadline; onChange: (value: SubmissionDeadline) => void }) {
+  if (period === "daily") return <Field label="截止时刻"><input required type="time" value={value.time || ""} onChange={(e) => onChange({ time: e.target.value })} /></Field>;
   if (period === "weekly") return <div className="grid two compact-fields">
     <Field label="截止星期"><select value={value.weekday ?? 7} onChange={(e) => onChange({ ...value, weekday: Number(e.target.value) })}>{[1, 2, 3, 4, 5, 6, 7].map((day) => <option key={day} value={day}>周{["一", "二", "三", "四", "五", "六", "日"][day - 1]}</option>)}</select></Field>
     <Field label="截止时刻"><input required type="time" value={value.time || ""} onChange={(e) => onChange({ ...value, time: e.target.value })} /></Field>
@@ -1589,10 +1592,10 @@ export function CreateTask({ children, categories, onCreate }: { children: Child
           <option value="once">一次性</option>
         </select>
       </Field>
-      {data.period !== "daily" && <>
+      <>
         <Toggle label="设置提交截止时间" checked={data.submissionDeadlineEnabled} onChange={(submissionDeadlineEnabled) => setData({ ...data, submissionDeadlineEnabled, submissionDeadline: submissionDeadlineEnabled ? defaultSubmissionDeadline(data.period) : null })} />
         {data.submissionDeadlineEnabled && <SubmissionDeadlineFields period={data.period} value={data.submissionDeadline || defaultSubmissionDeadline(data.period)} onChange={(submissionDeadline) => setData({ ...data, submissionDeadline })} />}
-      </>}
+      </>
       <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
       <Field label="启用周几"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
@@ -2144,10 +2147,10 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
         <>
           <Field label="分类"><select value={data.categoryId} onChange={(e) => setData({ ...data, categoryId: e.target.value })}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
           <Field label="周期"><select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value, isRequired: e.target.value === "once" ? false : data.isRequired, submissionDeadlineEnabled: false, submissionDeadline: null })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
-          {data.period !== "daily" && <>
+          <>
             <Toggle label="设置提交截止时间" checked={data.submissionDeadlineEnabled} onChange={(submissionDeadlineEnabled) => setData({ ...data, submissionDeadlineEnabled, submissionDeadline: submissionDeadlineEnabled ? defaultSubmissionDeadline(data.period) : null })} />
             {data.submissionDeadlineEnabled && <SubmissionDeadlineFields period={data.period} value={data.submissionDeadline || defaultSubmissionDeadline(data.period)} onChange={(submissionDeadline) => setData({ ...data, submissionDeadline })} />}
-          </>}
+          </>
           <Field label="次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
           <Field label="启用周几"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
           <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>

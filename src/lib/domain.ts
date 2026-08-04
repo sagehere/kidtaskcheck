@@ -89,6 +89,7 @@ export function nextPeriodReset(period: RewardLimitPeriod, input?: string | Date
 }
 
 export type TaskSubmissionDeadline =
+  | { time: string }
   | { weekday: number; time: string }
   | { day: number; time: string }
   | { at: string };
@@ -111,12 +112,16 @@ function localDateTimeParts(value: unknown) {
 }
 
 export function normalizeTaskSubmissionDeadline(period: Period, value: unknown): TaskSubmissionDeadline | null {
-  if (period === "daily" || value === null || value === undefined || value === "") return null;
+  if (value === null || value === undefined || value === "") return null;
   let rule: any = value;
   if (typeof value === "string") {
     try { rule = JSON.parse(value); } catch { return null; }
   }
   if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
+  if (period === "daily") {
+    const time = deadlineTimeParts(rule.time);
+    return time ? { time: time.time } : null;
+  }
   if (period === "weekly") {
     const weekday = Number(rule.weekday);
     const time = deadlineTimeParts(rule.time);
@@ -138,7 +143,10 @@ export function taskSubmissionDeadlineState(period: Period, value: unknown, inpu
   const year = date.getUTCFullYear();
   const month = date.getUTCMonth();
   let deadlineAt: string;
-  if (period === "weekly" && "weekday" in rule) {
+  if (period === "daily" && "time" in rule) {
+    const time = deadlineTimeParts(rule.time)!;
+    deadlineAt = utcFromZonedParts(year, month, date.getUTCDate(), timezoneOffsetMinutes, time.hour, time.minute).toISOString();
+  } else if (period === "weekly" && "weekday" in rule) {
     const currentWeekday = date.getUTCDay() || 7;
     const time = deadlineTimeParts(rule.time)!;
     deadlineAt = utcFromZonedParts(year, month, date.getUTCDate() - currentWeekday + rule.weekday, timezoneOffsetMinutes, time.hour, time.minute).toISOString();

@@ -1,5 +1,11 @@
 # 2026-08-04
 
+- 类型：功能修复
+- 任务：每日任务支持按时分设置提交截止时间，截止后于次日零点自动解锁。
+- 修改文件：`src/ParentApp.tsx`、`src/lib/domain.{ts,js}`、`server/api/routes/parent.js`、相关 API/领域测试和功能索引。
+- 行为：每日规则使用 `{ time: "HH:mm" }`；家长表单显示原生时间输入，儿童端复用既有截止倒计时和提交接口拦截。
+- 验证：`rtk npm test -- --run tests/domain.test.ts tests/api.test.ts`（88 项）、`rtk npm test`（153 项）、`rtk npm run build` 均通过。
+
 - 类型：功能新增
 - 任务：家长可为周、月和一次性任务设置提交截止时间，儿童端在截止后禁止提交并显示解锁倒计时或已截止状态。
 - 修改文件：`src/{ParentApp,ChildApp}.tsx`、`src/components/UI.tsx`、`src/lib/domain.{ts,js}`、`server/api/{utils.js,routes/{parent,child,shared}.js}`、`migrations/0031_task_submission_deadlines.sql`、相关测试与功能索引。

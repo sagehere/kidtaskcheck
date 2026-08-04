@@ -75,10 +75,19 @@ describe("task submission deadlines", () => {
     expect(taskSubmissionDeadlineState("once", { at: "2026-03-01T09:00" }, "2026-03-01T01:00:00.000Z")).toMatchObject({ locked: true, unlockAt: null });
   });
 
-  it("rejects malformed deadline rules and leaves daily tasks unrestricted", () => {
+  it("locks daily tasks at the configured time and unlocks at the next local midnight", () => {
+    const rule = { time: "09:00" };
+    expect(normalizeTaskSubmissionDeadline("daily", rule)).toEqual(rule);
+    expect(taskSubmissionDeadlineState("daily", rule, "2026-03-01T00:59:00.000Z")).toMatchObject({ locked: false, deadlineAt: "2026-03-01T01:00:00.000Z" });
+    expect(taskSubmissionDeadlineState("daily", rule, "2026-03-01T01:00:00.000Z")).toMatchObject({ locked: true, unlockAt: "2026-03-01T16:00:00.000Z" });
+    expect(taskSubmissionDeadlineState("daily", rule, "2026-03-01T08:59:00.000Z", 0)).toMatchObject({ locked: false, deadlineAt: "2026-03-01T09:00:00.000Z" });
+  });
+
+  it("rejects malformed deadline rules", () => {
     expect(normalizeTaskSubmissionDeadline("weekly", { weekday: 8, time: "09:00" })).toBeNull();
     expect(normalizeTaskSubmissionDeadline("monthly", { day: 31, time: "24:00" })).toBeNull();
-    expect(taskSubmissionDeadlineState("daily", { at: "2026-03-01T09:00" }, "2026-03-01T10:00:00.000Z")).toMatchObject({ locked: false, deadlineAt: null });
+    expect(normalizeTaskSubmissionDeadline("daily", { time: "24:00" })).toBeNull();
+    expect(normalizeTaskSubmissionDeadline("daily", { at: "2026-03-01T09:00" })).toBeNull();
   });
 });
 

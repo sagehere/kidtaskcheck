@@ -1,3 +1,11 @@
+# 2026-08-04
+
+- 类型：功能新增
+- 任务：家长可为周、月和一次性任务设置提交截止时间，儿童端在截止后禁止提交并显示解锁倒计时或已截止状态。
+- 修改文件：`src/{ParentApp,ChildApp}.tsx`、`src/components/UI.tsx`、`src/lib/domain.{ts,js}`、`server/api/{utils.js,routes/{parent,child,shared}.js}`、`migrations/0031_task_submission_deadlines.sql`、相关测试与功能索引。
+- 行为：截止规则存为任务 JSON 配置，按系统时区即时计算；周/月到下一周期解锁，短月份按月末处理，一次性截止后保持可见且锁定；提交接口以 `TASK_SUBMISSION_DEADLINE_EXCEEDED` 再次强制校验；导入导出和配置组会保留规则。
+- 验证：`rtk npm run build`；`rtk npm test`（152 项）。
+
 # 2026-07-22
 
 - 类型：报表内容优化

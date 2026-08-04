@@ -58,16 +58,16 @@
 
 ## 5. 任务与分类配置
 
-- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制、展示图标和按完成程度给分标准。Emoji vendor 数据仅在 `EmojiSelect` 打开选择器时动态加载。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算；可为必做扣分设置补救条件、可挽回积分和小时期限，扣分时先冻结可用积分，家长确认后结算未挽回部分，超时则正式扣除；新建/修改后的任务不补扣上一周期；家长可在待处理页为孩子的必做任务当前周期豁免一次扣分，已豁免的当前周期任务在家长豁免面板和孩子任务显示中标记“已豁免”。现有任务列表中显示必做规则摘要。
+- 功能说明：家长维护任务分类、任务规则、分配孩子、周期限制、星期限制、展示图标和按完成程度给分标准。周、月、一次性任务可设置可选提交截止时间：周按星期和时分、月按日期和时分（短月按月末）、一次性按完整日期时间；过期后儿童端禁止新提交，周/月显示至下一周期的解锁倒计时，一次性显示已截止。Emoji vendor 数据仅在 `EmojiSelect` 打开选择器时动态加载。支持必做任务配置：设置必做次数和未达标扣分，周期结束后由后端幂等结算；可为必做扣分设置补救条件、可挽回积分和小时期限，扣分时先冻结可用积分，家长确认后结算未挽回部分，超时则正式扣除；新建/修改后的任务不补扣上一周期；家长可在待处理页为孩子的必做任务当前周期豁免一次扣分，已豁免的当前周期任务在家长豁免面板和孩子任务显示中标记“已豁免”。现有任务列表中显示必做和截止规则摘要。
 - 用户入口：家长设置/配置区域中的任务和分类表单。
 - P0：`src/ParentApp.tsx`、`server/api/routes/parent.js`、`src/lib/domain.ts`、`src/lib/domain.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/EmojiSelect.tsx`
-- P2：`migrations/0001_initial.sql`、`migrations/0002_limits_and_repeat_submissions.sql`、`migrations/0005_feedback_templates_and_timezone.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`migrations/0022_required_tasks.sql`、`migrations/0030_required_task_penalty_remedies.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
+- P2：`migrations/0001_initial.sql`、`migrations/0002_limits_and_repeat_submissions.sql`、`migrations/0005_feedback_templates_and_timezone.sql`、`migrations/0009_weekdays_rewards_warehouse.sql`、`migrations/0022_required_tasks.sql`、`migrations/0030_required_task_penalty_remedies.sql`、`migrations/0031_task_submission_deadlines.sql`、`tests/domain.test.ts`、`tests/api.test.ts`、`tests/ledger.test.ts`
 - 主要调用链：`ParentApp.load` -> `/task-categories`、`/tasks`; `create/update/remove` -> `/task-categories`、`/tasks`; 孩子端从 `/dashboard/child` 接收可提交任务；必做结算 `settleRequiredTaskPenalties` 由 `server/scheduler-tick.mjs` 的共享 `schedulerTick` 函数（被内置 scheduler 和独立 scheduler 共同调用）每次 tick 显式触发，同时受 `maybeRunMaintenance` 的 24 小时清理闸门间接触发。
-- 相关状态：`task_categories`、`tasks`、`task_assignees`、`task_submissions`、`task_required_penalties`、`tasks.grading_mode`、`tasks.completion_standards_json`
-- 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`、`POST/DELETE /api/tasks/:id/required-penalty-exemptions`、`PATCH /api/task-required-penalties/:ledgerId/remedy`
-- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；补救配置只在扣分生成时快照到 `point_ledger`，后续修改任务不影响既有补救；家长确认仅接受所属家庭、仍冻结且未超时的账本记录；家长任务列表 small 标签中追加必做规则摘要；完成程度给分使用任务行 JSON 档位，不拆独立表；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶；必做扣分按 `task_id + child_id + period_key` 每周期幂等结算，同周期不重复扣、不同周期各自生成独立扣分和账本记录；当前周期豁免复用 `task_required_penalties` 写入 0 分记录，撤销只删除当前周期 `penalty_points=0` 的豁免记录，前端只将 `penalty_points=0` 的当前周期记录显示为“已豁免”。
-- 最近更新时间：2026-07-22
+- 相关状态：`task_categories`、`tasks`、`tasks.submission_deadline_json`、`task_assignees`、`task_submissions`、`task_required_penalties`、`tasks.grading_mode`、`tasks.completion_standards_json`
+- 相关接口：`GET/POST /api/task-categories`、`PATCH/DELETE /api/task-categories/:id`、`GET/POST /api/tasks`、`PATCH/DELETE /api/tasks/:id`、`POST /api/task-submissions`、`GET /api/dashboard/child`、`POST/DELETE /api/tasks/:id/required-penalty-exemptions`、`PATCH /api/task-required-penalties/:ledgerId/remedy`
+- 修改注意事项：`domain.ts` 与 `domain.js` 必须同步；截止时间以系统时区解释，周任务用 ISO 周一至周日，月末日期自动收敛；必须在儿童仪表盘和提交写入前复用同一截止判定，不能只依赖前端倒计时；每日任务和缺失/旧截止配置均视为无限制；任务可见性会影响孩子端、报表、成就和奖励前置条件；必做任务只对每日/每周/每月任务生效；扣分最多扣到可用积分 0，不产生负分；补救配置只在扣分生成时快照到 `point_ledger`，后续修改任务不影响既有补救；家长确认仅接受所属家庭、仍冻结且未超时的账本记录；家长任务列表 small 标签中追加必做规则摘要；完成程度给分使用任务行 JSON 档位，不拆独立表；必做扣分会通过 `notify` 创建 `task_required_penalty` 事件通知，来源标签为"必做扣分 / 任务：{title}"，排序按 `created_at` 倒序，不做置顶；必做扣分按 `task_id + child_id + period_key` 每周期幂等结算，同周期不重复扣、不同周期各自生成独立扣分和账本记录；当前周期豁免复用 `task_required_penalties` 写入 0 分记录，撤销只删除当前周期 `penalty_points=0` 的豁免记录，前端只将 `penalty_points=0` 的当前周期记录显示为“已豁免”。
+- 最近更新时间：2026-08-04
 
 ## 6. 奖励、兑换、仓库与退款
 

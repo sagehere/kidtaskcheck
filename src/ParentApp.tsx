@@ -21,6 +21,33 @@ function parseCompletionStandards(item: any): CompletionStandard[] {
 function cleanCompletionStandards(rows: CompletionStandard[]) {
   return rows.map((row) => ({ label: String(row.label || "").trim(), points: Math.max(0, Number(row.points || 0)) })).filter((row) => row.label);
 }
+type SubmissionDeadline = { weekday?: number; day?: number; time?: string; at?: string };
+function parseSubmissionDeadline(item: any): SubmissionDeadline | null {
+  if (item?.submissionDeadline && typeof item.submissionDeadline === "object") return item.submissionDeadline;
+  try { return JSON.parse(item?.submission_deadline_json || "null"); } catch { return null; }
+}
+function defaultSubmissionDeadline(period: string): SubmissionDeadline {
+  if (period === "weekly") return { weekday: 7, time: "23:59" };
+  if (period === "monthly") return { day: 31, time: "23:59" };
+  return { at: "" };
+}
+function submissionDeadlineText(period: string, value: SubmissionDeadline | null) {
+  if (!value) return "";
+  if (period === "weekly") return `提交截止：周${["日", "一", "二", "三", "四", "五", "六"][Number(value.weekday || 7) % 7]} ${value.time || ""}`;
+  if (period === "monthly") return `提交截止：每月${value.day}日 ${value.time || ""}`;
+  return value.at ? `提交截止：${value.at.replace("T", " ")}` : "";
+}
+function SubmissionDeadlineFields({ period, value, onChange }: { period: string; value: SubmissionDeadline; onChange: (value: SubmissionDeadline) => void }) {
+  if (period === "weekly") return <div className="grid two compact-fields">
+    <Field label="截止星期"><select value={value.weekday ?? 7} onChange={(e) => onChange({ ...value, weekday: Number(e.target.value) })}>{[1, 2, 3, 4, 5, 6, 7].map((day) => <option key={day} value={day}>周{["一", "二", "三", "四", "五", "六", "日"][day - 1]}</option>)}</select></Field>
+    <Field label="截止时刻"><input required type="time" value={value.time || ""} onChange={(e) => onChange({ ...value, time: e.target.value })} /></Field>
+  </div>;
+  if (period === "monthly") return <div className="grid two compact-fields">
+    <Field label="截止日期"><input required type="number" min="1" max="31" value={value.day ?? 31} onChange={(e) => onChange({ ...value, day: Number(e.target.value) })} /></Field>
+    <Field label="截止时刻"><input required type="time" value={value.time || ""} onChange={(e) => onChange({ ...value, time: e.target.value })} /></Field>
+  </div>;
+  return <Field label="截止日期和时间"><input required type="datetime-local" value={value.at || ""} onChange={(e) => onChange({ at: e.target.value })} /></Field>;
+}
 
 
 export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => void }) {
@@ -1542,11 +1569,11 @@ function CompletionStandardsEditor({ value, onChange }: { value: CompletionStand
   );
 }
 export function CreateTask({ children, categories, onCreate }: { children: Child[]; categories: Category[]; onCreate: (data: any) => void }) {
-  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, enabledWeekdays: [...DEFAULT_WEEKDAYS], iconValue: "✅", isActive: true, childIds: [] as string[], isRequired: false, requiredCount: 1, requiredPenaltyPoints: 0, requiredRemedyEnabled: false, requiredRemedyCondition: "", requiredRemedyPoints: 0, requiredRemedyDeadlineHours: 24, gradingMode: "fixed", completionStandards: [{ label: "完成", points: 5 }] });
+  const [data, setData] = useState({ title: "", description: "", categoryId: "", period: "daily", limitCount: 1, points: 5, enabledWeekdays: [...DEFAULT_WEEKDAYS], iconValue: "✅", isActive: true, childIds: [] as string[], isRequired: false, requiredCount: 1, requiredPenaltyPoints: 0, requiredRemedyEnabled: false, requiredRemedyCondition: "", requiredRemedyPoints: 0, requiredRemedyDeadlineHours: 24, gradingMode: "fixed", completionStandards: [{ label: "完成", points: 5 }], submissionDeadlineEnabled: false, submissionDeadline: null as SubmissionDeadline | null });
   const categoryId = data.categoryId || categories[0]?.id || "";
   const showRequired = data.period !== "once";
   return (
-    <FormPanel title="新任务" icon={<ClipboardCheck />} onSubmit={() => onCreate({ ...data, categoryId, iconType: "emoji", completionStandards: cleanCompletionStandards(data.completionStandards) })}>
+    <FormPanel title="新任务" icon={<ClipboardCheck />} onSubmit={() => onCreate({ ...data, categoryId, iconType: "emoji", completionStandards: cleanCompletionStandards(data.completionStandards), submissionDeadline: data.submissionDeadlineEnabled ? data.submissionDeadline : null })}>
       <Field label="标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
       <Field label="分类">
@@ -1555,13 +1582,17 @@ export function CreateTask({ children, categories, onCreate }: { children: Child
         </select>
       </Field>
       <Field label="周期">
-        <select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value, isRequired: e.target.value === "once" ? false : data.isRequired })}>
+        <select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value, isRequired: e.target.value === "once" ? false : data.isRequired, submissionDeadlineEnabled: false, submissionDeadline: null })}>
           <option value="daily">每日</option>
           <option value="weekly">每周</option>
           <option value="monthly">每月</option>
           <option value="once">一次性</option>
         </select>
       </Field>
+      {data.period !== "daily" && <>
+        <Toggle label="设置提交截止时间" checked={data.submissionDeadlineEnabled} onChange={(submissionDeadlineEnabled) => setData({ ...data, submissionDeadlineEnabled, submissionDeadline: submissionDeadlineEnabled ? defaultSubmissionDeadline(data.period) : null })} />
+        {data.submissionDeadlineEnabled && <SubmissionDeadlineFields period={data.period} value={data.submissionDeadline || defaultSubmissionDeadline(data.period)} onChange={(submissionDeadline) => setData({ ...data, submissionDeadline })} />}
+      </>}
       <Field label="周期次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
       <Field label="启用周几"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
       <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>
@@ -2046,6 +2077,7 @@ export function Overview({ title, items, kind, children = [], categories = [], t
                 {item.description && <span>{item.description}</span>}
                 <small>
                   {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · ${item.grading_mode === "completion" ? "完成程度给分" : `+${item.points}`} · ${item.limit_count || 1}次 · ${weekdayLabel(item.enabled_weekdays || item.enabledWeekdays)}${item.is_required === 1 ? ` · 必做 ${item.required_count || 1} 次 · 未达标扣 ${item.required_penalty_points || 0} 分${item.required_remedy_enabled === 1 ? ` · 可补救 ${item.required_remedy_points || 0} 分 / ${item.required_remedy_deadline_hours || 24} 小时` : ""}` : ""}`}
+                  {kind === "task" && submissionDeadlineText(item.period, parseSubmissionDeadline(item)) ? ` · ${submissionDeadlineText(item.period, parseSubmissionDeadline(item))}` : ""}
                   {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`} · 核销${weekdayLabel(item.redeem_weekdays || item.redeemWeekdays)}${item.requiredAchievementTitle ? ` · 解锁${item.requiredAchievementTitle}` : ""}`}
                   {kind === "achievement" && formatAchievementRule(item, tasks, categories)}
                 </small>
@@ -2099,17 +2131,23 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
     requiredRemedyPoints: item.required_remedy_points || 0,
     requiredRemedyDeadlineHours: item.required_remedy_deadline_hours || 24,
     gradingMode: item.grading_mode || "fixed",
-    completionStandards: parseCompletionStandards(item).length ? parseCompletionStandards(item) : [{ label: "完成", points: item.points || 0 }]
+    completionStandards: parseCompletionStandards(item).length ? parseCompletionStandards(item) : [{ label: "完成", points: item.points || 0 }],
+    submissionDeadlineEnabled: Boolean(parseSubmissionDeadline(item)),
+    submissionDeadline: parseSubmissionDeadline(item)
   }));
   const showRequired = kind === "task" && data.period !== "once";
   return (
-    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave(kind === "achievement" ? achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "", targetCategoryId: data.targetCategoryId || categories[0]?.id || "" }) : { ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji", completionStandards: cleanCompletionStandards(data.completionStandards || []) }); }}>
+    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave(kind === "achievement" ? achievementPayload({ ...data, targetTaskId: data.targetTaskId || tasks[0]?.id || "", targetCategoryId: data.targetCategoryId || categories[0]?.id || "" }) : { ...data, limitCount: kind === "reward" && data.limitPeriod === "once" ? 1 : data.limitCount, iconType: "emoji", completionStandards: cleanCompletionStandards(data.completionStandards || []), submissionDeadline: kind === "task" && data.submissionDeadlineEnabled ? data.submissionDeadline : null }); }}>
       <Field label={kind === "reward" ? "名称" : "标题"}><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       {kind !== "task" && kind !== "reward" ? null : <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>}
       {kind === "task" && (
         <>
           <Field label="分类"><select value={data.categoryId} onChange={(e) => setData({ ...data, categoryId: e.target.value })}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field>
-          <Field label="周期"><select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value, isRequired: e.target.value === "once" ? false : data.isRequired })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
+          <Field label="周期"><select value={data.period} onChange={(e) => setData({ ...data, period: e.target.value, isRequired: e.target.value === "once" ? false : data.isRequired, submissionDeadlineEnabled: false, submissionDeadline: null })}><option value="daily">每日</option><option value="weekly">每周</option><option value="monthly">每月</option><option value="once">一次性</option></select></Field>
+          {data.period !== "daily" && <>
+            <Toggle label="设置提交截止时间" checked={data.submissionDeadlineEnabled} onChange={(submissionDeadlineEnabled) => setData({ ...data, submissionDeadlineEnabled, submissionDeadline: submissionDeadlineEnabled ? defaultSubmissionDeadline(data.period) : null })} />
+            {data.submissionDeadlineEnabled && <SubmissionDeadlineFields period={data.period} value={data.submissionDeadline || defaultSubmissionDeadline(data.period)} onChange={(submissionDeadline) => setData({ ...data, submissionDeadline })} />}
+          </>}
           <Field label="次数"><input type="number" min="1" value={data.limitCount} onChange={(e) => setData({ ...data, limitCount: Number(e.target.value) })} /></Field>
           <Field label="启用周几"><WeekdayPicker value={data.enabledWeekdays} onChange={(enabledWeekdays) => setData({ ...data, enabledWeekdays })} /></Field>
           <Field label="分值"><input type="number" min="0" value={data.points} onChange={(e) => setData({ ...data, points: Number(e.target.value) })} /></Field>

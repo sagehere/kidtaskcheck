@@ -110,16 +110,16 @@ export function formatMetric(value: string) {
   return labels[value] || value;
 }
 
-export function formatReset(resetAt?: string | null) {
-  if (!resetAt) return "已达上限";
+export function formatReset(resetAt?: string | null, label = "距重置", empty = "已达上限") {
+  if (!resetAt) return empty;
   const ms = new Date(resetAt).getTime() - Date.now();
   if (ms <= 0) return "即将重置";
   const totalMinutes = Math.ceil(ms / 60000);
   const days = Math.floor(totalMinutes / 1440);
   const hours = Math.floor((totalMinutes % 1440) / 60);
   const minutes = totalMinutes % 60;
-  if (days > 0) return `距重置 ${days}天${hours}小时`;
-  return `距重置 ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  if (days > 0) return `${label} ${days}天${hours}小时`;
+  return `${label} ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 export function formatTime(value?: string | null) {

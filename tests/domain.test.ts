@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints, weekdayInTimezone } from "../src/lib/domain";
+import { achievementWindowRange, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeTaskSubmissionDeadline, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints, taskSubmissionDeadlineState, weekdayInTimezone } from "../src/lib/domain";
 
 describe("periodKey", () => {
   it("calculates daily, weekly, monthly and once keys in the default UTC+8 timezone", () => {
@@ -60,6 +60,25 @@ describe("nextPeriodReset", () => {
   it("does not reset once-only or unlimited periods", () => {
     expect(nextPeriodReset("once", "2026-05-25T10:30:00.000Z")).toBeNull();
     expect(nextPeriodReset("none", "2026-05-25T10:30:00.000Z")).toBeNull();
+  });
+});
+
+describe("task submission deadlines", () => {
+  it("locks weekly tasks at the configured weekday and unlocks next Monday", () => {
+    const rule = { weekday: 1, time: "09:00" };
+    expect(taskSubmissionDeadlineState("weekly", rule, "2026-05-25T00:59:00.000Z")).toMatchObject({ locked: false, deadlineAt: "2026-05-25T01:00:00.000Z" });
+    expect(taskSubmissionDeadlineState("weekly", rule, "2026-05-25T01:00:00.000Z")).toMatchObject({ locked: true, unlockAt: "2026-05-31T16:00:00.000Z" });
+  });
+
+  it("clamps monthly dates to month end and keeps once deadlines permanent", () => {
+    expect(taskSubmissionDeadlineState("monthly", { day: 31, time: "20:00" }, "2026-02-28T12:00:00.000Z")).toMatchObject({ deadlineAt: "2026-02-28T12:00:00.000Z", locked: true, unlockAt: "2026-02-28T16:00:00.000Z" });
+    expect(taskSubmissionDeadlineState("once", { at: "2026-03-01T09:00" }, "2026-03-01T01:00:00.000Z")).toMatchObject({ locked: true, unlockAt: null });
+  });
+
+  it("rejects malformed deadline rules and leaves daily tasks unrestricted", () => {
+    expect(normalizeTaskSubmissionDeadline("weekly", { weekday: 8, time: "09:00" })).toBeNull();
+    expect(normalizeTaskSubmissionDeadline("monthly", { day: 31, time: "24:00" })).toBeNull();
+    expect(taskSubmissionDeadlineState("daily", { at: "2026-03-01T09:00" }, "2026-03-01T10:00:00.000Z")).toMatchObject({ locked: false, deadlineAt: null });
   });
 });
 

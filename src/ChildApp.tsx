@@ -114,7 +114,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   }
 
   function renderTaskCard(task: any, pinned = false) {
-    const limited = !task.canSubmit;
+    const deadlineLocked = task.submitLockReason === "deadline" && (!task.resetAt || new Date(task.resetAt).getTime() > Date.now());
+    const limited = task.submitLockReason === "deadline" ? deadlineLocked : !task.canSubmit;
     const busyId = busy === "task:" + task.id;
     const points = (task.point_type === "earn" ? "+" : "-") + task.points;
     const isRequired = task.is_required === 1;
@@ -137,7 +138,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           <span>{task.periodKey}</span>
         </div>
         <button disabled={limited || busyId} className="primary card-action" onClick={() => submitTask(task)}>
-          {busyId ? "提交中..." : limited ? formatReset(task.resetAt) : "提交完成"}
+          {busyId ? "提交中..." : limited ? task.submitLockReason === "deadline" ? formatReset(task.resetAt, "距提交解锁", "已截止") : formatReset(task.resetAt) : "提交完成"}
         </button>
       </article>
     );

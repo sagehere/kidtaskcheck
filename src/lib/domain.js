@@ -10,8 +10,8 @@ export function toDate(input) {
 function zonedDate(input, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
     return new Date(toDate(input).getTime() + timezoneOffsetMinutes * MINUTE_MS);
 }
-function utcFromZonedParts(year, month, day, timezoneOffsetMinutes) {
-    return new Date(Date.UTC(year, month, day) - timezoneOffsetMinutes * MINUTE_MS);
+function utcFromZonedParts(year, month, day, timezoneOffsetMinutes, hour = 0, minute = 0) {
+    return new Date(Date.UTC(year, month, day, hour, minute) - timezoneOffsetMinutes * MINUTE_MS);
 }
 export function periodKey(period, input, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
     const date = zonedDate(input, timezoneOffsetMinutes);
@@ -75,6 +75,79 @@ export function nextPeriodReset(period, input, timezoneOffsetMinutes = DEFAULT_T
     }
     const weekday = date.getUTCDay() || 7;
     return utcFromZonedParts(year, month, day + (8 - weekday), timezoneOffsetMinutes).toISOString();
+}
+function deadlineTimeParts(value) {
+    const match = typeof value === "string" && value.match(/^(\d{2}):(\d{2})$/);
+    if (!match)
+        return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    return hour <= 23 && minute <= 59 ? { hour, minute, time: value } : null;
+}
+function localDateTimeParts(value) {
+    const match = typeof value === "string" && value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if (!match)
+        return null;
+    const [year, month, day, hour, minute] = match.slice(1).map(Number);
+    const check = new Date(Date.UTC(year, month - 1, day, hour, minute));
+    if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day || hour > 23 || minute > 59)
+        return null;
+    return { year, month, day, hour, minute, at: value };
+}
+export function normalizeTaskSubmissionDeadline(period, value) {
+    if (period === "daily" || value === null || value === undefined || value === "")
+        return null;
+    let rule = value;
+    if (typeof value === "string") {
+        try {
+            rule = JSON.parse(value);
+        }
+        catch {
+            return null;
+        }
+    }
+    if (!rule || typeof rule !== "object" || Array.isArray(rule))
+        return null;
+    if (period === "weekly") {
+        const weekday = Number(rule.weekday);
+        const time = deadlineTimeParts(rule.time);
+        return Number.isInteger(weekday) && weekday >= 1 && weekday <= 7 && time ? { weekday, time: time.time } : null;
+    }
+    if (period === "monthly") {
+        const day = Number(rule.day);
+        const time = deadlineTimeParts(rule.time);
+        return Number.isInteger(day) && day >= 1 && day <= 31 && time ? { day, time: time.time } : null;
+    }
+    const at = localDateTimeParts(rule.at);
+    return at ? { at: at.at } : null;
+}
+export function taskSubmissionDeadlineState(period, value, input, timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES) {
+    const rule = normalizeTaskSubmissionDeadline(period, value);
+    if (!rule)
+        return { deadlineAt: null, locked: false, unlockAt: null };
+    const date = zonedDate(input, timezoneOffsetMinutes);
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth();
+    let deadlineAt;
+    if (period === "weekly" && "weekday" in rule) {
+        const currentWeekday = date.getUTCDay() || 7;
+        const time = deadlineTimeParts(rule.time);
+        deadlineAt = utcFromZonedParts(year, month, date.getUTCDate() - currentWeekday + rule.weekday, timezoneOffsetMinutes, time.hour, time.minute).toISOString();
+    }
+    else if (period === "monthly" && "day" in rule) {
+        const time = deadlineTimeParts(rule.time);
+        const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+        deadlineAt = utcFromZonedParts(year, month, Math.min(rule.day, lastDay), timezoneOffsetMinutes, time.hour, time.minute).toISOString();
+    }
+    else if (period === "once" && "at" in rule) {
+        const at = localDateTimeParts(rule.at);
+        deadlineAt = utcFromZonedParts(at.year, at.month - 1, at.day, timezoneOffsetMinutes, at.hour, at.minute).toISOString();
+    }
+    else {
+        return { deadlineAt: null, locked: false, unlockAt: null };
+    }
+    const locked = toDate(input).getTime() >= new Date(deadlineAt).getTime();
+    return { deadlineAt, locked, unlockAt: locked && period !== "once" ? nextPeriodReset(period, input, timezoneOffsetMinutes) : null };
 }
 export function signedPoints(pointType, points) {
     return pointType === "earn" ? Math.abs(points) : -Math.abs(points);

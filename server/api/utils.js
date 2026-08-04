@@ -1,4 +1,4 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints } from "../../src/lib/domain.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeTaskSubmissionDeadline, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints } from "../../src/lib/domain.js";
 export const json = (data, init) => new Response(JSON.stringify(data), {
     ...init,
     headers: { "content-type": "application/json; charset=utf-8", ...(init?.headers || {}) }
@@ -455,6 +455,7 @@ async function ensureRequiredTaskSchemaNow(env) {
     await ensureColumn(env, "tasks", "required_remedy_deadline_hours", "required_remedy_deadline_hours INTEGER NOT NULL DEFAULT 24");
     await ensureColumn(env, "tasks", "grading_mode", "grading_mode TEXT NOT NULL DEFAULT 'fixed'");
     await ensureColumn(env, "tasks", "completion_standards_json", "completion_standards_json TEXT NOT NULL DEFAULT '[]'");
+    await ensureColumn(env, "tasks", "submission_deadline_json", "submission_deadline_json TEXT NOT NULL DEFAULT 'null'");
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_required_penalties (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -1611,6 +1612,7 @@ ORDER BY updated_at DESC, created_at DESC`).bind(parentId, ...ids).all()
             enabledWeekdays: normalizeWeekdays(row.enabled_weekdays),
             redeemWeekdays: normalizeWeekdays(row.redeem_weekdays),
             completionStandards: kind === "tasks" ? completionStandards : [],
+            submissionDeadline: kind === "tasks" ? normalizeTaskSubmissionDeadline(row.period, row.submission_deadline_json) : null,
             prerequisites: kind === "rewards" ? (prerequisites.get(row.id) || []) : [],
             requiredAchievementId: requiredAchievement?.id || "",
             requiredAchievementTitle: requiredAchievement?.title || "",
@@ -1661,8 +1663,9 @@ export async function insertTaskFromConfig(env, parentId, item, categoryMap, chi
     const requiredRemedyDeadlineHours = requiredRemedyEnabled ? Math.max(1, Number(item.required_remedy_deadline_hours ?? item.requiredRemedyDeadlineHours ?? 24)) : 24;
     const gradingMode = item.grading_mode === "completion" || item.gradingMode === "completion" ? "completion" : "fixed";
     const completionStandards = gradingMode === "completion" ? normalizeCompletionStandards(item.completionStandards || item.completion_standards || JSON.parse(item.completion_standards_json || "[]")) : [];
-    await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), importedActive(item), isRequired, requiredCount, requiredPenaltyPoints, requiredRemedyEnabled, requiredRemedyCondition, requiredRemedyPoints, requiredRemedyDeadlineHours, gradingMode, JSON.stringify(completionStandards))
+    const submissionDeadline = normalizeTaskSubmissionDeadline(period, item.submissionDeadline ?? item.submission_deadline ?? item.submission_deadline_json);
+    await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, grading_mode, completion_standards_json, submission_deadline_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(taskId, parentId, categoryId, title, item.description || "", period, Number(item.points || 0), item.icon_type || "emoji", item.icon_value || "✅", Math.max(1, Number(item.limit_count || item.limitCount || 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), importedActive(item), isRequired, requiredCount, requiredPenaltyPoints, requiredRemedyEnabled, requiredRemedyCondition, requiredRemedyPoints, requiredRemedyDeadlineHours, gradingMode, JSON.stringify(completionStandards), JSON.stringify(submissionDeadline))
         .run();
     const requestedAssignees = item.assignee_names || item.assigneeNames || [];
     await replaceAssignees(env, parentId, "task_assignees", "task_id", taskId, requestedAssignees.map((name) => childMap.get(name)).filter(Boolean));
@@ -1848,8 +1851,9 @@ export async function applyConfigGroupSnapshot(env, parentId, snapshot) {
             const requiredRemedyDeadlineHours = requiredRemedyEnabled ? Math.max(1, Number(item.required_remedy_deadline_hours ?? item.requiredRemedyDeadlineHours ?? 24)) : 24;
             const gradingMode = item.grading_mode === "completion" || item.gradingMode === "completion" ? "completion" : "fixed";
             const completionStandards = gradingMode === "completion" ? normalizeCompletionStandards(item.completionStandards || item.completion_standards || JSON.parse(item.completion_standards_json || "[]")) : [];
-            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(taskId, parentId, categoryId, String(item.title || "未命名任务").trim() || "未命名任务", item.description || "", period, Number(item.points || 0), item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "✅", Math.max(1, Number(item.limit_count ?? item.limitCount ?? 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, requiredRemedyEnabled, requiredRemedyCondition, requiredRemedyPoints, requiredRemedyDeadlineHours, gradingMode, JSON.stringify(completionStandards))
+            const submissionDeadline = normalizeTaskSubmissionDeadline(period, item.submissionDeadline ?? item.submission_deadline ?? item.submission_deadline_json);
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, grading_mode, completion_standards_json, submission_deadline_json) VALUES (?, ?, ?, ?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, parentId, categoryId, String(item.title || "未命名任务").trim() || "未命名任务", item.description || "", period, Number(item.points || 0), item.icon_type || item.iconType || "emoji", item.icon_value || item.iconValue || "✅", Math.max(1, Number(item.limit_count ?? item.limitCount ?? 1)), weekdayJson(item.enabledWeekdays || item.enabled_weekdays), Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, requiredRemedyEnabled, requiredRemedyCondition, requiredRemedyPoints, requiredRemedyDeadlineHours, gradingMode, JSON.stringify(completionStandards), JSON.stringify(submissionDeadline))
                 .run();
             const assigned = snapshotAssignees(item, children);
             stats.skippedAssignments += assigned.skipped;

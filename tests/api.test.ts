@@ -147,6 +147,39 @@ describe("Real Child Session Integration", () => {
     const subRes = await safe(handleChildRoutes, norm(new URL(subReq.url).pathname), "POST", subReq, env, actor);
     expect(subRes!.status).toBe(200);
   });
+
+  it("stores validated task deadline rules through the parent API", async () => {
+    const parent = { type: "user", role: "parent", id: pid, displayName: "P" };
+    const payload = { title: "Weekly deadline", categoryId: "cat", period: "weekly", points: 1, limitCount: 1, enabledWeekdays: [1, 2, 3, 4, 5, 6, 0], iconValue: "✅", childIds: [cid], submissionDeadline: { weekday: 5, time: "18:00" } };
+    const created = await safe(handleParentRoutes, "/tasks", "POST", makeRequest("POST", "/tasks", payload), env, parent);
+    expect(created!.status).toBe(200);
+    const tasks = await safe(handleParentRoutes, "/tasks", "GET", makeRequest("GET", "/tasks"), env, parent);
+    expect((await tasks!.json()).data.find((item: any) => item.title === "Weekly deadline").submissionDeadline).toEqual({ weekday: 5, time: "18:00" });
+    const invalid = await safe(handleParentRoutes, "/tasks", "POST", makeRequest("POST", "/tasks", { ...payload, title: "Invalid deadline", submissionDeadline: { weekday: 8, time: "18:00" } }), env, parent);
+    expect(invalid!.status).toBe(400);
+  });
+
+  it("locks expired recurring deadlines in the dashboard and submission endpoint", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-05-26T02:00:00.000Z"));
+      const task = env.DB.prepare("SELECT id FROM tasks WHERE parent_id=?").bind(pid).first() as any;
+      env.DB.prepare("UPDATE tasks SET period='weekly', submission_deadline_json=? WHERE id=?").bind(JSON.stringify({ weekday: 1, time: "09:00" }), task.id).run();
+      const actor = { type: "child", role: "child", id: cid, parent_id: pid, parentId: pid, displayName: "Child" };
+      const dashboard = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, actor, { waitUntil: () => {} });
+      const item = (await dashboard!.json()).data.tasks[0];
+      expect(item).toMatchObject({ canSubmit: false, submitLockReason: "deadline", resetAt: "2026-05-31T16:00:00.000Z" });
+      const blocked = await safe(handleChildRoutes, "/task-submissions", "POST", makeRequest("POST", "/task-submissions", { taskId: task.id }), env, actor);
+      expect(blocked!.status).toBe(409);
+      expect((await blocked!.json()).error.code).toBe("TASK_SUBMISSION_DEADLINE_EXCEEDED");
+
+      vi.setSystemTime(new Date("2026-06-01T00:01:00.000Z"));
+      const reopened = await safe(handleChildRoutes, "/task-submissions", "POST", makeRequest("POST", "/task-submissions", { taskId: task.id }), env, actor);
+      expect(reopened!.status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("Parent delegate accounts", () => {
@@ -228,7 +261,7 @@ describe("Parent delegate accounts", () => {
   it("imports config as disabled and ignores missing child assignments", async () => {
     const parentActor = { type: "user", role: "parent", id: pid, displayName: "Parent A", operatorLabel: "妈妈" };
     const payload = {
-      tasks: [{ title: "Imported Task", category_name: "Cat", period: "daily", points: 2, assignee_names: ["Child A", "Missing"], is_active: 1 }],
+      tasks: [{ title: "Imported Task", category_name: "Cat", period: "weekly", points: 2, submission_deadline: { weekday: 5, time: "18:00" }, assignee_names: ["Child A", "Missing"], is_active: 1 }],
       rewards: [{ title: "Imported Reward", cost_points: 3, assignee_names: ["Missing"], prerequisites: [{ task_title: "Imported Task", required_count: 2 }], is_active: 1 }],
       achievements: [{ title: "Imported Achievement", threshold: 1, rule_type: "specific_task_completed", target_task_title: "Imported Task", is_active: 1 }],
       feedbackTemplates: [{ kind: "praise", title: "Imported Praise", points: 1, is_active: 1 }]
@@ -242,6 +275,7 @@ describe("Parent delegate accounts", () => {
     expect((env.DB.prepare("SELECT is_active FROM feedback_templates WHERE title='Imported Praise'").first() as any).is_active).toBe(0);
     const assignees = env.DB.prepare("SELECT COUNT(*) v FROM task_assignees ta JOIN tasks t ON t.id=ta.task_id WHERE t.title='Imported Task'").first() as any;
     expect(Number(assignees.v)).toBe(1);
+    expect(env.DB.prepare("SELECT submission_deadline_json FROM tasks WHERE title='Imported Task'").first()).toMatchObject({ submission_deadline_json: JSON.stringify({ weekday: 5, time: "18:00" }) });
     const prerequisite = env.DB.prepare("SELECT t.title, rp.required_count FROM reward_prerequisites rp JOIN tasks t ON t.id=rp.task_id JOIN rewards r ON r.id=rp.reward_id WHERE r.title='Imported Reward'").first() as any;
     expect(prerequisite).toMatchObject({ title: "Imported Task", required_count: 2 });
     const achievement = env.DB.prepare("SELECT t.title target_title FROM achievements a JOIN tasks t ON t.id=a.target_task_id WHERE a.title='Imported Achievement'").first() as any;
@@ -250,7 +284,7 @@ describe("Parent delegate accounts", () => {
 
   it("exports required task settings and child assignment names", async () => {
     const parentActor = { type: "user", role: "parent", id: pid, displayName: "Parent A", operatorLabel: "妈妈" };
-    env.DB.prepare("UPDATE tasks SET is_required=1, required_count=3, required_penalty_points=4, required_remedy_enabled=1, required_remedy_condition='收拾书桌', required_remedy_points=2, required_remedy_deadline_hours=12 WHERE id=?").bind(tid).run();
+    env.DB.prepare("UPDATE tasks SET period='weekly', is_required=1, required_count=3, required_penalty_points=4, required_remedy_enabled=1, required_remedy_condition='收拾书桌', required_remedy_points=2, required_remedy_deadline_hours=12, submission_deadline_json=? WHERE id=?").bind(JSON.stringify({ weekday: 5, time: "18:00" }), tid).run();
     const rid = id();
     env.DB.prepare("INSERT INTO rewards (id, parent_id, title, cost_points, limit_period, redeem_weekdays) VALUES (?, ?, 'Snack', 8, 'daily', '[1,2,3,4,5,6,0]')").bind(rid, pid).run();
     env.DB.prepare("INSERT INTO reward_assignees (reward_id, child_id) VALUES (?, ?)").bind(rid, cid).run();
@@ -269,6 +303,7 @@ describe("Parent delegate accounts", () => {
       required_remedy_condition: "收拾书桌",
       required_remedy_points: 2,
       required_remedy_deadline_hours: 12,
+      submission_deadline: { weekday: 5, time: "18:00" },
       assignee_names: ["Child A"]
     });
     const reward = payload.data.rewards.find((item: any) => item.title === "Snack");
@@ -295,7 +330,7 @@ describe("Config groups", () => {
     env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, 'cg-parent', 'x', 'parent', 'Parent A')").bind(pid).run();
     env.DB.prepare("INSERT INTO children (id, parent_id, username, password_hash, display_name, status) VALUES (?, ?, 'cg-child', 'x', 'Child A', 'active')").bind(cid, pid).run();
     env.DB.prepare("INSERT INTO task_categories (id, owner_id, name, icon_type, icon_value) VALUES ('cg-cat', ?, 'Study', 'emoji', '📚')").bind(pid).run();
-    env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, points, period, limit_count, point_type, enabled_weekdays, is_required, required_count, required_penalty_points) VALUES (?, ?, 'cg-cat', 'Read', 'Read book', 6, 'daily', 2, 'earn', '[1,2,3,4,5]', 1, 2, 3)").bind(tid, pid).run();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, points, period, limit_count, point_type, enabled_weekdays, is_required, required_count, required_penalty_points, submission_deadline_json) VALUES (?, ?, 'cg-cat', 'Read', 'Read book', 6, 'weekly', 2, 'earn', '[1,2,3,4,5]', 1, 2, 3, ?)").bind(tid, pid, JSON.stringify({ weekday: 5, time: "18:00" })).run();
     env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(tid, cid).run();
     env.DB.prepare("INSERT INTO rewards (id, parent_id, title, description, cost_points, limit_period, limit_count, redeem_weekdays, icon_type, icon_value, is_active) VALUES (?, ?, 'Snack', 'Cookie', 8, 'daily', 1, '[1,2,3,4,5]', 'emoji', '🎁', 1)").bind(rid, pid).run();
     env.DB.prepare("INSERT INTO achievements (id, parent_id, title, description, metric, threshold, rule_type, target_task_id, icon_type, icon_value, unlock_reward_id) VALUES (?, ?, 'Reader', 'Read twice', 'tasks_completed', 2, 'specific_task_completed', ?, 'emoji', '🏅', ?)").bind(aid, pid, tid, rid).run();
@@ -321,9 +356,9 @@ describe("Config groups", () => {
     expect(activePayload.data.is_active).toBe(1);
     expect(activePayload.data.applied).toMatchObject({ tasks: 1, rewards: 1, achievements: 1, feedbackTemplates: 1 });
 
-    const tasks = env.DB.prepare("SELECT id, title, is_required, required_count, required_penalty_points FROM tasks WHERE parent_id=? AND deleted_at IS NULL").bind(pid).all().results as any[];
+    const tasks = env.DB.prepare("SELECT id, title, is_required, required_count, required_penalty_points, submission_deadline_json FROM tasks WHERE parent_id=? AND deleted_at IS NULL").bind(pid).all().results as any[];
     expect(tasks.map((task) => task.title)).toEqual(["Read"]);
-    expect(tasks[0]).toMatchObject({ is_required: 1, required_count: 2, required_penalty_points: 3 });
+    expect(tasks[0]).toMatchObject({ is_required: 1, required_count: 2, required_penalty_points: 3, submission_deadline_json: JSON.stringify({ weekday: 5, time: "18:00" }) });
     const assigned = env.DB.prepare("SELECT COUNT(*) v FROM task_assignees WHERE task_id=? AND child_id=?").bind(tasks[0].id, cid).first() as any;
     expect(Number(assigned.v)).toBe(1);
     const prerequisite = env.DB.prepare("SELECT t.title, rp.required_count FROM reward_prerequisites rp JOIN tasks t ON t.id=rp.task_id JOIN rewards r ON r.id=rp.reward_id WHERE r.parent_id=? AND r.deleted_at IS NULL").bind(pid).first() as any;

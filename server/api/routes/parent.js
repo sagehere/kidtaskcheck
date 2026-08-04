@@ -1,4 +1,4 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, normalizeTaskSubmissionDeadline, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
 import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards } from "../utils.js";
 import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, collectReportComparison, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs, enqueueScheduleImageJob, loadScheduleImageJob, publicScheduleImageJob, processScheduleImageJobs } from "../ai/index.js";
 
@@ -12,6 +12,14 @@ const periodText = (value) => PERIOD_LABELS[value] || String(value || "");
 const weekdaysText = (value) => normalizeWeekdays(value).map((day) => WEEKDAY_LABELS[day]).join("、");
 const signedText = (value) => `${Number(value || 0) > 0 ? "+" : ""}${Number(value || 0)}`;
 const reportDateText = (value, offset) => localTimeText(value, offset).slice(0, 10);
+
+function taskSubmissionDeadline(input, period) {
+    const value = input.submissionDeadline;
+    const deadline = normalizeTaskSubmissionDeadline(period, value);
+    if (period !== "daily" && value !== null && value !== undefined && value !== "" && !deadline)
+        return { error: "提交截止时间格式无效" };
+    return { value: JSON.stringify(deadline) };
+}
 
 function scheduleTaskCardHtml(item) {
     const meta = escapeHtml(item.category_name || "未分类") + " · " + escapeHtml(periodText(item.period)) + "最多" + Number(item.limit_count || 1) + "次 · " + Number(item.points || 0) + "分" + (item.is_required ? " · 必做" + Number(item.required_count || 1) + "次" : "");
@@ -922,6 +930,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             await ensureRequiredTaskSchema(env);
             const taskId = id();
             const period = input.period || "daily";
+            const deadline = taskSubmissionDeadline(input, period);
+            if (deadline.error) return fail("BAD_REQUEST", deadline.error, 400);
             const isRequired = period !== "once" && input.isRequired ? 1 : 0;
             const requiredCount = isRequired ? Math.max(1, Number(input.requiredCount || 1)) : 0;
             const requiredPenaltyPoints = isRequired ? Math.max(0, Number(input.requiredPenaltyPoints || 0)) : 0;
@@ -929,8 +939,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             if (requiredRemedy.error) return fail("BAD_REQUEST", requiredRemedy.error, 400);
             const grading = taskGrading(input);
             if (grading.error) return fail("BAD_REQUEST", grading.error, 400);
-            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, grading_mode, completion_standards_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(taskId, a.id, input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, requiredRemedy.enabled, requiredRemedy.condition, requiredRemedy.points, requiredRemedy.deadlineHours, grading.gradingMode, JSON.stringify(grading.standards))
+            await env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, description, period, point_type, points, icon_type, icon_value, limit_count, enabled_weekdays, is_active, is_required, required_count, required_penalty_points, required_remedy_enabled, required_remedy_condition, required_remedy_points, required_remedy_deadline_hours, grading_mode, completion_standards_json, submission_deadline_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(taskId, a.id, input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, requiredRemedy.enabled, requiredRemedy.condition, requiredRemedy.points, requiredRemedy.deadlineHours, grading.gradingMode, JSON.stringify(grading.standards), deadline.value)
                 .run();
             await replaceAssignees(env, a.id, "task_assignees", "task_id", taskId, input.childIds || []);
             return ok(true);
@@ -988,6 +998,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         await validateCategoryOwnership(env, a.id, input.categoryId);
         await ensureRequiredTaskSchema(env);
         const period = input.period || "daily";
+        const deadline = taskSubmissionDeadline(input, period);
+        if (deadline.error) return fail("BAD_REQUEST", deadline.error, 400);
         const isRequired = period !== "once" && input.isRequired ? 1 : 0;
         const requiredCount = isRequired ? Math.max(1, Number(input.requiredCount || 1)) : 0;
         const requiredPenaltyPoints = isRequired ? Math.max(0, Number(input.requiredPenaltyPoints || 0)) : 0;
@@ -995,8 +1007,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         if (requiredRemedy.error) return fail("BAD_REQUEST", requiredRemedy.error, 400);
         const grading = taskGrading(input);
         if (grading.error) return fail("BAD_REQUEST", grading.error, 400);
-        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, enabled_weekdays=?, is_active=?, is_required=?, required_count=?, required_penalty_points=?, required_remedy_enabled=?, required_remedy_condition=?, required_remedy_points=?, required_remedy_deadline_hours=?, grading_mode=?, completion_standards_json=?, updated_at=? WHERE id=?")
-            .bind(input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, requiredRemedy.enabled, requiredRemedy.condition, requiredRemedy.points, requiredRemedy.deadlineHours, grading.gradingMode, JSON.stringify(grading.standards), nowIso(), taskPatch[1])
+        await env.DB.prepare("UPDATE tasks SET category_id=?, title=?, description=?, period=?, point_type=?, points=?, icon_type=?, icon_value=?, limit_count=?, enabled_weekdays=?, is_active=?, is_required=?, required_count=?, required_penalty_points=?, required_remedy_enabled=?, required_remedy_condition=?, required_remedy_points=?, required_remedy_deadline_hours=?, grading_mode=?, completion_standards_json=?, submission_deadline_json=?, updated_at=? WHERE id=?")
+            .bind(input.categoryId, title, input.description || "", period, "earn", Number(input.points || 0), input.iconType || "emoji", input.iconValue || "✅", Math.max(1, Number(input.limitCount || 1)), weekdayJson(input.enabledWeekdays || input.enabled_weekdays), input.isActive === false ? 0 : 1, isRequired, requiredCount, requiredPenaltyPoints, requiredRemedy.enabled, requiredRemedy.condition, requiredRemedy.points, requiredRemedy.deadlineHours, grading.gradingMode, JSON.stringify(grading.standards), deadline.value, nowIso(), taskPatch[1])
             .run();
         await replaceAssignees(env, a.id, "task_assignees", "task_id", taskPatch[1], input.childIds || []);
         return ok(true);

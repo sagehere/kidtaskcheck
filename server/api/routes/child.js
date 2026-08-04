@@ -1,10 +1,11 @@
-import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema } from "../utils.js";
+import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, taskSubmissionDeadlineState } from "../../../src/lib/domain.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
     if (path === "/task-submissions" && method === "POST") {
         const a = requireRole(actor, ["child"]);
+        await ensureRequiredTaskSchema(env);
         const input = await body(request);
         const task = await env.DB.prepare("SELECT t.* FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id WHERE t.id=? AND ta.child_id=? AND t.parent_id=? AND t.is_active=1 AND t.deleted_at IS NULL")
             .bind(input.taskId, a.id, a.parent_id)
@@ -13,6 +14,8 @@ export async function handleChildRoutes(path, method, request, env, actor, ctx) 
             return fail("NOT_ASSIGNED", "任务不存在或未分配给当前孩子", 404);
         const submittedAt = nowIso();
         const offset = await timezoneOffsetMinutes(env);
+        if (taskSubmissionDeadlineState(task.period, task.submission_deadline_json, submittedAt, offset).locked)
+            return fail("TASK_SUBMISSION_DEADLINE_EXCEEDED", "已超过任务提交截止时间", 409);
         if (!isWeekdayAllowed(task.enabled_weekdays, submittedAt, offset))
             return fail("TASK_NOT_ENABLED_TODAY", "该任务今天未启用", 409);
         const pkey = periodKey(task.period, submittedAt, offset);
@@ -119,7 +122,7 @@ ORDER BY rr.requested_at DESC`).bind(a.id).all()).results);
     }
     if (path === "/warehouse/achievements" && method === "GET") {
         const a = requireRole(actor, ["child"]);
-        await ensureAchievementSchema(env);
+        await Promise.all([ensureAchievementSchema(env), ensureRequiredTaskSchema(env)]);
         return ok((await env.DB.prepare(`SELECT a.*, ca.unlocked_at, ca.hidden_from_child_at
 FROM child_achievements ca JOIN achievements a ON a.id=ca.achievement_id
 WHERE ca.child_id=? AND ca.hidden_from_child_at IS NOT NULL
@@ -193,6 +196,8 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             const latest = taskStatuses.latest.get(key);
             const rejected = taskStatuses.rejected.get(key);
             const limitCount = Number(task.limit_count || 1);
+            const deadline = taskSubmissionDeadlineState(task.period, task.submission_deadline_json, undefined, offset);
+            const limitReached = activeCount >= limitCount;
             return {
                 ...task,
                 enabledWeekdays: normalizeWeekdays(task.enabled_weekdays),
@@ -200,8 +205,9 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
                 limitCount,
                 usedCount: activeCount,
                 remainingCount: Math.max(0, limitCount - activeCount),
-                canSubmit: activeCount < limitCount,
-                resetAt: nextPeriodReset(task.period, undefined, offset),
+                canSubmit: !limitReached && !deadline.locked,
+                resetAt: deadline.locked ? deadline.unlockAt : nextPeriodReset(task.period, undefined, offset),
+                submitLockReason: deadline.locked ? "deadline" : limitReached ? "limit" : null,
                 submissionStatus: latest?.status || null,
                 rejectionNote: rejected?.review_note || "",
                 requiredPenaltyExempted: exempted.has(key),

@@ -92,7 +92,7 @@ LIMIT 50`)
             .all()).results.map((child) => [child.id, child.display_name]));
         const assigneeNames = (item) => (item.assignees || []).map((childId) => childNames.get(childId)).filter(Boolean);
         return ok({
-            version: 2,
+            version: 3,
             exportedAt: nowIso(),
             categories: config.categories.map((item) => ({
                 name: item.name,
@@ -115,6 +115,7 @@ LIMIT 50`)
                 required_remedy_condition: item.required_remedy_condition,
                 required_remedy_points: item.required_remedy_points,
                 required_remedy_deadline_hours: item.required_remedy_deadline_hours,
+                submission_deadline: item.submissionDeadline,
                 assignee_names: assigneeNames(item),
                 icon_type: item.icon_type,
                 icon_value: item.icon_value

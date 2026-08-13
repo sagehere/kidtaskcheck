@@ -877,6 +877,100 @@ button.child-tile {
   z-index: 60;
 }
 
+.daily-review-backdrop {
+  z-index: 70;
+}
+
+.daily-review-modal {
+  width: min(620px, calc(100vw - 32px));
+  max-height: min(86vh, 720px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: hidden;
+}
+
+.daily-review-title h2 {
+  margin: 0;
+}
+
+.daily-review-totals {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.daily-review-totals span {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f3f0ea;
+  text-align: center;
+}
+
+.daily-review-totals small,
+.daily-review-row small {
+  color: #69737d;
+}
+
+.daily-review-totals strong {
+  font-size: 1.15rem;
+}
+
+.daily-review-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.daily-review-list section {
+  display: grid;
+  gap: 7px;
+}
+
+.daily-review-list h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.daily-review-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #ece7dd;
+  border-radius: 8px;
+  background: #fffdfa;
+}
+
+.daily-review-row div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.daily-review-row.praise {
+  border-color: #e4c46b;
+  background: #fff8dc;
+}
+
+.daily-review-empty,
+.daily-review-countdown {
+  margin: 0;
+  text-align: center;
+  color: #69737d;
+}
+
+@media (max-width: 520px) {
+  .daily-review-totals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .wall-card.redeemed {
   filter: grayscale(1);
 }

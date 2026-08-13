@@ -1,4 +1,4 @@
-import { actorFromRequest, bootstrap, fail, logSystemError, validateNonGetRequest } from "./utils.js";
+import { actorFromRequest, bootstrap, childDailyReviewRequired, fail, logSystemError, timezoneOffsetMinutes, validateNonGetRequest } from "./utils.js";
 import { handleAuthRoutes } from "./routes/auth.js";
 import { handleAdminRoutes } from "./routes/admin.js";
 import { handleParentRoutes } from "./routes/parent.js";
@@ -14,6 +14,11 @@ async function route(request, env, ctx) {
     const path = `/${(url.pathname.replace(/^\/api\/?/, "") || "").replace(/^\/|\/$/g, "")}`;
     const method = request.method;
     const actor = await actorFromRequest(request, env);
+    const isDailyReviewAck = path === "/child-daily-review/acknowledge" && method === "PATCH";
+    if (actor?.role === "child" && method !== "GET" && method !== "HEAD" && path !== "/auth/logout" && !isDailyReviewAck) {
+        if (await childDailyReviewRequired(env, actor.id, await timezoneOffsetMinutes(env)))
+            return fail("DAILY_REVIEW_REQUIRED", "请先签收昨日表现回顾", 423);
+    }
 
     const result =
         (await handleAuthRoutes(path, method, request, env, actor)) ||

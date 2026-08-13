@@ -1,6 +1,12 @@
 # 2026-08-04
 
 - 类型：功能新增
+- 任务：儿童每日首次进入时签收昨日积分与表扬回顾，并合并确认昨日消息中心通知。
+- 修改文件：`src/ChildApp.tsx`、`src/{styles.css,types/api.ts}`、`server/api/{utils.js,router.mjs,routes/child.js}`、`migrations/0033_child_daily_reviews.sql`、`tests/daily-review.test.ts`、功能索引。
+- 行为：回顾按系统时区固定昨日窗口和首次展示时刻，30 秒后才允许签收；未签收时服务端拦截儿童写操作；签收后同步标记昨日任务审核、奖励状态、反馈等所有未读消息为已读。
+- 验证：`rtk npm run build`；`rtk npm test`（155 项）通过。
+
+- 类型：功能新增
 - 任务：家长可解除或撤销当前周期的任务提交截止时间。
 - 修改文件：`src/{ParentApp,ChildApp}.tsx`、`server/api/{utils.js,routes/{parent,child,shared}.js}`、`migrations/0032_task_submission_deadline_exemptions.sql`、相关 API/迁移测试和功能索引。
 - 行为：按任务自身周期保存解除记录；提交接口和孩子任务卡同步跳过截止锁定，但继续执行星期和次数限制；周期任务自动随下一周期失效，一次性任务持续到撤销。

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar, Bold, Italic, Underline, List, Eye, EyeOff } from "lucide-react";
-import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildScheduleData, ChildScheduleSlot } from "./types/api";
+import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildScheduleData, ChildScheduleSlot, DailyReview } from "./types/api";
 import { api } from "./api/client";
 import { Empty, FeedbackToast, Tabs, icon, formatPeriod, formatReset, formatTime, rewardDisplayTitle } from "./components/UI";
 import { LedgerModal } from "./components/LedgerModal";
@@ -63,6 +63,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const [achievementTipId, setAchievementTipId] = useState("");
   const [tick, setTick] = useState(0);
+  const [dailyReviewLoading, setDailyReviewLoading] = useState(true);
   const loadDashLockRef = useRef(false);
   const pollingRef = useRef<number | null>(null);
 
@@ -211,15 +212,12 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   async function loadDashboard() {
     if (loadDashLockRef.current) return;
     loadDashLockRef.current = true;
-    let hasError = false;
     try {
-      const dashData = await api<any>("/dashboard/child").catch(() => {
-        hasError = true;
-        return { tasks: [], rewards: [], achievements: [], notifications: [], timezoneOffsetMinutes: 480, timezoneLabel: "UTC+08:00", balance: 0, warehouse_count: 0, greeting: "", child: null };
-      });
+      const dashData = await api<any>("/dashboard/child");
       setDash(dashData);
-      if (hasError) setError("部分数据加载失败，可点击重试");
+      setDailyReviewLoading(false);
     } catch (err) {
+      setDailyReviewLoading(true);
       setError("加载数据失败，可点击重试");
     } finally {
       loadDashLockRef.current = false;
@@ -482,6 +480,29 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     if (!window.confirm("确认清理仓库内已核销奖励的显示？历史记录和积分不会删除。")) return;
     await run("warehouse:clear", () => api("/warehouse/clear-redeemed", { method: "PATCH", body: JSON.stringify({}) }), "已清理已核销奖励");
     await loadWarehouse();
+  }
+
+  const dailyReview = dash.dailyReview as DailyReview | null | undefined;
+  const dailyReviewReady = !!dailyReview && Date.parse(dailyReview.acknowledgeAvailableAt) <= Date.now();
+  const dailyReviewRemaining = dailyReview ? Math.max(0, Date.parse(dailyReview.acknowledgeAvailableAt) - Date.now()) : 0;
+  const dailyReviewPraise = dailyReview?.praiseItems || [];
+  const dailyReviewOther = (dailyReview?.items || []).filter((item) => item.source_type !== "praise");
+
+  async function acknowledgeDailyReview() {
+    if (!dailyReview) return;
+    setBusy("daily-review:acknowledge");
+    setError("");
+    try {
+      await api("/child-daily-review/acknowledge", { method: "PATCH", body: JSON.stringify({ reviewDate: dailyReview.reviewDate }) });
+      setDash((current: any) => ({ ...current, dailyReview: null }));
+      setDailyReviewLoading(false);
+      setMessage("昨日表现已签收，消息中心已同步更新");
+      window.dispatchEvent(new CustomEvent("app:refresh-notifications"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "签收失败，请重试");
+    } finally {
+      setBusy("");
+    }
   }
 
   return (
@@ -791,6 +812,37 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         </section>
       )}
       {ledgerOpen && <LedgerModal title="我的积分清单" rows={ledger} onClose={() => setLedgerOpen(false)} />}
+      {(dailyReviewLoading || dailyReview) && (
+        <div className="modal-backdrop daily-review-backdrop" role="dialog" aria-modal="true" aria-label="昨日表现回顾">
+          <section className="panel daily-review-modal">
+            {dailyReviewLoading || !dailyReview ? (
+              <>
+                <div className="panel-title"><Star /><h2>正在准备昨日表现回顾</h2></div>
+                <p>请稍候，回顾加载完成后才能继续操作。</p>
+                <button className="secondary" onClick={() => void loadDashboard()}>重试</button>
+              </>
+            ) : (
+              <>
+                <div className="panel-title daily-review-title"><Star /><div><h2>昨日表现回顾</h2><small>{dailyReview.reviewDate} · {dailyReview.timezoneLabel}</small></div></div>
+                <div className="daily-review-totals">
+                  <span><small>净变化</small><strong className={dailyReview.totals.net >= 0 ? "positive" : "negative"}>{dailyReview.totals.net >= 0 ? "+" : ""}{dailyReview.totals.net}</strong></span>
+                  <span><small>获得</small><strong className="positive">+{dailyReview.totals.gained}</strong></span>
+                  <span><small>扣除/支出</small><strong className="negative">-{dailyReview.totals.deducted}</strong></span>
+                  <span><small>冻结</small><strong>{dailyReview.totals.frozen}</strong></span>
+                </div>
+                {!dailyReview.items.length && !dailyReview.notificationCount ? <p className="daily-review-empty">昨日无积分变化和消息。</p> : (
+                  <div className="daily-review-list">
+                    {dailyReviewPraise.length > 0 && <section><h3>表扬奖励 · {dailyReview.totals.praiseCount} 条</h3>{dailyReviewPraise.map((item) => <article className="daily-review-row praise" key={item.id}><strong>{item.sourceLabel || item.note || "表扬"}</strong><span className="positive">+{item.amount}</span></article>)}</section>}
+                    {dailyReviewOther.length > 0 && <section><h3>积分变化</h3>{dailyReviewOther.map((item) => <article className="daily-review-row" key={item.id}><div><strong>{item.sourceLabel || item.note || item.sourceTypeLabel || "积分变化"}</strong><small>{item.localCreatedAt || item.created_at}</small></div><span className={Number(item.amount) >= 0 ? "positive" : "negative"}>{Number(item.amount) >= 0 ? "+" : ""}{item.amount}</span></article>)}</section>}
+                    {!dailyReview.items.length && dailyReview.notificationCount > 0 && <p className="daily-review-empty">昨日没有积分变化；签收后将同步确认 {dailyReview.notificationCount} 条消息。</p>}
+                  </div>
+                )}
+                {dailyReviewReady ? <button className="primary" disabled={busy === "daily-review:acknowledge"} onClick={() => void acknowledgeDailyReview()}>{busy === "daily-review:acknowledge" ? "签收中..." : "签收并进入系统"}</button> : <p className="daily-review-countdown">请认真看完，{formatCountdown(dailyReviewRemaining)} 后可签收</p>}
+              </>
+            )}
+          </section>
+        </div>
+      )}
     </Shell>
   );
 }

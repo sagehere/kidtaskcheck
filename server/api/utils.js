@@ -269,6 +269,87 @@ export function timezoneLabel(offsetMinutes) {
     const minutes = String(abs % 60).padStart(2, "0");
     return `UTC${sign}${hours}:${minutes}`;
 }
+const DAILY_REVIEW_DELAY_MS = 30000;
+function dailyReviewWindow(offsetMinutes, at = nowIso()) {
+    const local = new Date(new Date(at).getTime() + offsetMinutes * 60000);
+    const year = local.getUTCFullYear();
+    const month = local.getUTCMonth();
+    const day = local.getUTCDate();
+    const startMs = Date.UTC(year, month, day - 1) - offsetMinutes * 60000;
+    const endMs = Date.UTC(year, month, day) - offsetMinutes * 60000;
+    return {
+        reviewDate: new Date(Date.UTC(year, month, day - 1)).toISOString().slice(0, 10),
+        start: new Date(startMs).toISOString(),
+        end: new Date(endMs).toISOString()
+    };
+}
+async function findOrCreateChildDailyReview(env, childId, offsetMinutes, at = nowIso()) {
+    await ensureChildDailyReviewSchema(env);
+    const window = dailyReviewWindow(offsetMinutes, at);
+    await env.DB.prepare("INSERT OR IGNORE INTO child_daily_reviews (child_id, review_date, presented_at) VALUES (?, ?, ?)")
+        .bind(childId, window.reviewDate, at)
+        .run();
+    const review = await env.DB.prepare("SELECT * FROM child_daily_reviews WHERE child_id=? AND review_date=?")
+        .bind(childId, window.reviewDate)
+        .first();
+    return { ...window, review };
+}
+export async function childDailyReview(env, childId, offsetMinutes, at = nowIso()) {
+    const { reviewDate, start, end, review } = await findOrCreateChildDailyReview(env, childId, offsetMinutes, at);
+    if (review?.acknowledged_at)
+        return null;
+    const rows = (await env.DB.prepare(`SELECT * FROM point_ledger
+WHERE child_id=? AND datetime(created_at)>=datetime(?) AND datetime(created_at)<datetime(?)
+ORDER BY datetime(created_at) DESC, created_at DESC, id DESC`)
+        .bind(childId, start, end)
+        .all()).results;
+    const notificationCount = Number((await env.DB.prepare(`SELECT COUNT(*) count FROM notifications
+WHERE recipient_type='child' AND recipient_id=? AND datetime(created_at)>=datetime(?) AND datetime(created_at)<datetime(?)`)
+        .bind(childId, start, end)
+        .first())?.count || 0);
+    const items = await withLedgerSources(env, rows, offsetMinutes);
+    const totals = items.reduce((value, row) => {
+        const amount = Number(row.amount || 0);
+        value.gained += Math.max(0, amount);
+        value.deducted += Math.max(0, -amount);
+        value.net += amount;
+        value.frozen += Math.max(0, Number(row.frozen_amount || 0));
+        value.praiseCount += row.source_type === "praise" ? 1 : 0;
+        return value;
+    }, { gained: 0, deducted: 0, net: 0, frozen: 0, praiseCount: 0 });
+    return {
+        reviewDate,
+        presentedAt: review.presented_at,
+        acknowledgeAvailableAt: new Date(Date.parse(review.presented_at) + DAILY_REVIEW_DELAY_MS).toISOString(),
+        timezoneLabel: timezoneLabel(offsetMinutes),
+        totals,
+        items,
+        praiseItems: items.filter((row) => row.source_type === "praise"),
+        notificationCount
+    };
+}
+export async function childDailyReviewRequired(env, childId, offsetMinutes, at = nowIso()) {
+    const { review } = await findOrCreateChildDailyReview(env, childId, offsetMinutes, at);
+    return !review?.acknowledged_at;
+}
+export async function acknowledgeChildDailyReview(env, childId, offsetMinutes, reviewDate, at = nowIso()) {
+    const current = await findOrCreateChildDailyReview(env, childId, offsetMinutes, at);
+    if (String(reviewDate || "") !== current.reviewDate)
+        return { status: "invalid" };
+    if (current.review?.acknowledged_at)
+        return { status: "acknowledged" };
+    if (Date.parse(current.review.presented_at) + DAILY_REVIEW_DELAY_MS > Date.parse(at))
+        return { status: "countdown", acknowledgeAvailableAt: new Date(Date.parse(current.review.presented_at) + DAILY_REVIEW_DELAY_MS).toISOString() };
+    await env.DB.batch([
+        env.DB.prepare("UPDATE child_daily_reviews SET acknowledged_at=? WHERE child_id=? AND review_date=? AND acknowledged_at IS NULL")
+            .bind(at, childId, current.reviewDate),
+        env.DB.prepare(`UPDATE notifications SET read_at=?
+WHERE recipient_type='child' AND recipient_id=? AND read_at IS NULL
+  AND datetime(created_at)>=datetime(?) AND datetime(created_at)<datetime(?)`)
+            .bind(at, childId, current.start, current.end)
+    ]);
+    return { status: "acknowledged" };
+}
 export async function tableColumns(env, table) {
     return (await env.DB.prepare(`PRAGMA table_info(${table})`).all()).results.map((row) => row.name);
 }
@@ -507,6 +588,16 @@ async function ensureChildScheduleSchemaNow(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_slot ON child_schedule_items(slot_id, sort_order)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_child_task ON child_schedule_items(child_id, task_id)").run();
 }
+async function ensureChildDailyReviewSchemaNow(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_daily_reviews (
+  child_id TEXT NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  review_date TEXT NOT NULL,
+  presented_at TEXT NOT NULL,
+  acknowledged_at TEXT,
+  PRIMARY KEY (child_id, review_date)
+)`).run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_child_daily_reviews_pending ON child_daily_reviews(child_id, acknowledged_at, review_date)").run();
+}
 export function ensureParentDelegatesSchema(env) {
     return oncePerDb(env, "parent-delegates-schema", () => ensureParentDelegatesSchemaNow(env));
 }
@@ -527,6 +618,9 @@ export function ensureRequiredTaskSchema(env) {
 }
 export function ensureChildScheduleSchema(env) {
     return oncePerDb(env, "child-schedule-schema", () => ensureChildScheduleSchemaNow(env));
+}
+export function ensureChildDailyReviewSchema(env) {
+    return oncePerDb(env, "child-daily-review-schema", () => ensureChildDailyReviewSchemaNow(env));
 }
 const SESSION_DAYS = 180;
 const REMEMBER_SESSION_DAYS = 3650;
@@ -1113,6 +1207,7 @@ export async function bootstrap(env) {
         await ensureSystemErrorLogs(env);
         await ensureAdmin(env);
         await ensureChildScheduleSchema(env);
+        await ensureChildDailyReviewSchema(env);
         await maybeRunMaintenance(env);
     });
 }

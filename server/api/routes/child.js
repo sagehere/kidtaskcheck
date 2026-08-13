@@ -1,8 +1,18 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, taskSubmissionDeadlineState } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, localTimeText, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, localTimeText, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema, childDailyReview, acknowledgeChildDailyReview } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
+    if (path === "/child-daily-review/acknowledge" && method === "PATCH") {
+        const a = requireRole(actor, ["child"]);
+        const input = await body(request);
+        const result = await acknowledgeChildDailyReview(env, a.id, await timezoneOffsetMinutes(env), input.reviewDate);
+        if (result.status === "invalid")
+            return fail("DAILY_REVIEW_NOT_FOUND", "昨日回顾不存在或已过期", 404);
+        if (result.status === "countdown")
+            return fail("DAILY_REVIEW_COUNTDOWN", "请等待倒计时结束后再签收", 409);
+        return ok(true);
+    }
     if (path === "/task-submissions" && method === "POST") {
         const a = requireRole(actor, ["child"]);
         await ensureRequiredTaskSchema(env);
@@ -264,6 +274,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             requiredPenaltyRemedies: await activeRequiredPenaltyRemedies(env, a.id, offset),
             aiGreeting: snapshot.greeting,
             aiRefreshPending: snapshot.aiRefreshPending,
+            dailyReview: await childDailyReview(env, a.id, offset),
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? AND ca.hidden_from_child_at IS NULL ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
         });
     }

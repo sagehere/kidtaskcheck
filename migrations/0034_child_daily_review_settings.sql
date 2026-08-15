@@ -1,0 +1,2 @@
+ALTER TABLE children ADD COLUMN daily_review_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE children ADD COLUMN daily_review_seconds INTEGER NOT NULL DEFAULT 30;

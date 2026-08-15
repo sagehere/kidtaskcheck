@@ -3,7 +3,7 @@ export type Me =
   | { type: "child"; role: "child"; id: string; parentId: string; displayName: string; username: string }
   | null;
 
-export type Child = { id: string; username: string; display_name: string; status: string; balance?: number; frozenPoints?: number; ai_enabled?: number; gender?: string; birth_date?: string | null };
+export type Child = { id: string; username: string; display_name: string; status: string; balance?: number; frozenPoints?: number; ai_enabled?: number; gender?: string; birth_date?: string | null; daily_review_enabled?: number; daily_review_seconds?: number };
 export type Gallery = { id: string; name: string; url: string; usage: string };
 export type Category = { id: string; name: string; icon_type: string; icon_value: string; is_system: number };
 export type Task = Record<string, any> & { assignees?: string[] };

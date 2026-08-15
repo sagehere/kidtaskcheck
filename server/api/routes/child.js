@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, taskSubmissionDeadlineState } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, localTimeText, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema, childDailyReview, acknowledgeChildDailyReview } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, localTimeText, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, settleRequiredTaskPenalties, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema, childDailyReview, childDailyReviewRequired, acknowledgeChildDailyReview } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -185,6 +185,10 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
         await ensureAchievementSchema(env);
         await settleExpiredCriticismFreezes(env);
         const offset = await timezoneOffsetMinutes(env);
+        const reviewAt = nowIso();
+        const dailyReviewRequired = await childDailyReviewRequired(env, a.id, offset, reviewAt);
+        if (dailyReviewRequired)
+            await settleRequiredTaskPenalties(env, reviewAt, a.id);
         const pins = (await env.DB.prepare("SELECT item_type, item_id FROM child_pins WHERE child_id=?").bind(a.id).all()).results;
         const pinnedTaskId = pins.find((pin) => pin.item_type === "task")?.item_id || null;
         const pinnedRewardId = pins.find((pin) => pin.item_type === "reward")?.item_id || null;
@@ -274,7 +278,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             requiredPenaltyRemedies: await activeRequiredPenaltyRemedies(env, a.id, offset),
             aiGreeting: snapshot.greeting,
             aiRefreshPending: snapshot.aiRefreshPending,
-            dailyReview: await childDailyReview(env, a.id, offset),
+            dailyReview: dailyReviewRequired ? await childDailyReview(env, a.id, offset, reviewAt) : null,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? AND ca.hidden_from_child_at IS NULL ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
         });
     }

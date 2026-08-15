@@ -1,3 +1,11 @@
+# 2026-08-15
+
+- 类型：功能修复与配置新增
+- 任务：修复必做任务凌晨结算延迟一天进入昨日表现回顾，并允许家长逐个儿童控制回顾开关和阅读时间。
+- 修改文件：`server/api/{utils.js,routes/{child,parent}.js}`、`src/{ParentApp.tsx,types/api.ts}`、`migrations/0034_child_daily_review_settings.sql`、`tests/{daily-review,migration}.test.ts`、功能索引。
+- 行为：儿童待签收回顾加载前只结算该儿童的必做任务；扣分账本、通知和结算记录归属上一业务日，补救截止仍按实际结算时间计算；阅读时间支持 0–300 秒并即时生效，关闭时解除儿童端遮罩与写操作限制。
+- 验证：`rtk npm run build`；`rtk npm test`（158 项）通过。
+
 # 2026-08-04
 
 - 类型：功能新增

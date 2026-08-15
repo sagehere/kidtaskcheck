@@ -209,6 +209,8 @@ export async function ensureSystemSettings(env) {
     await ensureColumn(env, "children", "ai_enabled", "ai_enabled INTEGER NOT NULL DEFAULT 0");
     await ensureColumn(env, "children", "gender", "gender TEXT NOT NULL DEFAULT ''");
     await ensureColumn(env, "children", "birth_date", "birth_date TEXT");
+    await ensureColumn(env, "children", "daily_review_enabled", "daily_review_enabled INTEGER NOT NULL DEFAULT 1");
+    await ensureColumn(env, "children", "daily_review_seconds", "daily_review_seconds INTEGER NOT NULL DEFAULT 30");
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ai_child_greetings (
   child_id TEXT NOT NULL REFERENCES children(id),
   previous_week_key TEXT NOT NULL,
@@ -269,7 +271,18 @@ export function timezoneLabel(offsetMinutes) {
     const minutes = String(abs % 60).padStart(2, "0");
     return `UTC${sign}${hours}:${minutes}`;
 }
-const DAILY_REVIEW_DELAY_MS = 30000;
+const DEFAULT_DAILY_REVIEW_SECONDS = 30;
+const MAX_DAILY_REVIEW_SECONDS = 300;
+function dailyReviewSeconds(value) {
+    const seconds = Number(value);
+    return Number.isInteger(seconds) && seconds >= 0 && seconds <= MAX_DAILY_REVIEW_SECONDS ? seconds : DEFAULT_DAILY_REVIEW_SECONDS;
+}
+async function childDailyReviewSettings(env, childId) {
+    const child = await env.DB.prepare("SELECT daily_review_enabled, daily_review_seconds FROM children WHERE id=? AND deleted_at IS NULL")
+        .bind(childId)
+        .first();
+    return { enabled: !!child && Number(child.daily_review_enabled) !== 0, seconds: dailyReviewSeconds(child?.daily_review_seconds) };
+}
 function dailyReviewWindow(offsetMinutes, at = nowIso()) {
     const local = new Date(new Date(at).getTime() + offsetMinutes * 60000);
     const year = local.getUTCFullYear();
@@ -295,6 +308,9 @@ async function findOrCreateChildDailyReview(env, childId, offsetMinutes, at = no
     return { ...window, review };
 }
 export async function childDailyReview(env, childId, offsetMinutes, at = nowIso()) {
+    const settings = await childDailyReviewSettings(env, childId);
+    if (!settings.enabled)
+        return null;
     const { reviewDate, start, end, review } = await findOrCreateChildDailyReview(env, childId, offsetMinutes, at);
     if (review?.acknowledged_at)
         return null;
@@ -320,7 +336,7 @@ WHERE recipient_type='child' AND recipient_id=? AND datetime(created_at)>=dateti
     return {
         reviewDate,
         presentedAt: review.presented_at,
-        acknowledgeAvailableAt: new Date(Date.parse(review.presented_at) + DAILY_REVIEW_DELAY_MS).toISOString(),
+        acknowledgeAvailableAt: new Date(Date.parse(review.presented_at) + settings.seconds * 1000).toISOString(),
         timezoneLabel: timezoneLabel(offsetMinutes),
         totals,
         items,
@@ -329,17 +345,22 @@ WHERE recipient_type='child' AND recipient_id=? AND datetime(created_at)>=dateti
     };
 }
 export async function childDailyReviewRequired(env, childId, offsetMinutes, at = nowIso()) {
+    if (!(await childDailyReviewSettings(env, childId)).enabled)
+        return false;
     const { review } = await findOrCreateChildDailyReview(env, childId, offsetMinutes, at);
     return !review?.acknowledged_at;
 }
 export async function acknowledgeChildDailyReview(env, childId, offsetMinutes, reviewDate, at = nowIso()) {
+    const settings = await childDailyReviewSettings(env, childId);
+    if (!settings.enabled)
+        return { status: "acknowledged" };
     const current = await findOrCreateChildDailyReview(env, childId, offsetMinutes, at);
     if (String(reviewDate || "") !== current.reviewDate)
         return { status: "invalid" };
     if (current.review?.acknowledged_at)
         return { status: "acknowledged" };
-    if (Date.parse(current.review.presented_at) + DAILY_REVIEW_DELAY_MS > Date.parse(at))
-        return { status: "countdown", acknowledgeAvailableAt: new Date(Date.parse(current.review.presented_at) + DAILY_REVIEW_DELAY_MS).toISOString() };
+    if (Date.parse(current.review.presented_at) + settings.seconds * 1000 > Date.parse(at))
+        return { status: "countdown", acknowledgeAvailableAt: new Date(Date.parse(current.review.presented_at) + settings.seconds * 1000).toISOString() };
     await env.DB.batch([
         env.DB.prepare("UPDATE child_daily_reviews SET acknowledged_at=? WHERE child_id=? AND review_date=? AND acknowledged_at IS NULL")
             .bind(at, childId, current.reviewDate),
@@ -755,7 +776,7 @@ WHERE id=? AND freeze_status='frozen' AND revoked_at IS NULL`)
     }
     return { settled: rows.length };
 }
-export async function settleRequiredTaskPenalties(env, at = nowIso()) {
+export async function settleRequiredTaskPenalties(env, at = nowIso(), onlyChildId) {
     await ensureRequiredTaskSchema(env);
     await ensureCriticismRemedySchema(env);
     const offset = await timezoneOffsetMinutes(env);
@@ -770,21 +791,25 @@ export async function settleRequiredTaskPenalties(env, at = nowIso()) {
     const dailyKey = periodKey("daily", prevDay, 0);
     const weeklyKey = periodKey("weekly", prevWeek, 0);
     const monthlyKey = periodKey("monthly", prevMonth, 0);
+    const businessAt = new Date(Date.parse(dailyReviewWindow(offset, at).end) - 1).toISOString();
     const shouldSettleDaily = hour >= 0;
     const shouldSettleWeekly = dayOfWeek === 1 && hour >= 0;
     const shouldSettleMonthly = dayOfMonth === 1 && hour >= 0;
     if (!shouldSettleDaily && !shouldSettleWeekly && !shouldSettleMonthly)
         return { settled: 0 };
-    const tasks = (await env.DB.prepare(`SELECT t.id, t.parent_id, t.period, t.required_count, t.required_penalty_points, t.required_remedy_enabled, t.required_remedy_condition, t.required_remedy_points, t.required_remedy_deadline_hours, t.title, t.created_at, t.updated_at,
+    const tasks = env.DB.prepare(`SELECT t.id, t.parent_id, t.period, t.required_count, t.required_penalty_points, t.required_remedy_enabled, t.required_remedy_condition, t.required_remedy_points, t.required_remedy_deadline_hours, t.title, t.created_at, t.updated_at,
   ta.child_id
 FROM tasks t
 JOIN task_assignees ta ON ta.task_id=t.id
 WHERE t.is_required=1
   AND t.required_count>0
   AND t.is_active=1
-  AND t.deleted_at IS NULL`).all()).results;
+  AND t.deleted_at IS NULL${onlyChildId ? " AND ta.child_id=?" : ""}`);
+    if (onlyChildId)
+        tasks.bind(onlyChildId);
+    const taskRows = (await tasks.all()).results;
     let settled = 0;
-    for (const task of tasks) {
+    for (const task of taskRows) {
         let periodKeyValue = null;
         if (task.period === "daily" && shouldSettleDaily)
             periodKeyValue = dailyKey;
@@ -819,7 +844,7 @@ WHERE task_id=? AND child_id=? AND period_key=? AND status='approved'`)
         if (actualPenalty <= 0) {
             await env.DB.prepare(`INSERT INTO task_required_penalties (id, task_id, child_id, parent_id, period_key, required_count, actual_count, penalty_points, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`)
-                .bind(id(), task.id, task.child_id, task.parent_id, periodKeyValue, task.required_count, actualCount, at)
+                .bind(id(), task.id, task.child_id, task.parent_id, periodKeyValue, task.required_count, actualCount, businessAt)
                 .run();
             settled++;
             continue;
@@ -831,7 +856,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`)
         const remedyDeadlineAt = remediable ? new Date(new Date(at).getTime() + remedyDeadlineHours * 3600000).toISOString() : null;
         await env.DB.prepare(`INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, effective_amount, frozen_amount, freeze_status, remedy_condition, remedy_points, remedy_deadline_at, created_at)
 VALUES (?, ?, ?, ?, 'task_required_penalty', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .bind(ledgerId, task.child_id, task.parent_id, remediable ? 0 : -actualPenalty, task.id, periodKeyValue, `必做任务未达标扣分`, remediable ? 0 : -actualPenalty, remediable ? actualPenalty : 0, remediable ? "frozen" : "", remediable ? String(task.required_remedy_condition || "").trim() : "", remedyPoints, remedyDeadlineAt, at)
+            .bind(ledgerId, task.child_id, task.parent_id, remediable ? 0 : -actualPenalty, task.id, periodKeyValue, `必做任务未达标扣分`, remediable ? 0 : -actualPenalty, remediable ? actualPenalty : 0, remediable ? "frozen" : "", remediable ? String(task.required_remedy_condition || "").trim() : "", remedyPoints, remedyDeadlineAt, businessAt)
             .run();
         await notify(env, {
             recipientType: "child",
@@ -843,11 +868,11 @@ VALUES (?, ?, ?, ?, 'task_required_penalty', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             eventType: "task_required_penalty",
             relatedType: "point_ledger",
             relatedId: ledgerId,
-            createdAt: at
+            createdAt: businessAt
         });
         await env.DB.prepare(`INSERT INTO task_required_penalties (id, task_id, child_id, parent_id, period_key, required_count, actual_count, penalty_points, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .bind(id(), task.id, task.child_id, task.parent_id, periodKeyValue, task.required_count, actualCount, actualPenalty, at)
+            .bind(id(), task.id, task.child_id, task.parent_id, periodKeyValue, task.required_count, actualCount, actualPenalty, businessAt)
             .run();
         await recalcAchievements(env, task.parent_id, task.child_id);
         settled++;

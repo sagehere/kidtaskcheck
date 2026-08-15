@@ -396,7 +396,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
     if (path === "/children") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         if (method === "GET")
-            return ok((await env.DB.prepare("SELECT id, username, display_name, status, ai_enabled, gender, birth_date FROM children WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC").bind(a.id).all()).results);
+            return ok((await env.DB.prepare("SELECT id, username, display_name, status, ai_enabled, gender, birth_date, daily_review_enabled, daily_review_seconds FROM children WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC").bind(a.id).all()).results);
         const input = await body(request);
         if (method === "POST") {
             const username = String(input.username || "").trim();
@@ -436,6 +436,19 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
         if (input.aiEnabled !== undefined) {
             updates.push("ai_enabled=?");
             params.push(input.aiEnabled ? 1 : 0);
+        }
+        if (input.dailyReviewEnabled !== undefined) {
+            if (typeof input.dailyReviewEnabled !== "boolean")
+                return fail("BAD_REQUEST", "昨日表现回顾开关必须为 true 或 false", 400);
+            updates.push("daily_review_enabled=?");
+            params.push(input.dailyReviewEnabled ? 1 : 0);
+        }
+        if (input.dailyReviewSeconds !== undefined) {
+            const seconds = Number(input.dailyReviewSeconds);
+            if (typeof input.dailyReviewSeconds !== "number" || !Number.isInteger(seconds) || seconds < 0 || seconds > 300)
+                return fail("BAD_REQUEST", "昨日表现回顾阅读时间必须是 0 到 300 的整数秒", 400);
+            updates.push("daily_review_seconds=?");
+            params.push(seconds);
         }
         if (input.gender !== undefined) {
             if (input.gender && !["male", "female"].includes(input.gender))

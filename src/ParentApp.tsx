@@ -1528,7 +1528,7 @@ export function ChildManager({ children, onEdit, onToggle, onDelete, onReport, o
           <article className="row" key={child.id}>
             <div>
               <strong>{child.display_name}</strong>
-              <span>{child.username} · {child.status === "active" ? "启用" : "停用"}</span>
+              <span>{child.username} · {child.status === "active" ? "启用" : "停用"} · 昨日回顾：{child.daily_review_enabled === 0 ? "关闭" : `${child.daily_review_seconds ?? 30}秒`}</span>
             </div>
             <div className="actions">
               <button className="secondary" onClick={() => onEdit(child)}>修改</button>
@@ -2256,7 +2256,7 @@ export function EditItemForm({ kind, item, children, categories, tasks, achievem
 }
 
 export function ChildEditForm({ child, onSave, onCancel }: { child: Child; onSave: (data: any) => any; onCancel: () => void }) {
-  const [data, setData] = useState({ displayName: child.display_name, password: "", aiEnabled: child.ai_enabled === 1, gender: child.gender || "", birthDate: child.birth_date || "" });
+  const [data, setData] = useState({ displayName: child.display_name, password: "", aiEnabled: child.ai_enabled === 1, gender: child.gender || "", birthDate: child.birth_date || "", dailyReviewEnabled: child.daily_review_enabled !== 0, dailyReviewSeconds: child.daily_review_seconds ?? 30 });
   return (
     <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, password: data.password || undefined }); }}>
       <Field label="姓名"><input required value={data.displayName} onChange={(e) => setData({ ...data, displayName: e.target.value })} /></Field>
@@ -2270,6 +2270,8 @@ export function ChildEditForm({ child, onSave, onCancel }: { child: Child; onSav
       </Field>
       <Field label="出生日期"><input type="date" value={data.birthDate} onChange={(e) => setData({ ...data, birthDate: e.target.value })} /></Field>
       <Toggle label="启用 AI 寄语" checked={data.aiEnabled} onChange={(aiEnabled) => setData({ ...data, aiEnabled })} />
+      <Toggle label="启用昨日表现回顾" checked={data.dailyReviewEnabled} onChange={(dailyReviewEnabled) => setData({ ...data, dailyReviewEnabled })} />
+      <Field label="回顾阅读时间（秒）"><input type="number" min="0" max="300" step="1" value={data.dailyReviewSeconds} disabled={!data.dailyReviewEnabled} onChange={(e) => setData({ ...data, dailyReviewSeconds: Number(e.target.value) })} /></Field>
       <div className="actions"><button className="primary">保存</button><button type="button" className="secondary" onClick={onCancel}>取消</button></div>
     </form>
   );

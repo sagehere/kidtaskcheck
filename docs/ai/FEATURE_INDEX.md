@@ -118,7 +118,7 @@
 - 主要调用链：`ChildApp.load` -> `/dashboard/child`（任务、积分、冻结积分和 AI 问候）；submit -> `/task-submissions`; pin -> `/child-pins/:kind`; ledger -> `/points/ledger`; 仅进入仓库或相关操作后请求 `/warehouse`。
 - 相关状态：`task_submissions`、`point_ledger.freeze_status`、`child_pins`、`ai_child_greetings`
 - 相关接口：`GET /api/dashboard/child?dailyReviewEntry=1`（仅首次面板加载时重置未签收倒计时）、`PATCH /api/child-daily-review/acknowledge`、`GET /api/dashboard/child-summary`（兼容保留）、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`PATCH /api/child-achievements/:achievementId/visibility`、`GET /api/points/ledger`
-- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；`/dashboard/child` 返回 AI 缓存问候与刷新等待标记，孩子端不再重复请求 summary；任务卡的 `deadlineAt` 用于浏览器本地秒级倒计时，`localDeadlineAt` 必须由后端按系统时区格式化，不能使用设备时区重算截止时刻；`submissionDeadlineExempted` 只跳过当前周期截止校验，不能跳过任务星期或次数限制；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；孩子面板每日寄语显示上限为 200 个字符；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色；当前周期 0 分豁免记录在任务墙和日程任务卡显示绿色底色的“已豁免”；`requiredPenaltyRemedies` 与批评补救共用待补救展示，孩子不能自行确认。
+- 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；`/dashboard/child` 返回 AI 缓存问候与刷新等待标记，孩子端不再重复请求 summary；儿童面板首个 dashboard 响应前只显示通用加载状态，只有响应中的 `dailyReview` 为对象时才显示回顾弹窗，已签收返回 `null` 时不得先渲染回顾占位；任务卡的 `deadlineAt` 用于浏览器本地秒级倒计时，`localDeadlineAt` 必须由后端按系统时区格式化，不能使用设备时区重算截止时刻；`submissionDeadlineExempted` 只跳过当前周期截止校验，不能跳过任务星期或次数限制；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；孩子面板每日寄语显示上限为 200 个字符；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色；当前周期 0 分豁免记录在任务墙和日程任务卡显示绿色底色的“已豁免”；`requiredPenaltyRemedies` 与批评补救共用待补救展示，孩子不能自行确认。
 - 最近更新时间：2026-08-16
 
 ## 10. 积分账本、报表、打印与归档

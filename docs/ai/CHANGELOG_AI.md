@@ -1,5 +1,11 @@
 # 2026-08-16
 
+- 类型：缺陷修复
+- 任务：修复儿童已签收昨日回顾后再次登录仍短暂出现“正在准备昨日表现回顾”的闪屏。
+- 修改文件：`src/ChildApp.tsx`、`tests/child-app.test.tsx`、`docs/ai/FEATURE_INDEX.md`。
+- 原因与行为：原回顾加载状态首帧固定为 `true`，尚未取得服务端签收结果便渲染回顾占位；现改为首个面板响应前只显示通用加载状态，且仅在服务端返回真实回顾对象时展示回顾弹窗。
+- 验证：`npm test -- --run tests/child-app.test.tsx tests/daily-review.test.ts`（8 项）和 `npm run build` 通过。
+
 - 类型：功能优化
 - 任务：优化儿童端昨日回顾的重进倒计时、扣分展示优先级和签收后重进行为。
 - 修改文件：

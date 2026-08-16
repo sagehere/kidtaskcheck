@@ -65,6 +65,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [tick, setTick] = useState(0);
   const [dailyReviewLoading, setDailyReviewLoading] = useState(true);
   const loadDashLockRef = useRef(false);
+  const dailyReviewEntryRef = useRef(true);
   const pollingRef = useRef<number | null>(null);
 
   async function loadWarehouse() {
@@ -213,9 +214,11 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     if (loadDashLockRef.current) return;
     loadDashLockRef.current = true;
     try {
-      const dashData = await api<any>("/dashboard/child");
+      const dailyReviewEntry = dailyReviewEntryRef.current;
+      const dashData = await api<any>(`/dashboard/child${dailyReviewEntry ? "?dailyReviewEntry=1" : ""}`);
       setDash(dashData);
       setDailyReviewLoading(false);
+      if (dailyReviewEntry) dailyReviewEntryRef.current = false;
     } catch (err) {
       setDailyReviewLoading(true);
       setError("加载数据失败，可点击重试");
@@ -486,7 +489,8 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const dailyReviewReady = !!dailyReview && Date.parse(dailyReview.acknowledgeAvailableAt) <= Date.now();
   const dailyReviewRemaining = dailyReview ? Math.max(0, Date.parse(dailyReview.acknowledgeAvailableAt) - Date.now()) : 0;
   const dailyReviewPraise = dailyReview?.praiseItems || [];
-  const dailyReviewOther = (dailyReview?.items || []).filter((item) => item.source_type !== "praise");
+  const dailyReviewDeductions = (dailyReview?.items || []).filter((item) => Number(item.amount) < 0 && ["criticism", "task_required_penalty"].includes(item.source_type));
+  const dailyReviewOther = (dailyReview?.items || []).filter((item) => item.source_type !== "praise" && !dailyReviewDeductions.includes(item));
 
   async function acknowledgeDailyReview() {
     if (!dailyReview) return;
@@ -832,6 +836,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                 </div>
                 {!dailyReview.items.length && !dailyReview.notificationCount ? <p className="daily-review-empty">昨日无积分变化和消息。</p> : (
                   <div className="daily-review-list">
+                    {dailyReviewDeductions.length > 0 && <section><h3 className="daily-review-deduction-title">昨日扣分 · {dailyReviewDeductions.length} 项</h3>{dailyReviewDeductions.map((item) => <article className="daily-review-row deduction" key={item.id}><div><strong>{item.sourceLabel || item.note || item.sourceTypeLabel || "扣分"}</strong><small>{item.localCreatedAt || item.created_at}</small></div><span className="negative">{item.amount}</span></article>)}</section>}
                     {dailyReviewPraise.length > 0 && <section><h3>表扬奖励 · {dailyReview.totals.praiseCount} 条</h3>{dailyReviewPraise.map((item) => <article className="daily-review-row praise" key={item.id}><strong>{item.sourceLabel || item.note || "表扬"}</strong><span className="positive">+{item.amount}</span></article>)}</section>}
                     {dailyReviewOther.length > 0 && <section><h3>积分变化</h3>{dailyReviewOther.map((item) => <article className="daily-review-row" key={item.id}><div><strong>{item.sourceLabel || item.note || item.sourceTypeLabel || "积分变化"}</strong><small>{item.localCreatedAt || item.created_at}</small></div><span className={Number(item.amount) >= 0 ? "positive" : "negative"}>{Number(item.amount) >= 0 ? "+" : ""}{item.amount}</span></article>)}</section>}
                     {!dailyReview.items.length && dailyReview.notificationCount > 0 && <p className="daily-review-empty">昨日没有积分变化；签收后将同步确认 {dailyReview.notificationCount} 条消息。</p>}

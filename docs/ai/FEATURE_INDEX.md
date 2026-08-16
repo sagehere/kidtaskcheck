@@ -110,16 +110,16 @@
 
 ## 9. 孩子端任务、积分与固定卡片
 
-- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候；成就墙支持隐藏称号，隐藏后可在仓库成就标签中展示回来。必做任务在任务墙中靠前排序并以醒目标记标识，卡片上提示"须完成X次"，当前周期已豁免时显示“已豁免”；设置提交截止时间的任务卡按系统时区显示截止时刻和秒级剩余倒计时，到期立即显示“已截止”并禁用提交；家长解除当前周期截止后显示“截止已解除”且允许提交。发生可补救的必做扣分时，在“待补救”面板显示条件、冻结积分、可挽回积分和倒计时。任务墙右上角支持"日程表显示"开关，打开后按已设置的日程时段组织任务，显示每个时段的计划内容，并保留未安排任务分组。每日首次进入儿童端时，若家长为该儿童启用回顾，必须先签收按系统时区生成的昨日积分与表扬回顾；倒计时由家长设置（0–300 秒）后可签收，签收同时确认昨日全部消息中心通知；必做任务跨零点自动结算时按上一业务日归入账本、通知和回顾。
+- 功能说明：孩子查看今日任务、提交任务、查看积分/冻结积分、固定任务或奖励卡片、查看 AI 问候；成就墙支持隐藏称号，隐藏后可在仓库成就标签中展示回来。必做任务在任务墙中靠前排序并以醒目标记标识，卡片上提示"须完成X次"，当前周期已豁免时显示“已豁免”；设置提交截止时间的任务卡按系统时区显示截止时刻和秒级剩余倒计时，到期立即显示“已截止”并禁用提交；家长解除当前周期截止后显示“截止已解除”且允许提交。发生可补救的必做扣分时，在“待补救”面板显示条件、冻结积分、可挽回积分和倒计时。任务墙右上角支持"日程表显示"开关，打开后按已设置的日程时段组织任务，显示每个时段的计划内容，并保留未安排任务分组。每日首次进入儿童端时，若家长为该儿童启用回顾，必须先签收按系统时区生成的昨日积分与表扬回顾；未签收时，重新登录、关闭后重开或刷新页面会重置完整阅读倒计时，但轮询和切回标签页不会重置；签收后同一业务日重进不会重新生成或展示清单。回顾弹窗优先高亮实际生效的批评和必做任务处罚扣分，不将奖励消费或待补救冻结归为扣分；倒计时由家长设置（0–300 秒）后可签收，签收同时确认昨日全部消息中心通知；必做任务跨零点自动结算时按上一业务日归入账本、通知和回顾。
 - 用户入口：孩子登录后的首页、积分账本弹层、固定按钮。
 - P0：`src/ChildApp.tsx`、`server/api/routes/child.js`、`server/api/router.mjs`、`server/api/routes/shared.js`
 - P1：`server/api/utils.js`、`src/types/api.ts`、`src/components/Shell.tsx`、`src/styles.css`
 - P2：`migrations/0001_initial.sql`、`migrations/0008_child_pins.sql`、`migrations/0011_ai_service_and_child_fields.sql`、`migrations/0021_remediable_criticism_daily_greeting_checklist_images.sql`、`migrations/0033_child_daily_reviews.sql`、`migrations/0034_child_daily_review_settings.sql`、`tests/api.test.ts`、`tests/daily-review.test.ts`
 - 主要调用链：`ChildApp.load` -> `/dashboard/child`（任务、积分、冻结积分和 AI 问候）；submit -> `/task-submissions`; pin -> `/child-pins/:kind`; ledger -> `/points/ledger`; 仅进入仓库或相关操作后请求 `/warehouse`。
 - 相关状态：`task_submissions`、`point_ledger.freeze_status`、`child_pins`、`ai_child_greetings`
-- 相关接口：`GET /api/dashboard/child`、`PATCH /api/child-daily-review/acknowledge`、`GET /api/dashboard/child-summary`（兼容保留）、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`PATCH /api/child-achievements/:achievementId/visibility`、`GET /api/points/ledger`
+- 相关接口：`GET /api/dashboard/child?dailyReviewEntry=1`（仅首次面板加载时重置未签收倒计时）、`PATCH /api/child-daily-review/acknowledge`、`GET /api/dashboard/child-summary`（兼容保留）、`POST /api/task-submissions`、`PATCH /api/child-pins/:kind`、`PATCH /api/child-achievements/:achievementId/visibility`、`GET /api/points/ledger`
 - 修改注意事项：孩子提交任务要防重复；冻结/有效积分展示要和账本一致；`/dashboard/child` 返回 AI 缓存问候与刷新等待标记，孩子端不再重复请求 summary；任务卡的 `deadlineAt` 用于浏览器本地秒级倒计时，`localDeadlineAt` 必须由后端按系统时区格式化，不能使用设备时区重算截止时刻；`submissionDeadlineExempted` 只跳过当前周期截止校验，不能跳过任务星期或次数限制；AI 问候只展示缓存状态，不应在孩子端暴露生成触发逻辑；孩子面板每日寄语显示上限为 200 个字符；必做任务排序在前端完成，不改变后端查询顺序；任务墙日程表显示只改变前端组织方式，不改变任务提交/审核/积分流程；任务墙时段标题旁时间文本使用约两格字符间距紧邻展示，计划富文本仅在非空时显示在任务卡片上方；`.required-card::before` 覆盖默认渐变色为琥珀/红色；当前周期 0 分豁免记录在任务墙和日程任务卡显示绿色底色的“已豁免”；`requiredPenaltyRemedies` 与批评补救共用待补救展示，孩子不能自行确认。
-- 最近更新时间：2026-08-15
+- 最近更新时间：2026-08-16
 
 ## 10. 积分账本、报表、打印与归档
 

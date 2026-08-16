@@ -186,6 +186,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
         await settleExpiredCriticismFreezes(env);
         const offset = await timezoneOffsetMinutes(env);
         const reviewAt = nowIso();
+        const dailyReviewEntry = new URL(request.url).searchParams.get("dailyReviewEntry") === "1";
         const dailyReviewRequired = await childDailyReviewRequired(env, a.id, offset, reviewAt);
         if (dailyReviewRequired)
             await settleRequiredTaskPenalties(env, reviewAt, a.id);
@@ -278,7 +279,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             requiredPenaltyRemedies: await activeRequiredPenaltyRemedies(env, a.id, offset),
             aiGreeting: snapshot.greeting,
             aiRefreshPending: snapshot.aiRefreshPending,
-            dailyReview: dailyReviewRequired ? await childDailyReview(env, a.id, offset, reviewAt) : null,
+            dailyReview: dailyReviewRequired ? await childDailyReview(env, a.id, offset, reviewAt, dailyReviewEntry) : null,
             achievements: (await env.DB.prepare("SELECT a.*, ca.unlocked_at FROM achievements a JOIN child_achievements ca ON ca.achievement_id=a.id WHERE ca.child_id=? AND ca.hidden_from_child_at IS NULL ORDER BY ca.unlocked_at DESC").bind(a.id).all()).results
         });
     }

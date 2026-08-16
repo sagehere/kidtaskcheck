@@ -1,3 +1,14 @@
+# 2026-08-16
+
+- 类型：功能优化
+- 任务：优化儿童端昨日回顾的重进倒计时、扣分展示优先级和签收后重进行为。
+- 修改文件：
+  - `src/ChildApp.tsx`、`src/styles.css`：首次面板加载标记未签收回顾，优先突出实际处罚扣分。
+  - `server/api/utils.js`、`server/api/routes/child.js`：仅首次面板加载时重置未签收回顾的展示时间；已签收回顾保持短路，不重新生成清单。
+  - `tests/daily-review.test.ts`：覆盖轮询不重置、重进重置、签收后重进和扣分分类场景。
+  - `docs/ai/FEATURE_INDEX.md`：更新儿童端昨日回顾入口与行为说明。
+- 验证：`npm test -- --run tests/daily-review.test.ts`、`npm run build`。
+
 # 2026-08-15
 
 - 类型：功能修复与配置新增

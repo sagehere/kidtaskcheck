@@ -958,6 +958,15 @@ button.child-tile {
   background: #fff8dc;
 }
 
+.daily-review-deduction-title {
+  color: #a63232;
+}
+
+.daily-review-row.deduction {
+  border-color: #e3a3a3;
+  background: #fff0f0;
+}
+
 .daily-review-empty,
 .daily-review-countdown {
   margin: 0;

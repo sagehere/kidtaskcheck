@@ -26,7 +26,7 @@ describe("Child daily review", () => {
     env.DB.prepare("INSERT INTO children (id, parent_id, username, password_hash, display_name, status) VALUES (?, ?, 'child-review', ?, 'Child', 'active')").bind(childId, parentId, password).run();
   });
 
-  it("keeps the first display time, summarizes yesterday, and acknowledges all yesterday notifications", async () => {
+  it("keeps polling stable, resets on re-entry, summarizes yesterday, and acknowledges all yesterday notifications", async () => {
     const first = await childDailyReview(env, childId, 480);
     expect(first).not.toBeNull();
     expect(first!.items).toHaveLength(0);
@@ -43,13 +43,56 @@ describe("Child daily review", () => {
     expect(again!.praiseItems).toHaveLength(1);
     expect(again!.notificationCount).toBe(2);
 
-    const early = await acknowledgeChildDailyReview(env, childId, 480, first!.reviewDate, first!.presentedAt);
+    const reenteredAt = new Date(Date.parse(first!.presentedAt) + 10000).toISOString();
+    const reentered = await childDailyReview(env, childId, 480, reenteredAt, true);
+    expect(reentered!.presentedAt).toBe(reenteredAt);
+
+    const early = await acknowledgeChildDailyReview(env, childId, 480, first!.reviewDate, new Date(Date.parse(reentered!.presentedAt) + 29999).toISOString());
     expect(early.status).toBe("countdown");
-    const signed = await acknowledgeChildDailyReview(env, childId, 480, first!.reviewDate, new Date(Date.parse(first!.presentedAt) + 30001).toISOString());
+    const signed = await acknowledgeChildDailyReview(env, childId, 480, first!.reviewDate, new Date(Date.parse(reentered!.presentedAt) + 30000).toISOString());
     expect(signed.status).toBe("acknowledged");
     expect((await acknowledgeChildDailyReview(env, childId, 480, first!.reviewDate)).status).toBe("acknowledged");
     expect(Number(env.DB.prepare("SELECT COUNT(*) count FROM notifications WHERE recipient_id=? AND read_at IS NULL").bind(childId).first().count)).toBe(1);
     expect((await childDailyReview(env, childId, 480))).toBeNull();
+  });
+
+  it("does not regenerate a signed review when the child enters the dashboard again", async () => {
+    const token = id();
+    env.DB.prepare("INSERT INTO sessions (token, actor_type, actor_id, expires_at) VALUES (?, 'child', ?, ?)").bind(token, childId, new Date(Date.now() + 86400000).toISOString()).run();
+    const review = await childDailyReview(env, childId, 480);
+    const stalePresentedAt = new Date(Date.parse(review!.presentedAt) - 60000).toISOString();
+    env.DB.prepare("UPDATE child_daily_reviews SET presented_at=? WHERE child_id=? AND review_date=?").bind(stalePresentedAt, childId, review!.reviewDate).run();
+    const entryResponse = await handleApiRequest(request("GET", "/dashboard/child?dailyReviewEntry=1", undefined, token), env, { waitUntil: () => {} });
+    expect(entryResponse.status).toBe(200);
+    const enteredReview = (await entryResponse.json()).data.dailyReview;
+    expect(enteredReview.presentedAt).not.toBe(stalePresentedAt);
+
+    await acknowledgeChildDailyReview(env, childId, 480, review!.reviewDate, new Date(Date.parse(enteredReview.presentedAt) + 30000).toISOString());
+    const before = env.DB.prepare("SELECT presented_at, acknowledged_at FROM child_daily_reviews WHERE child_id=? AND review_date=?").bind(childId, review!.reviewDate).first();
+
+    for (let index = 0; index < 2; index += 1) {
+      const response = await handleApiRequest(request("GET", "/dashboard/child?dailyReviewEntry=1", undefined, token), env, { waitUntil: () => {} });
+      expect(response.status).toBe(200);
+      expect((await response.json()).data.dailyReview).toBeNull();
+    }
+
+    expect(env.DB.prepare("SELECT COUNT(*) count FROM child_daily_reviews WHERE child_id=? AND review_date=?").bind(childId, review!.reviewDate).first()).toMatchObject({ count: 1 });
+    expect(env.DB.prepare("SELECT presented_at, acknowledged_at FROM child_daily_reviews WHERE child_id=? AND review_date=?").bind(childId, review!.reviewDate).first()).toEqual(before);
+  });
+
+  it("keeps actual punishment deductions distinct from reward spending in the review data", async () => {
+    const review = await childDailyReview(env, childId, 480);
+    const midday = new Date(`${review!.reviewDate}T12:00:00.000Z`).toISOString();
+    for (const [amount, sourceType] of [[-3, "criticism"], [-4, "task_required_penalty"], [-2, "reward"], [2, "manual"]]) {
+      env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .bind(id(), childId, parentId, amount, sourceType, id(), midday)
+        .run();
+    }
+
+    const items = (await childDailyReview(env, childId, 480))!.items;
+    const deductions = items.filter((item: any) => Number(item.amount) < 0 && ["criticism", "task_required_penalty"].includes(item.source_type));
+    expect(deductions.map((item: any) => item.source_type).sort()).toEqual(["criticism", "task_required_penalty"]);
+    expect(items.some((item: any) => item.source_type === "reward" && Number(item.amount) < 0)).toBe(true);
   });
 
   it("blocks child writes until the review has been signed", async () => {

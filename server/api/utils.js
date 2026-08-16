@@ -307,13 +307,24 @@ async function findOrCreateChildDailyReview(env, childId, offsetMinutes, at = no
         .first();
     return { ...window, review };
 }
-export async function childDailyReview(env, childId, offsetMinutes, at = nowIso()) {
+export async function childDailyReview(env, childId, offsetMinutes, at = nowIso(), resetCountdown = false) {
     const settings = await childDailyReviewSettings(env, childId);
     if (!settings.enabled)
         return null;
-    const { reviewDate, start, end, review } = await findOrCreateChildDailyReview(env, childId, offsetMinutes, at);
+    const { reviewDate, start, end, review: existingReview } = await findOrCreateChildDailyReview(env, childId, offsetMinutes, at);
+    let review = existingReview;
     if (review?.acknowledged_at)
         return null;
+    if (resetCountdown) {
+        await env.DB.prepare("UPDATE child_daily_reviews SET presented_at=? WHERE child_id=? AND review_date=? AND acknowledged_at IS NULL")
+            .bind(at, childId, reviewDate)
+            .run();
+        review = await env.DB.prepare("SELECT * FROM child_daily_reviews WHERE child_id=? AND review_date=?")
+            .bind(childId, reviewDate)
+            .first();
+        if (review?.acknowledged_at)
+            return null;
+    }
     const rows = (await env.DB.prepare(`SELECT * FROM point_ledger
 WHERE child_id=? AND datetime(created_at)>=datetime(?) AND datetime(created_at)<datetime(?)
 ORDER BY datetime(created_at) DESC, created_at DESC, id DESC`)

@@ -594,6 +594,141 @@ async function ensureRequiredTaskSchemaNow(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_deadline_exemptions_child ON task_submission_deadline_exemptions(child_id, period_key)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_deadline_exemptions_parent ON task_submission_deadline_exemptions(parent_id, period_key)").run();
 }
+export async function ensureTaskSetSchema(env) {
+    return oncePerDb(env, "task-set-schema", async () => {
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_sets (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  icon_type TEXT NOT NULL DEFAULT 'emoji',
+  icon_value TEXT NOT NULL DEFAULT '🧩',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_set_members (
+  task_set_id TEXT NOT NULL REFERENCES task_sets(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (task_set_id, task_id), UNIQUE(task_id)
+)`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_set_settlements (
+  id TEXT PRIMARY KEY, task_set_id TEXT NOT NULL REFERENCES task_sets(id),
+  child_id TEXT NOT NULL REFERENCES children(id), parent_id TEXT NOT NULL REFERENCES users(id),
+  round_number INTEGER NOT NULL, total_points INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(task_set_id, child_id, round_number)
+)`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_set_settlement_items (
+  settlement_id TEXT NOT NULL REFERENCES task_set_settlements(id) ON DELETE CASCADE,
+  submission_id TEXT NOT NULL REFERENCES task_submissions(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES tasks(id), approved_points INTEGER NOT NULL,
+  PRIMARY KEY (settlement_id, submission_id), UNIQUE(submission_id)
+)`).run();
+        await ensureColumn(env, "task_submissions", "task_set_id", "task_set_id TEXT REFERENCES task_sets(id)");
+        await ensureColumn(env, "task_submissions", "approved_points", "approved_points INTEGER");
+        await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_sets_parent ON task_sets(parent_id, is_active, deleted_at, created_at)").run();
+        await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_set_members_set ON task_set_members(task_set_id, sort_order)").run();
+        await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_set_items_submission ON task_set_settlement_items(submission_id)").run();
+        await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_submissions_task_set_progress ON task_submissions(task_set_id, child_id, status, submitted_at)").run();
+    });
+}
+export async function taskSetEligibleChildIds(env, parentId, taskIds) {
+    if (!taskIds.length) return [];
+    const placeholders = taskIds.map(() => "?").join(",");
+    const rows = (await env.DB.prepare(`SELECT ta.child_id
+FROM task_assignees ta
+JOIN tasks t ON t.id=ta.task_id
+JOIN children c ON c.id=ta.child_id
+WHERE t.parent_id=? AND t.id IN (${placeholders}) AND t.is_active=1 AND t.deleted_at IS NULL
+  AND c.parent_id=? AND c.status='active' AND c.deleted_at IS NULL
+GROUP BY ta.child_id HAVING COUNT(DISTINCT ta.task_id)=?`).bind(parentId, ...taskIds, parentId, taskIds.length).all()).results;
+    return rows.map((row) => row.child_id);
+}
+export async function taskSetForSubmission(env, parentId, childId, taskId) {
+    await ensureTaskSetSchema(env);
+    const set = await env.DB.prepare(`SELECT ts.id, ts.title FROM task_sets ts
+JOIN task_set_members m ON m.task_set_id=ts.id AND m.task_id=?
+WHERE ts.parent_id=? AND ts.is_active=1 AND ts.deleted_at IS NULL`).bind(taskId, parentId).first();
+    if (!set) return null;
+    const eligible = await taskSetEligibleChildIds(env, parentId, (await env.DB.prepare("SELECT task_id FROM task_set_members WHERE task_set_id=? ORDER BY sort_order").bind(set.id).all()).results.map((row) => row.task_id));
+    return eligible.includes(childId) ? set : null;
+}
+export async function taskSetHasOpenProgress(env, taskSetId) {
+    await ensureTaskSetSchema(env);
+    return !!(await env.DB.prepare(`SELECT 1 FROM task_submissions s
+WHERE s.task_set_id=? AND (s.status='pending' OR (s.status='approved' AND NOT EXISTS (
+  SELECT 1 FROM task_set_settlement_items i WHERE i.submission_id=s.id
+))) LIMIT 1`).bind(taskSetId).first());
+}
+export async function listTaskSets(env, parentId) {
+    await ensureTaskSetSchema(env);
+    const sets = (await env.DB.prepare("SELECT * FROM task_sets WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC").bind(parentId).all()).results;
+    if (!sets.length) return [];
+    const ids = sets.map((row) => row.id);
+    const placeholders = ids.map(() => "?").join(",");
+    const members = (await env.DB.prepare(`SELECT m.task_set_id, m.task_id, m.sort_order, t.title, t.points, t.grading_mode, t.completion_standards_json
+FROM task_set_members m JOIN tasks t ON t.id=m.task_id
+WHERE m.task_set_id IN (${placeholders}) ORDER BY m.task_set_id, m.sort_order`).bind(...ids).all()).results;
+    const bySet = new Map();
+    for (const member of members) {
+        const current = bySet.get(member.task_set_id) || [];
+        current.push(member);
+        bySet.set(member.task_set_id, current);
+    }
+    return Promise.all(sets.map(async (set) => {
+        const rows = bySet.get(set.id) || [];
+        const possible = rows.map((row) => {
+            const standards = row.grading_mode === "completion" ? (() => { try { return normalizeCompletionStandards(JSON.parse(row.completion_standards_json || "[]")); } catch { return []; } })() : [];
+            const points = standards.length ? standards.map((item) => item.points) : [Number(row.points || 0)];
+            return { ...row, minPoints: Math.min(...points), maxPoints: Math.max(...points) };
+        });
+        return { ...set, members: possible, taskIds: rows.map((row) => row.task_id), eligibleChildIds: await taskSetEligibleChildIds(env, parentId, rows.map((row) => row.task_id)), minPoints: possible.reduce((sum, row) => sum + row.minPoints, 0), maxPoints: possible.reduce((sum, row) => sum + row.maxPoints, 0) };
+    }));
+}
+export async function taskSetProgress(env, taskSetId, childId) {
+    const members = (await env.DB.prepare("SELECT task_id FROM task_set_members WHERE task_set_id=? ORDER BY sort_order").bind(taskSetId).all()).results;
+    if (!members.length) return { approved: 0, pending: 0, total: 0, settledRounds: 0 };
+    const taskIds = members.map((row) => row.task_id);
+    const placeholders = taskIds.map(() => "?").join(",");
+    const [approvedRows, pendingRow, settledRow] = await Promise.all([
+        env.DB.prepare(`SELECT s.task_id FROM task_submissions s
+WHERE s.task_set_id=? AND s.child_id=? AND s.status='approved' AND s.task_id IN (${placeholders})
+  AND NOT EXISTS (SELECT 1 FROM task_set_settlement_items i WHERE i.submission_id=s.id)
+GROUP BY s.task_id`).bind(taskSetId, childId, ...taskIds).all(),
+        env.DB.prepare(`SELECT COUNT(*) v FROM task_submissions WHERE task_set_id=? AND child_id=? AND status='pending'`).bind(taskSetId, childId).first(),
+        env.DB.prepare("SELECT COUNT(*) v FROM task_set_settlements WHERE task_set_id=? AND child_id=?").bind(taskSetId, childId).first()
+    ]);
+    return { approved: approvedRows.results.length, pending: Number(pendingRow?.v || 0), total: taskIds.length, settledRounds: Number(settledRow?.v || 0) };
+}
+export async function settleTaskSetIfReady(env, submission, audit) {
+    const taskSet = await env.DB.prepare("SELECT * FROM task_sets WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(submission.task_set_id, submission.parent_id).first();
+    if (!taskSet) return { settled: false, taskSet: null, progress: { approved: 0, pending: 0, total: 0, settledRounds: 0 } };
+    const members = (await env.DB.prepare("SELECT m.task_id, t.title FROM task_set_members m JOIN tasks t ON t.id=m.task_id WHERE m.task_set_id=? ORDER BY m.sort_order").bind(taskSet.id).all()).results;
+    const selected = [];
+    for (const member of members) {
+        const row = await env.DB.prepare(`SELECT s.id, s.task_id, s.approved_points FROM task_submissions s
+WHERE s.task_set_id=? AND s.child_id=? AND s.task_id=? AND s.status='approved'
+  AND NOT EXISTS (SELECT 1 FROM task_set_settlement_items i WHERE i.submission_id=s.id)
+ORDER BY s.reviewed_at, s.submitted_at, s.id LIMIT 1`).bind(taskSet.id, submission.child_id, member.task_id).first();
+        if (!row) return { settled: false, taskSet, progress: await taskSetProgress(env, taskSet.id, submission.child_id) };
+        selected.push({ ...row, title: member.title });
+    }
+    const round = Number((await env.DB.prepare("SELECT COUNT(*) v FROM task_set_settlements WHERE task_set_id=? AND child_id=?").bind(taskSet.id, submission.child_id).first())?.v || 0) + 1;
+    const settlementId = id();
+    const totalPoints = selected.reduce((sum, row) => sum + Number(row.approved_points || 0), 0);
+    const detail = selected.map((row) => `${row.title} ${Number(row.approved_points || 0)}分`).join("、");
+    await env.DB.prepare("INSERT INTO task_set_settlements (id, task_set_id, child_id, parent_id, round_number, total_points, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .bind(settlementId, taskSet.id, submission.child_id, submission.parent_id, round, totalPoints, nowIso()).run();
+    for (const row of selected) {
+        await env.DB.prepare("INSERT INTO task_set_settlement_items (settlement_id, submission_id, task_id, approved_points) VALUES (?, ?, ?, ?)")
+            .bind(settlementId, row.id, row.task_id, Number(row.approved_points || 0)).run();
+    }
+    await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'task_set', ?, NULL, ?, ?, ?, ?)")
+        .bind(id(), submission.child_id, submission.parent_id, totalPoints, settlementId, `任务集结算：${taskSet.title}（${detail}）`, audit.type, audit.id, audit.label).run();
+    return { settled: true, taskSet, settlementId, totalPoints, progress: await taskSetProgress(env, taskSet.id, submission.child_id) };
+}
 async function ensureChildScheduleSchemaNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_schedule_slots (
   id TEXT PRIMARY KEY,
@@ -1034,7 +1169,11 @@ ON CONFLICT(parent_id, child_id, month_key) DO UPDATE SET
         }
     }
     const ledgerDelete = await env.DB.prepare("DELETE FROM point_ledger WHERE created_at<? AND source_type!='activity_archive'").bind(cutoffIso).run();
-    const submissionDelete = await env.DB.prepare("DELETE FROM task_submissions WHERE submitted_at<? AND status!='pending'").bind(cutoffIso).run();
+    await ensureTaskSetSchema(env);
+    const submissionDelete = await env.DB.prepare(`DELETE FROM task_submissions
+WHERE submitted_at<? AND status!='pending' AND (task_set_id IS NULL OR EXISTS (
+  SELECT 1 FROM task_set_settlement_items i WHERE i.submission_id=task_submissions.id
+))`).bind(cutoffIso).run();
     const redemptionDelete = await env.DB.prepare("DELETE FROM reward_redemptions WHERE requested_at<? AND status!='pending'").bind(cutoffIso).run();
     const notificationDelete = await env.DB.prepare("DELETE FROM notifications WHERE created_at<? AND read_at IS NOT NULL").bind(cutoffIso).run();
     return {
@@ -1707,14 +1846,13 @@ WHERE s.child_id=? AND s.status='approved'`).bind(childId).all()).results;
     }
 }
 export async function listWithAssignees(env, kind, parentId) {
-    if (kind === "tasks") await ensureRequiredTaskSchema(env);
     const rows = await env.DB.prepare(`SELECT * FROM ${kind} WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC`).bind(parentId).all();
     const table = kind === "tasks" ? "task_assignees" : "reward_assignees";
     const key = kind === "tasks" ? "task_id" : "reward_id";
     const ids = rows.results.map((row) => row.id);
     if (!ids.length) return [];
     const placeholders = ids.map(() => "?").join(",");
-    const [assignmentRows, prerequisiteRows, achievementRows] = await Promise.all([
+    const [assignmentRows, prerequisiteRows, achievementRows, taskSetRows] = await Promise.all([
         env.DB.prepare(`SELECT ${key} item_id, child_id FROM ${table} WHERE ${key} IN (${placeholders})`).bind(...ids).all(),
         kind === "rewards"
             ? env.DB.prepare(`SELECT rp.reward_id, rp.task_id, rp.required_count, t.title, t.period
@@ -1725,6 +1863,11 @@ WHERE rp.reward_id IN (${placeholders}) ORDER BY t.created_at DESC`).bind(...ids
             ? env.DB.prepare(`SELECT id, title, unlock_reward_id FROM achievements
 WHERE parent_id=? AND unlock_reward_id IN (${placeholders}) AND deleted_at IS NULL
 ORDER BY updated_at DESC, created_at DESC`).bind(parentId, ...ids).all()
+            : { results: [] },
+        kind === "tasks"
+            ? env.DB.prepare(`SELECT m.task_id, ts.id task_set_id, ts.title task_set_title, ts.is_active task_set_active
+FROM task_set_members m JOIN task_sets ts ON ts.id=m.task_set_id
+WHERE m.task_id IN (${placeholders}) AND ts.deleted_at IS NULL`).bind(...ids).all()
             : { results: [] }
     ]);
     const assignees = new Map();
@@ -1743,6 +1886,7 @@ ORDER BY updated_at DESC, created_at DESC`).bind(parentId, ...ids).all()
     for (const row of achievementRows.results) {
         if (!requiredAchievements.has(row.unlock_reward_id)) requiredAchievements.set(row.unlock_reward_id, row);
     }
+    const taskSets = new Map(taskSetRows.results.map((row) => [row.task_id, row]));
     return rows.results.map((row) => {
         let completionStandards = [];
         try { completionStandards = normalizeCompletionStandards(JSON.parse(row.completion_standards_json || "[]")); }
@@ -1757,15 +1901,19 @@ ORDER BY updated_at DESC, created_at DESC`).bind(parentId, ...ids).all()
             prerequisites: kind === "rewards" ? (prerequisites.get(row.id) || []) : [],
             requiredAchievementId: requiredAchievement?.id || "",
             requiredAchievementTitle: requiredAchievement?.title || "",
-            assignees: assignees.get(row.id) || []
+            assignees: assignees.get(row.id) || [],
+            taskSetId: taskSets.get(row.id)?.task_set_id || "",
+            taskSetTitle: taskSets.get(row.id)?.task_set_title || "",
+            taskSetActive: Number(taskSets.get(row.id)?.task_set_active || 0)
         };
     });
 }
 export async function listConfig(env, parentId) {
-    await ensureFeedbackSchema(env);
-    const [categories, tasks, rewards, achievements, feedbackTemplates] = await Promise.all([
+    await Promise.all([ensureFeedbackSchema(env), ensureRequiredTaskSchema(env), ensureTaskSetSchema(env)]);
+    const [categories, tasks, taskSets, rewards, achievements, feedbackTemplates] = await Promise.all([
         env.DB.prepare("SELECT * FROM task_categories WHERE is_active=1 AND ((is_system=1 AND id NOT IN (SELECT source_system_id FROM task_categories WHERE owner_id=? AND source_system_id IS NOT NULL)) OR owner_id=?) ORDER BY is_system DESC, created_at DESC").bind(parentId, parentId).all(),
         listWithAssignees(env, "tasks", parentId),
+        listTaskSets(env, parentId),
         listWithAssignees(env, "rewards", parentId),
         env.DB.prepare("SELECT * FROM achievements WHERE parent_id=? AND deleted_at IS NULL ORDER BY created_at DESC").bind(parentId).all(),
         env.DB.prepare("SELECT * FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL ORDER BY kind, created_at DESC").bind(parentId).all()
@@ -1773,6 +1921,7 @@ export async function listConfig(env, parentId) {
     return {
         categories: categories.results,
         tasks,
+        taskSets,
         rewards,
         achievements: achievements.results,
         feedbackTemplates: feedbackTemplates.results
@@ -1822,6 +1971,7 @@ function configSnapshotSummary(snapshot) {
     return {
         categories: Array.isArray(snapshot?.categories) ? snapshot.categories.length : 0,
         tasks: Array.isArray(snapshot?.tasks) ? snapshot.tasks.length : 0,
+        taskSets: Array.isArray(snapshot?.taskSets) ? snapshot.taskSets.length : 0,
         rewards: Array.isArray(snapshot?.rewards) ? snapshot.rewards.length : 0,
         achievements: Array.isArray(snapshot?.achievements) ? snapshot.achievements.length : 0,
         feedbackTemplates: Array.isArray(snapshot?.feedbackTemplates) ? snapshot.feedbackTemplates.length : 0
@@ -1856,6 +2006,7 @@ function configSnapshotPayload(config, childNames) {
             ...item,
             assignee_names: (item.assignees || []).map(childName).filter(Boolean)
         })),
+        taskSets: (config.taskSets || []).map((item) => ({ ...item, taskIds: item.taskIds || [] })),
         rewards: config.rewards.map((item) => ({
             ...item,
             assignee_names: (item.assignees || []).map(childName).filter(Boolean)
@@ -1947,15 +2098,22 @@ function snapshotAssignees(item, children) {
 export async function applyConfigGroupSnapshot(env, parentId, snapshot) {
     await ensureCategorySchema(env);
     await ensureRewardOnceSchema(env);
-    await ensureRequiredTaskSchema(env);
+    await Promise.all([ensureRequiredTaskSchema(env), ensureTaskSetSchema(env)]);
     await ensureAchievementSchema(env);
     await ensureFeedbackSchema(env);
     await ensureCriticismRemedySchema(env);
-    const stats = { categories: 0, tasks: 0, rewards: 0, achievements: 0, feedbackTemplates: 0, skippedAssignments: 0 };
+    const openTaskSet = await env.DB.prepare(`SELECT 1 FROM task_submissions s
+JOIN task_sets ts ON ts.id=s.task_set_id
+WHERE ts.parent_id=? AND ts.deleted_at IS NULL AND (s.status='pending' OR (s.status='approved' AND NOT EXISTS (
+  SELECT 1 FROM task_set_settlement_items i WHERE i.submission_id=s.id
+))) LIMIT 1`).bind(parentId).first();
+    if (openTaskSet) throw fail("TASK_SET_IN_PROGRESS", "存在进行中的任务集，暂不能覆盖或清空配置", 409);
+    const stats = { categories: 0, tasks: 0, taskSets: 0, rewards: 0, achievements: 0, feedbackTemplates: 0, skippedAssignments: 0 };
     const children = await activeChildrenForSnapshot(env, parentId);
     await env.DB.transaction(async () => {
         const now = nowIso();
         await env.DB.prepare("UPDATE tasks SET deleted_at=?, updated_at=? WHERE parent_id=? AND deleted_at IS NULL").bind(now, now, parentId).run();
+        await env.DB.prepare("UPDATE task_sets SET deleted_at=?, is_active=0, updated_at=? WHERE parent_id=? AND deleted_at IS NULL").bind(now, now, parentId).run();
         await env.DB.prepare("UPDATE rewards SET deleted_at=?, updated_at=? WHERE parent_id=? AND deleted_at IS NULL").bind(now, now, parentId).run();
         await env.DB.prepare("UPDATE achievements SET deleted_at=?, updated_at=? WHERE parent_id=? AND deleted_at IS NULL").bind(now, now, parentId).run();
         await env.DB.prepare("UPDATE feedback_templates SET deleted_at=?, updated_at=? WHERE parent_id=? AND deleted_at IS NULL").bind(now, now, parentId).run();
@@ -2001,6 +2159,16 @@ export async function applyConfigGroupSnapshot(env, parentId, snapshot) {
             await replaceAssignees(env, parentId, "task_assignees", "task_id", taskId, assigned.valid);
             taskMap.set(item.id, taskId);
             stats.tasks += 1;
+        }
+        for (const item of snapshot.taskSets || []) {
+            const taskIds = (item.taskIds || []).map((taskId) => taskMap.get(taskId)).filter(Boolean);
+            if (taskIds.length < 2 || !(await taskSetEligibleChildIds(env, parentId, taskIds)).length) continue;
+            const taskSetId = id();
+            await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, 'emoji', ?, ?)")
+                .bind(taskSetId, parentId, String(item.title || "未命名任务集").trim() || "未命名任务集", item.description || "", item.icon_value || item.iconValue || "🧩", Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1).run();
+            for (let index = 0; index < taskIds.length; index++)
+                await env.DB.prepare("INSERT INTO task_set_members (task_set_id, task_id, sort_order) VALUES (?, ?, ?)").bind(taskSetId, taskIds[index], index).run();
+            stats.taskSets += 1;
         }
         const achievementMap = new Map();
         for (const item of snapshot.achievements || []) {
@@ -2053,6 +2221,7 @@ export async function clearCurrentConfig(env, parentId) {
     const cleared = {
         categories: current.categories.filter((item) => Number(item.is_system || 0) === 0).length,
         tasks: current.tasks.length,
+        taskSets: (current.taskSets || []).length,
         rewards: current.rewards.length,
         achievements: current.achievements.length,
         feedbackTemplates: current.feedbackTemplates.length
@@ -2060,6 +2229,7 @@ export async function clearCurrentConfig(env, parentId) {
     await applyConfigGroupSnapshot(env, parentId, {
         categories: [],
         tasks: [],
+        taskSets: [],
         rewards: [],
         achievements: [],
         feedbackTemplates: []
@@ -2089,9 +2259,11 @@ export async function deleteConfigGroup(env, parentId, groupId) {
 export async function importConfig(env, parentId, input) {
     await ensureFeedbackSchema(env);
     await ensureCriticismRemedySchema(env);
+    await ensureTaskSetSchema(env);
     const stats = {
         categories: { created: 0, skipped: 0 },
         tasks: { created: 0, skipped: 0 },
+        taskSets: { created: 0, skipped: 0 },
         rewards: { created: 0, skipped: 0 },
         achievements: { created: 0, skipped: 0 },
         feedbackTemplates: { created: 0, skipped: 0 }
@@ -2127,6 +2299,21 @@ export async function importConfig(env, parentId, input) {
         .bind(parentId)
         .all()).results;
     const taskMap = new Map(taskRows.map((task) => [task.title, task.id]));
+    const taskMapByKey = new Map(taskRows.map((task) => [`${task.title}:${task.period}`, task.id]));
+    for (const item of input.taskSets || []) {
+        const title = String(item.title || "").trim();
+        const exists = title ? await env.DB.prepare("SELECT 1 FROM task_sets WHERE parent_id=? AND title=? AND deleted_at IS NULL").bind(parentId, title).first() : true;
+        const taskIds = (item.members || []).map((member) => taskMapByKey.get(`${member.title}:${member.period || "daily"}`) || taskMap.get(member.title)).filter(Boolean);
+        if (exists || taskIds.length < 2 || new Set(taskIds).size !== taskIds.length) { stats.taskSets.skipped += 1; continue; }
+        const occupied = await env.DB.prepare(`SELECT 1 FROM task_set_members WHERE task_id IN (${taskIds.map(() => "?").join(",")}) LIMIT 1`).bind(...taskIds).first();
+        if (occupied) { stats.taskSets.skipped += 1; continue; }
+        const taskSetId = id();
+        await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, 'emoji', ?, 0)")
+            .bind(taskSetId, parentId, title, item.description || "", item.icon_value || item.iconValue || "🧩").run();
+        for (let index = 0; index < taskIds.length; index++)
+            await env.DB.prepare("INSERT INTO task_set_members (task_set_id, task_id, sort_order) VALUES (?, ?, ?)").bind(taskSetId, taskIds[index], index).run();
+        stats.taskSets.created += 1;
+    }
     for (const item of input.rewards || []) {
         const title = String(item.title || "").trim();
         const exists = title ? await env.DB.prepare("SELECT id FROM rewards WHERE parent_id=? AND title=? AND deleted_at IS NULL").bind(parentId, title).first() : true;
@@ -2271,7 +2458,9 @@ export function eventTypeLabel(value) {
         achievement_reward: "成就奖励",
         praise: "表扬",
         criticism: "批评",
-        task_required_penalty: "必做扣分"
+        task_required_penalty: "必做扣分",
+        task_set_completed: "任务集",
+        task_set: "任务集"
     };
     return labels[value] || "消息";
 }
@@ -2335,7 +2524,8 @@ async function sourceMaps(env, input) {
         feedbackTemplates: new Map(),
         tasks: new Map(),
         ledgers: new Map(),
-        recallSources: new Map()
+        recallSources: new Map(),
+        taskSetSettlements: new Map()
     };
     const load = async (ids, sql, target) => {
         if (!ids.length) return;
@@ -2343,13 +2533,14 @@ async function sourceMaps(env, input) {
         for (const row of rows) target.set(row.id, row);
     };
     await Promise.all([
-        load(input.taskSubmissionIds, "SELECT s.id, t.title FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.id", maps.tasksBySubmission),
+        load(input.taskSubmissionIds, "SELECT s.id, t.title, t.grading_mode, ts.title task_set_title FROM task_submissions s JOIN tasks t ON t.id=s.task_id LEFT JOIN task_sets ts ON ts.id=s.task_set_id WHERE s.id", maps.tasksBySubmission),
         load(input.rewardRedemptionIds, "SELECT rr.id, r.title FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id WHERE rr.id", maps.rewardsByRedemption),
         load(input.rewardIds, "SELECT id, title FROM rewards WHERE id", maps.rewards),
         load(input.templateIds, "SELECT id, title FROM feedback_templates WHERE id", maps.feedbackTemplates),
         load(input.taskIds, "SELECT id, title FROM tasks WHERE id", maps.tasks),
         load(input.ledgerIds, "SELECT pl.id, pl.source_type, pl.source_id, ft.title AS feedback_title, t.title AS task_title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id LEFT JOIN tasks t ON t.id=pl.source_id WHERE pl.id", maps.ledgers),
-        load(input.recallIds, "SELECT pl.id, pl.source_type, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id", maps.recallSources)
+        load(input.recallIds, "SELECT pl.id, pl.source_type, ft.title FROM point_ledger pl LEFT JOIN feedback_templates ft ON ft.id=pl.source_id WHERE pl.id", maps.recallSources),
+        load(input.taskSetSettlementIds || [], "SELECT ss.id, ts.title FROM task_set_settlements ss JOIN task_sets ts ON ts.id=ss.task_set_id WHERE ss.id", maps.taskSetSettlements)
     ]);
     return maps;
 }
@@ -2362,25 +2553,29 @@ export async function withNotificationSources(env, rows) {
         templateIds: [],
         taskIds: [],
         ledgerIds: sourceIds(rows, (item) => item.related_type === "point_ledger", "related_id"),
-        recallIds: []
+        recallIds: [],
+        taskSetSettlementIds: sourceIds(rows, (item) => item.related_type === "task_set_settlement", "related_id")
     });
     const ledgerRows = [...maps.ledgers.values()];
     const recallIds = sourceIds(ledgerRows, (row) => row.source_type === "feedback_recall", "source_id");
     if (recallIds.length) {
-        const recalls = await sourceMaps(env, { taskSubmissionIds: [], rewardRedemptionIds: [], rewardIds: [], templateIds: [], taskIds: [], ledgerIds: [], recallIds });
+        const recalls = await sourceMaps(env, { taskSubmissionIds: [], rewardRedemptionIds: [], rewardIds: [], templateIds: [], taskIds: [], ledgerIds: [], recallIds, taskSetSettlementIds: [] });
         maps.recallSources = recalls.recallSources;
     }
     return rows.map((item) => {
         let source = null;
         if (item.related_type === "task_submission") {
             const row = maps.tasksBySubmission.get(item.related_id);
-            if (row?.title) source = { sourceTypeLabel: "任务", sourceLabel: `任务：${row.title}` };
+            if (row?.title) source = row.task_set_title ? { sourceTypeLabel: "任务集", sourceLabel: `任务集：${row.task_set_title} / 子任务：${row.title}` } : { sourceTypeLabel: "任务", sourceLabel: `任务：${row.title}` };
         } else if (item.related_type === "reward_redemption") {
             const row = maps.rewardsByRedemption.get(item.related_id);
             if (row?.title) source = { sourceTypeLabel: "奖励", sourceLabel: `奖励：${row.title}` };
         } else if (item.related_type === "reward") {
             const row = maps.rewards.get(item.related_id);
             if (row?.title) source = { sourceTypeLabel: "奖励", sourceLabel: `奖励：${row.title}` };
+        } else if (item.related_type === "task_set_settlement") {
+            const row = maps.taskSetSettlements.get(item.related_id);
+            if (row?.title) source = { sourceTypeLabel: "任务集", sourceLabel: `任务集：${row.title}` };
         } else if (item.related_type === "point_ledger") {
             const row = maps.ledgers.get(item.related_id);
             if (row?.feedback_title) {
@@ -2403,10 +2598,15 @@ export async function withNotificationSources(env, rows) {
             }
         }
         const fallback = eventTypeLabel(item.event_type);
-        return { ...item, actorLabel: item.actor_label_snapshot || "", ...(source || { sourceTypeLabel: fallback, sourceLabel: fallback }) };
+        const taskSubmission = item.related_type === "task_submission" ? maps.tasksBySubmission.get(item.related_id) : null;
+        return { ...item, actorLabel: item.actor_label_snapshot || "", requiresCompletionSelection: taskSubmission?.grading_mode === "completion", ...(source || { sourceTypeLabel: fallback, sourceLabel: fallback }) };
     });
 }
 export async function ledgerSource(env, row) {
+    if (row.source_type === "task_set") {
+        const found = await env.DB.prepare("SELECT ts.title FROM task_set_settlements ss JOIN task_sets ts ON ts.id=ss.task_set_id WHERE ss.id=?").bind(row.source_id).first();
+        if (found?.title) return { sourceTypeLabel: "任务集", sourceLabel: `任务集：${found.title}` };
+    }
     if (row.source_type === "task") {
         const found = await env.DB.prepare("SELECT t.title FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.id=?").bind(row.source_id).first();
         if (found?.title)
@@ -2456,7 +2656,8 @@ export async function withLedgerSources(env, rows, offset) {
         templateIds: sourceIds(rows, (row) => row.source_type === "praise" || row.source_type === "criticism", "source_id"),
         taskIds: sourceIds(rows, (row) => row.source_type === "task_required_penalty", "source_id"),
         ledgerIds: [],
-        recallIds: sourceIds(rows, (row) => row.source_type === "feedback_recall", "source_id")
+        recallIds: sourceIds(rows, (row) => row.source_type === "feedback_recall", "source_id"),
+        taskSetSettlementIds: sourceIds(rows, (row) => row.source_type === "task_set", "source_id")
     });
     return rows.map((row) => {
         let source = null;
@@ -2477,6 +2678,9 @@ export async function withLedgerSources(env, rows, offset) {
             const label = Number(row.amount) > 0 ? "必做扣分退回" : row.freeze_status === "frozen" ? "必做扣分冻结" : row.freeze_status === "remedied" ? "必做补救" : row.freeze_status === "settled" ? "必做扣分结算" : "必做扣分";
             const found = maps.tasks.get(row.source_id);
             source = found?.title ? { sourceTypeLabel: label, sourceLabel: `任务：${found.title}` } : { sourceTypeLabel: label, sourceLabel: label };
+        } else if (row.source_type === "task_set") {
+            const found = maps.taskSetSettlements.get(row.source_id);
+            source = found?.title ? { sourceTypeLabel: "任务集", sourceLabel: `任务集：${found.title}` } : { sourceTypeLabel: "任务集", sourceLabel: "任务集" };
         } else if (row.source_type === "feedback_recall") {
             const original = maps.recallSources.get(row.source_id);
             if (original?.title) {

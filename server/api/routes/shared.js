@@ -1,5 +1,5 @@
 import { periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup, clearCurrentConfig, ensureRequiredTaskSchema } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup, clearCurrentConfig, ensureRequiredTaskSchema, ensureTaskSetSchema, taskSetProgress } from "../utils.js";
 import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes, activeRemedyItemsForChildren } from "../utils.js";
 
 async function confirmFrozenRemedy(env, actor, ledgerId, sourceType) {
@@ -92,7 +92,7 @@ LIMIT 50`)
             .all()).results.map((child) => [child.id, child.display_name]));
         const assigneeNames = (item) => (item.assignees || []).map((childId) => childNames.get(childId)).filter(Boolean);
         return ok({
-            version: 3,
+            version: 4,
             exportedAt: nowIso(),
             categories: config.categories.map((item) => ({
                 name: item.name,
@@ -119,6 +119,14 @@ LIMIT 50`)
                 assignee_names: assigneeNames(item),
                 icon_type: item.icon_type,
                 icon_value: item.icon_value
+            })),
+            taskSets: (config.taskSets || []).map((item) => ({
+                title: item.title,
+                description: item.description,
+                icon_type: item.icon_type,
+                icon_value: item.icon_value,
+                is_active: item.is_active,
+                members: (item.members || []).map((member) => ({ title: member.title, period: config.tasks.find((task) => task.id === member.task_id)?.period || "daily" }))
             })),
             rewards: config.rewards.map((item) => ({
                 title: item.title,
@@ -339,7 +347,7 @@ WHERE pl.id=? AND pl.parent_id=? AND c.parent_id=? AND pl.source_type IN ('prais
         const remedyItems = await activeRemedyItemsForChildren(env, children, offset);
         const allRemedy = remedyItems.filter((item) => item.sourceType === "criticism");
         const allRequiredPenaltyRemedies = remedyItems.filter((item) => item.sourceType === "task_required_penalty");
-        await ensureRequiredTaskSchema(env);
+        await Promise.all([ensureRequiredTaskSchema(env), ensureTaskSetSchema(env)]);
         const requiredRows = (await env.DB.prepare(`SELECT t.id task_id, t.period, ta.child_id
 FROM tasks t
 JOIN task_assignees ta ON ta.task_id=t.id
@@ -357,13 +365,22 @@ JOIN task_submission_deadline_exemptions e ON e.task_id=t.id AND e.child_id=ta.c
 WHERE t.parent_id=? AND t.is_active=1 AND t.deleted_at IS NULL`).bind(a.id).all()).results;
         const submissionDeadlineExemptions = deadlineRows.filter((row) => row.period_key === periodKey(row.period, undefined, offset)).map((row) => ({ childId: row.child_id, taskId: row.task_id, periodKey: row.period_key }));
         const childCards = children.map((child) => ({ ...child, balance: balances.get(child.id) || 0, frozenPoints: frozenMap.get(child.id) || 0 }));
+        const pendingRows = (await env.DB.prepare("SELECT s.*, t.title, t.points, t.grading_mode, t.completion_standards_json, c.display_name child_name, ts.title task_set_title FROM task_submissions s JOIN tasks t ON t.id=s.task_id JOIN children c ON c.id=s.child_id LEFT JOIN task_sets ts ON ts.id=s.task_set_id WHERE s.parent_id=? AND s.status='pending' ORDER BY s.submitted_at").bind(a.id).all()).results;
+        const taskSetProgressRows = new Map();
+        for (const row of pendingRows) {
+            if (row.task_set_id) {
+                const key = `${row.task_set_id}:${row.child_id}`;
+                if (!taskSetProgressRows.has(key)) taskSetProgressRows.set(key, await taskSetProgress(env, row.task_set_id, row.child_id));
+            }
+        }
+        const pendingSubmissions = pendingRows.map((row) => ({ ...row, taskSetProgress: row.task_set_id ? taskSetProgressRows.get(`${row.task_set_id}:${row.child_id}`) : null }));
         return ok({
             children: childCards,
             remedyCriticisms: allRemedy,
             requiredPenaltyRemedies: allRequiredPenaltyRemedies,
             requiredPenaltyExemptions,
             submissionDeadlineExemptions,
-            pendingSubmissions: (await env.DB.prepare("SELECT s.*, t.title, t.points, t.grading_mode, t.completion_standards_json, c.display_name child_name FROM task_submissions s JOIN tasks t ON t.id=s.task_id JOIN children c ON c.id=s.child_id WHERE s.parent_id=? AND s.status='pending' ORDER BY s.submitted_at").bind(a.id).all()).results,
+            pendingSubmissions,
             pendingRedemptions: (await env.DB.prepare("SELECT rr.*, r.title, r.redeem_weekdays, c.display_name child_name FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id JOIN children c ON c.id=rr.child_id WHERE rr.parent_id=? AND rr.status='pending' ORDER BY rr.requested_at").bind(a.id).all()).results
         });
     }

@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users, AlertTriangle
 } from "lucide-react";
-import { Me, Child, Category, Task, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ScheduleImageResponse, ParentDelegate, RemedyCriticismItem, ConfigGroupSummary } from "./types/api";
+import { Me, Child, Category, Task, TaskSet, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ScheduleImageResponse, ParentDelegate, RemedyCriticismItem, ConfigGroupSummary } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -57,6 +57,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [children, setChildren] = useState<Child[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskSets, setTaskSets] = useState<TaskSet[]>([]);
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [achievements, setAchievements] = useState<any[]>([]);
   const [feedbackTemplates, setFeedbackTemplates] = useState<FeedbackTemplate[]>([]);
@@ -196,10 +197,11 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     loadLockRef.current = true;
     let hasError = false;
     try {
-      const [childRows, categoryRows, taskRows, rewardRows, achievementRows, feedbackRows, groupRows, delegateRows, dash, aiRows] = await Promise.all([
+      const [childRows, categoryRows, taskRows, taskSetRows, rewardRows, achievementRows, feedbackRows, groupRows, delegateRows, dash, aiRows] = await Promise.all([
         api<Child[]>("/children").catch(() => { hasError = true; return [] as Child[]; }),
         api<Category[]>("/task-categories").catch(() => { hasError = true; return [] as Category[]; }),
         api<Task[]>("/tasks").catch(() => { hasError = true; return [] as Task[]; }),
+        api<TaskSet[]>("/task-sets").catch(() => { hasError = true; return [] as TaskSet[]; }),
         api<Reward[]>("/rewards").catch(() => { hasError = true; return [] as Reward[]; }),
         api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
         api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; }),
@@ -211,6 +213,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       setChildren(childRows);
       setCategories(categoryRows);
       setTasks(taskRows);
+      setTaskSets(taskSetRows);
       setRewards(rewardRows);
       setAchievements(achievementRows);
       setFeedbackTemplates(feedbackRows);
@@ -364,7 +367,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     }
     await run(
       () => api(`/task-submissions/${id}/review`, { method: "PATCH", body: JSON.stringify({ approved, note: "", completionLabel }) }),
-      "任务已通过并结算积分"
+      "任务已通过，积分将按适用规则结算"
     );
   }
 
@@ -775,6 +778,14 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                 onDelete={(item) => remove(`/task-categories/${item.id}`, "任务分类已删除，分类下任务已一并删除", `确认删除任务分类「${item.name}」？该分类下所有任务会一并删除，历史记录会保留。`)}
               />
             </div>
+            <TaskSetsPanel
+              taskSets={taskSets}
+              tasks={tasks}
+              children={children}
+              onCreate={(data) => create("/task-sets", data, "任务集已创建")}
+              onUpdate={(item, data) => update(`/task-sets/${item.id}`, data, "任务集已更新")}
+              onDelete={(item) => remove(`/task-sets/${item.id}`, "任务集已解散", `确认解散任务集「${item.title}」？之后子任务将恢复独立计分。`)}
+            />
             <Overview title="现有任务" items={tasks} kind="task" children={children} categories={categories} onUpdate={(item, data) => update(`/tasks/${item.id}`, data, "任务已更新")} onDelete={(item) => remove(`/tasks/${item.id}`, "任务已删除", `确认删除任务「${item.title}」？历史记录会保留。`)} />
           </section>
           <section className="panel setting-group">
@@ -1143,7 +1154,8 @@ export function ReviewPanel({ title, items, empty, approve, reject }: { title: s
               <article className="row" key={item.id}>
                 <div>
                   <strong>{item.title}</strong>
-                  <span>{item.child_name} · {item.period_key}{needsCompletion ? " · 完成程度给分" : ` · ${item.points || 0}分`}</span>
+                  <span>{item.child_name} · {item.period_key}{item.task_set_title ? ` · 任务集：${item.task_set_title}${item.taskSetProgress ? `（下一轮 ${item.taskSetProgress.approved}/${item.taskSetProgress.total} 已通过）` : ""}` : ""}{needsCompletion ? " · 完成程度给分" : ` · ${item.points || 0}分`}</span>
+                  {item.task_set_title && <small>通过本项不会单独加分，凑齐全部子任务后统一结算。</small>}
                   {needsCompletion && (
                     <select value={completionLabel} onChange={(e) => setCompletionLabels({ ...completionLabels, [item.id]: e.target.value })}>
                       {standards.map((standard) => <option key={standard.label} value={standard.label}>{standard.label} · {standard.points}分</option>)}
@@ -1673,6 +1685,47 @@ export function CreateTask({ children, categories, onCreate }: { children: Child
       )}
       <ChildPicker children={children} value={data.childIds} onChange={(childIds) => setData({ ...data, childIds })} />
     </FormPanel>
+  );
+}
+
+function TaskSetForm({ item, tasks, children, onSave, onCancel }: { item?: TaskSet; tasks: Task[]; children: Child[]; onSave: (data: any) => void; onCancel?: () => void }) {
+  const [data, setData] = useState(() => ({ title: item?.title || "", description: item?.description || "", iconValue: item?.icon_value || "🧩", isActive: item?.is_active !== 0, taskIds: item?.taskIds || [] as string[] }));
+  const selectable = tasks.filter((task) => task.is_active !== 0 && (!task.taskSetId || task.taskSetId === item?.id));
+  const selectedTasks = selectable.filter((task) => data.taskIds.includes(task.id));
+  const eligible = children.filter((child) => selectedTasks.length && selectedTasks.every((task) => (task.assignees || []).includes(child.id)));
+  const totals = selectedTasks.reduce((sum, task) => {
+    const standards = parseCompletionStandards(task);
+    const values = task.grading_mode === "completion" && standards.length ? standards.map((row) => Number(row.points || 0)) : [Number(task.points || 0)];
+    return { min: sum.min + Math.min(...values), max: sum.max + Math.max(...values) };
+  }, { min: 0, max: 0 });
+  function toggleTask(taskId: string) { setData((current) => ({ ...current, taskIds: current.taskIds.includes(taskId) ? current.taskIds.filter((id) => id !== taskId) : [...current.taskIds, taskId] })); }
+  return (
+    <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, iconType: "emoji" }); }}>
+      <Field label="任务集标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
+      <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
+      <Field label="子任务（至少两项，顺序即结算明细顺序)"><div className="stack compact">{selectable.map((task) => <label className="toggle" key={task.id}><input type="checkbox" checked={data.taskIds.includes(task.id)} onChange={() => toggleTask(task.id)} /><span>{task.title} · {formatPeriod(task.period)}</span></label>)}</div></Field>
+      <small>共同适用：{eligible.length ? eligible.map((child) => child.display_name).join("、") : "暂无"} · 每轮 {totals.min}{totals.max !== totals.min ? `-${totals.max}` : ""} 积分</small>
+      <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
+      <Toggle label="启用任务集" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
+      <div className="actions"><button className="primary">保存任务集</button>{onCancel && <button type="button" className="secondary" onClick={onCancel}>取消</button>}</div>
+    </form>
+  );
+}
+
+function TaskSetsPanel({ taskSets, tasks, children, onCreate, onUpdate, onDelete }: { taskSets: TaskSet[]; tasks: Task[]; children: Child[]; onCreate: (data: any) => void; onUpdate: (item: TaskSet, data: any) => void; onDelete: (item: TaskSet) => void }) {
+  const [editing, setEditing] = useState<TaskSet | null>(null);
+  return (
+    <section className="panel">
+      <div className="panel-title"><Users /><h2>任务集</h2></div>
+      <TaskSetForm tasks={tasks} children={children} onSave={onCreate} />
+      <div className="list config-list scroll-list">
+        {taskSets.length ? taskSets.map((set) => <article className="row config-row" key={set.id}>
+          <div className="config-main">{icon(set.icon_type, set.icon_value, set.title)}<div><strong>{set.title}</strong>{set.description && <span>{set.description}</span>}<small>{set.members.map((member: any) => member.title).join(" + ")} · {set.minPoints}{set.maxPoints !== set.minPoints ? `-${set.maxPoints}` : ""}分 · {set.eligibleChildIds.length}名儿童{set.is_active === 0 ? " · 已停用" : ""}</small></div></div>
+          <div className="actions"><button className="secondary" onClick={() => setEditing(set)}><Edit3 size={16} />编辑</button><button className="icon danger" title="解散" onClick={() => onDelete(set)}><Trash2 size={18} /></button></div>
+        </article>) : <Empty text="可把两个或更多任务组合为一次性结算的任务集" />}
+      </div>
+      {editing && <EditDialog title="编辑任务集" icon={<Users />} onClose={() => setEditing(null)}><TaskSetForm item={editing} tasks={tasks} children={children} onSave={(data) => { onUpdate(editing, data); setEditing(null); }} onCancel={() => setEditing(null)} /></EditDialog>}
+    </section>
   );
 }
 

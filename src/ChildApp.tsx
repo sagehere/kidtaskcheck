@@ -139,6 +139,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         <div className="card-meta">
           <span className={task.point_type === "earn" ? "positive" : "negative"}>{points} 积分</span>
           <span>{task.usedCount}/{task.limitCount} 次</span>
+          {task.taskSetTitle && <span className="required-tag">任务集：{task.taskSetTitle}</span>}
           {isRequired && <span className="required-tag">须完成{task.required_count || 1}次</span>}
           {task.requiredPenaltyExempted && <span className="exempted-tag">已豁免</span>}
           {task.submissionDeadlineExempted && <span className="exempted-tag">截止已解除</span>}
@@ -180,6 +181,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   }
 
   const taskRows = dash.tasks || [];
+  const taskSets = dash.taskSets || [];
   const rewardRows = dash.rewards || [];
   const pinnedTask = taskRows.find((task: any) => task.isPinned);
   const pinnedReward = rewardRows.find((reward: any) => reward.isPinned);
@@ -188,6 +190,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const remedyItems = [...remedyCriticisms, ...(dash.requiredPenaltyRemedies || [])];
   const activeTasks = taskRows.filter((task: any) => task.is_active !== 0);
   const sortedTasks = [...taskRows].sort((a: any, b: any) => (b.is_required || 0) - (a.is_required || 0));
+  const groupedTaskIds = new Set(taskSets.flatMap((set: any) => set.taskIds || []));
   const taskById = new Map(taskRows.map((task: any) => [task.id, task]));
   const scheduledTaskIds = new Set(schedule.items.map((item) => item.taskId));
   const availableScheduleTasks = activeTasks.filter((task: any) => scheduledCountForTask(task.id) < getTaskScheduleLimit(task.id));
@@ -601,8 +604,19 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
               </label>
             </div>
             {!showScheduleOnWall ? (
-              <div className="wall-grid child-tab-list">
-                {sortedTasks.length ? sortedTasks.map((task: any) => renderTaskCard(task)) : <Empty text="暂无任务" />}
+              <div className="child-tab-list stack">
+                {taskSets.map((set: any) => {
+                  const members = sortedTasks.filter((task: any) => task.taskSetId === set.id);
+                  if (!members.length) return null;
+                  const progress = set.progress || {};
+                  return <section className="panel task-set-wall" key={set.id}>
+                    <div className="panel-title">{icon(set.icon_type, set.icon_value, set.title)}<div><h2>{set.title}</h2><small>下一轮已通过 {progress.approved || 0}/{progress.total || members.length} · 已结算 {progress.settledRounds || 0} 轮 · {set.minPoints}{set.maxPoints !== set.minPoints ? `-${set.maxPoints}` : ""} 积分</small></div></div>
+                    {set.description && <p className="card-description">{set.description}</p>}
+                    <div className="wall-grid">{members.map((task: any) => renderTaskCard(task))}</div>
+                  </section>;
+                })}
+                {sortedTasks.filter((task: any) => !groupedTaskIds.has(task.id)).length ? <section className="wall-grid">{sortedTasks.filter((task: any) => !groupedTaskIds.has(task.id)).map((task: any) => renderTaskCard(task))}</section> : null}
+                {!sortedTasks.length && <Empty text="暂无任务" />}
               </div>
             ) : (
               <div className="schedule-wall-groups child-tab-list">

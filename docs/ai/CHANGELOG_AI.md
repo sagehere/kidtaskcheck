@@ -1,3 +1,11 @@
+# 2026-08-21
+
+- 类型：功能新增
+- 任务：支持多任务组成任务集，并在所有成员审核通过后一次性结算实际积分。
+- 修改文件：`migrations/0035_task_sets.sql`、`server/api/{utils.js,routes/{parent,child,shared}.js,ai/orchestrator.js}`、`src/{ParentApp,ChildApp}.tsx`、`src/components/Shell.tsx`、`src/types/api.ts`、`tests/task-sets.test.ts`、功能索引。
+- 行为：提交时快照所属任务集；审核通过的成员仅记录实际审核积分，按孩子和成员最早未消费记录配对，一轮凑齐后创建唯一任务集账本。任务集管理、儿童任务墙、待处理、消息来源、打印/AI 清单和配置快照均展示任务集；进行中进度会锁定成员及分配结构，历史提交和未结算记录不会被清理。
+- 验证：`rtk npm run build`、`rtk npm test -- --run tests/task-sets.test.ts` 与 `rtk npm test`。
+
 # 2026-08-16
 
 - 类型：缺陷修复

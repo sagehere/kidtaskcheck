@@ -1,5 +1,5 @@
 import { periodKey, reportWindowRange } from "../../../src/lib/domain.js";
-import { nowIso, balance, timezoneOffsetMinutes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, withLedgerSources } from "../utils.js";
+import { nowIso, balance, timezoneOffsetMinutes, ensureRequiredTaskSchema, ensureChildScheduleSchema, ensureTaskSetSchema, listTaskSets, schedulePlanHtmlToText, withLedgerSources } from "../utils.js";
 import { getParentAiServiceConfig, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries } from "./cache.js";
 import { buildDailyGreetingPrompt, buildReportAiPrompt, previousDayReportSummary } from "./prompt.js";
 import { callParentAiService, callParentAiServiceForReport, callParentImageService } from "./providers.js";
@@ -334,8 +334,8 @@ export async function generatePrintChecklistImage(env, child) {
     if (!config.imageBaseUrl || !config.imageApiKey || !config.imageModel || !config.checklistImagePrompt) {
         throw new NonRetryableError("ai_checklist_image_config_incomplete");
     }
-    await ensureRequiredTaskSchema(env);
-    const [tasks, rewards, feedbackTemplates] = await Promise.all([
+    await Promise.all([ensureRequiredTaskSchema(env), ensureTaskSetSchema(env)]);
+    const [tasks, rewards, feedbackTemplates, taskSets] = await Promise.all([
         env.DB.prepare(`SELECT t.title, tc.name category_name, t.period, t.limit_count, t.points, t.enabled_weekdays, t.is_active, t.description, t.is_required, t.required_count
 FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
 LEFT JOIN task_categories tc ON tc.id=t.category_id
@@ -349,9 +349,13 @@ WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL AND r.is_active=1
 ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, child.parent_id).all(),
         env.DB.prepare(`SELECT kind, title, points, is_active, description, is_remediable, remedy_condition, remedy_points, remedy_deadline_hours
 FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL AND is_active=1 ORDER BY kind, created_at DESC`).bind(child.parent_id).all(),
+        listTaskSets(env, child.parent_id),
     ]);
     const periodLabel = (value) => value === "daily" ? "每日" : value === "weekly" ? "每周" : value === "monthly" ? "每月" : value === "once" ? "一次性" : "不限周期";
-    const taskSummary = compactList(tasks.results, 12, (row) => `${row.category_name || "未分类"}-${row.title}(${periodLabel(row.period)}最多${row.limit_count || 1}次,${row.points}分${row.is_required ? `,必做${row.required_count || 1}次` : ""})`, "暂无任务");
+    const applicableTaskSets = taskSets.filter((set) => set.is_active && set.eligibleChildIds.includes(child.id));
+    const groupedTaskIds = new Set(applicableTaskSets.flatMap((set) => set.taskIds));
+    const taskSummary = compactList(tasks.results.filter((row) => !groupedTaskIds.has(row.id)), 12, (row) => `${row.category_name || "未分类"}-${row.title}(${periodLabel(row.period)}最多${row.limit_count || 1}次,${row.points}分${row.is_required ? `,必做${row.required_count || 1}次` : ""})`, "暂无独立任务");
+    const taskSetSummary = compactList(applicableTaskSets, 8, (set) => `${set.icon || "📦"}${set.title}(${set.members.map((member) => `${member.title}:${periodLabel(member.period)}${member.grading_mode === "completion" ? "完成档位" : `${member.points}分`}`).join("、")}; 每轮${set.minPoints}-${set.maxPoints}分${set.description ? `；${set.description}` : ""})`, "暂无任务集");
     const rewardSummary = compactList(rewards.results, 12, (row) => `${row.title}(${row.cost_points}分,${periodLabel(row.limit_period)}${row.limit_count ? `最多${row.limit_count}次` : ""}${row.prerequisites ? `,前置${row.prerequisites}` : ""}${row.required_achievement ? `,需成就${row.required_achievement}` : ""})`, "暂无奖励");
     const feedbackSummary = compactList(feedbackTemplates.results, 12, (row) => {
         const type = row.kind === "praise" ? "表扬" : "批评";
@@ -360,6 +364,7 @@ FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL AND is_active=1
     }, "暂无表扬批评条款");
     const prompt = truncatePrompt(config.checklistImagePrompt, [
         `孩子：${child.display_name}`,
+        `任务集：${taskSetSummary}`,
         `任务清单：${taskSummary}`,
         `奖励清单：${rewardSummary}`,
         `表扬批评条款：${feedbackSummary}`,

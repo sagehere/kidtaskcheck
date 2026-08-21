@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, taskSubmissionDeadlineState } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, localTimeText, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, settleRequiredTaskPenalties, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema, childDailyReview, childDailyReviewRequired, acknowledgeChildDailyReview } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, localTimeText, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, settleRequiredTaskPenalties, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema, childDailyReview, childDailyReviewRequired, acknowledgeChildDailyReview, ensureTaskSetSchema, taskSetForSubmission, listTaskSets, taskSetProgress } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -15,7 +15,7 @@ export async function handleChildRoutes(path, method, request, env, actor, ctx) 
     }
     if (path === "/task-submissions" && method === "POST") {
         const a = requireRole(actor, ["child"]);
-        await ensureRequiredTaskSchema(env);
+        await Promise.all([ensureRequiredTaskSchema(env), ensureTaskSetSchema(env)]);
         const input = await body(request);
         const task = await env.DB.prepare("SELECT t.* FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id WHERE t.id=? AND ta.child_id=? AND t.parent_id=? AND t.is_active=1 AND t.deleted_at IS NULL")
             .bind(input.taskId, a.id, a.parent_id)
@@ -36,8 +36,9 @@ export async function handleChildRoutes(path, method, request, env, actor, ctx) 
         if (used >= Number(task.limit_count || 1))
             return fail("LIMIT_REACHED", "已达到本周期提交次数限制", 409);
         const submissionId = id();
-        await env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, period_key, submitted_at, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')")
-            .bind(submissionId, task.id, a.id, a.parent_id, pkey, submittedAt)
+        const taskSet = await taskSetForSubmission(env, a.parent_id, a.id, task.id);
+        await env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, period_key, submitted_at, status, task_set_id) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)")
+            .bind(submissionId, task.id, a.id, a.parent_id, pkey, submittedAt, taskSet?.id || null)
             .run();
         await notify(env, {
             recipientType: "user",
@@ -45,7 +46,7 @@ export async function handleChildRoutes(path, method, request, env, actor, ctx) 
             actorType: "child",
             actorId: a.id,
             title: "有新的任务待审核",
-            body: `${a.displayName} 提交了「${task.title}」。`,
+            body: `${a.displayName} 提交了「${task.title}」${taskSet ? `（任务集：${taskSet.title}）` : ""}。`,
             eventType: "task_submitted",
             relatedType: "task_submission",
             relatedId: submissionId
@@ -182,7 +183,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
     }
     if (path === "/dashboard/child" && method === "GET") {
         const a = requireRole(actor, ["child"]);
-        await ensureAchievementSchema(env);
+        await Promise.all([ensureAchievementSchema(env), ensureTaskSetSchema(env)]);
         await settleExpiredCriticismFreezes(env);
         const offset = await timezoneOffsetMinutes(env);
         const reviewAt = nowIso();
@@ -211,6 +212,8 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
         ]);
         const exempted = new Set(exemptionRows.results.map((row) => `${row.task_id}:${row.period_key}`));
         const deadlineExempted = new Set(deadlineExemptionRows.results.map((row) => `${row.task_id}:${row.period_key}`));
+        const taskSets = (await listTaskSets(env, a.parent_id)).filter((set) => Number(set.is_active) !== 0 && set.eligibleChildIds.includes(a.id));
+        const taskSetByTaskId = new Map(taskSets.flatMap((set) => set.taskIds.map((taskId) => [taskId, set])));
         const taskRows = enabledTasks.map((task, index) => {
             const pkey = taskPeriods[index].periodKey;
             const key = `${task.id}:${pkey}`;
@@ -221,6 +224,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             const deadline = taskSubmissionDeadlineState(task.period, task.submission_deadline_json, undefined, offset);
             const submissionDeadlineExempted = deadlineExempted.has(key);
             const limitReached = activeCount >= limitCount;
+            const taskSet = taskSetByTaskId.get(task.id);
             return {
                 ...task,
                 enabledWeekdays: normalizeWeekdays(task.enabled_weekdays),
@@ -237,7 +241,9 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
                 rejectionNote: rejected?.review_note || "",
                 requiredPenaltyExempted: exempted.has(key),
                 submissionDeadlineExempted,
-                isPinned: task.id === pinnedTaskId
+                isPinned: task.id === pinnedTaskId,
+                taskSetId: taskSet?.id || null,
+                taskSetTitle: taskSet?.title || ""
             };
         });
         const rewardRows = await env.DB.prepare("SELECT r.* FROM rewards r JOIN reward_assignees ra ON ra.reward_id=r.id WHERE ra.child_id=? AND r.parent_id=? AND r.is_active=1 AND r.deleted_at IS NULL ORDER BY r.cost_points")
@@ -274,6 +280,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             pinnedTaskId: visiblePinnedTaskId,
             pinnedRewardId: visiblePinnedRewardId,
             tasks: taskRows,
+            taskSets: await Promise.all(taskSets.map(async (set) => ({ ...set, progress: await taskSetProgress(env, set.id, a.id) }))),
             rewards,
             remedyCriticisms: await activeRemedyCriticisms(env, a.id, offset),
             requiredPenaltyRemedies: await activeRequiredPenaltyRemedies(env, a.id, offset),

@@ -122,7 +122,7 @@ export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullabl
   const canQuickAction = me.role === "parent" || me.role === "parent_delegate";
   function isActionable(item: Notification) {
     return canQuickAction && (
-      item.related_type === "task_submission" ||
+      (item.related_type === "task_submission" && !item.requiresCompletionSelection) ||
       (item.related_type === "reward_redemption" && item.event_type === "reward_requested")
     );
   }
@@ -150,12 +150,13 @@ export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullabl
           {item.actorLabel && <small className="source-line">操作者：{item.actorLabel}</small>}
         </div>
         <div className="notification-actions">
-          {canQuickAction && item.related_type === "task_submission" && (
+          {canQuickAction && item.related_type === "task_submission" && !item.requiresCompletionSelection && (
             <>
               <button className="icon good" title="通过" aria-label="通过" disabled={isBusy} onClick={() => quickAction(item, "approve")}><Check size={16} /></button>
               <button className="icon danger" title="驳回" aria-label="驳回" disabled={isBusy} onClick={() => quickAction(item, "reject")}><Trash2 size={16} /></button>
             </>
           )}
+          {canQuickAction && item.related_type === "task_submission" && item.requiresCompletionSelection && <small>请到待处理选择完成程度</small>}
           {canQuickAction && item.related_type === "reward_redemption" && item.event_type === "reward_requested" && (
             <>
               <button className="icon good" title="核销" aria-label="核销" disabled={isBusy} onClick={() => quickAction(item, "redeem")}><BadgeCheck size={16} /></button>

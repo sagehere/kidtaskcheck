@@ -1,6 +1,6 @@
 # FEATURE_INDEX
 
-最近更新：2026-08-15
+最近更新：2026-08-21
 
 本文件按“用户可感知功能”组织维护入口。P0 是默认必须读取文件；P1 是实现跨界或需要上下文时再读；P2 是 schema、测试、部署或高风险排查时谨慎读取。
 
@@ -216,3 +216,16 @@
 - 相关接口：`GET/POST /api/config-groups`、`PATCH/DELETE /api/config-groups/:id`、`POST /api/config-groups/:id/refresh`、`POST /api/config-groups/:id/activate`、`POST /api/config/clear-current`。
 - 修改注意事项：配置组激活是覆盖当前四块设置而非普通导入；任务快照要保留完成程度给分档位；当前业务配置采用软删除/停用以保留历史记录；配置组删除只删除保存的快照；一键清空只清当前可编辑四块配置，不清孩子账号、历史提交、兑换、积分账本或配置组快照；每个家长最多 5 个配置组。
 - 最近更新时间：2026-06-25
+
+## 17. 任务集与延迟积分结算
+
+- 功能说明：家长可把至少两个赚取积分任务组成有标题、说明和 Emoji 的任务集。仅同时分配全部成员任务的孩子适用；每个成员仍维持自己的周期、次数、必做、截止和完成程度规则。审核通过记录按成员最早未消费提交配对，一轮凑齐后才一次性写入任务集总积分账本。
+- 用户入口：家长设置“任务集”、待处理审核、儿童任务墙、通知中心、打印清单与配置导入导出。
+- P0：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`server/api/routes/{parent,child,shared}.js`、`server/api/utils.js`
+- P1：`src/components/Shell.tsx`、`src/types/api.ts`、`server/api/ai/orchestrator.js`
+- P2：`migrations/0035_task_sets.sql`、`tests/task-sets.test.ts`、`tests/concurrency.test.ts`、`tests/migration.test.ts`
+- 主要调用链：任务集管理 -> `/task-sets`; 孩子提交时快照 `task_set_id` -> `/task-submissions`; 审核 -> `/task-submissions/:id/review` -> SQLite `BEGIN IMMEDIATE` 内写审核积分快照、配对结算和唯一 `source_type=task_set` 账本。
+- 相关状态：`task_sets`、`task_set_members`、`task_set_settlements`、`task_set_settlement_items`、`task_submissions.task_set_id`、`task_submissions.approved_points`、`point_ledger`。
+- 相关接口：`GET/POST /api/task-sets`、`PATCH/DELETE /api/task-sets/:id`、`PATCH /api/task-submissions/:id/review`、`GET /api/dashboard/{parent,child}`、`GET/POST /api/config/{export,import}`。
+- 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；加入任务集之前的提交保持普通任务结算语义；存在待审或已通过未结算记录时，不得改成员、停用、解散或改变成员的儿童交集，返回 `409 TASK_SET_IN_PROGRESS`；完成程度分数以审核时 `approved_points` 快照为准；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。
+- 最近更新时间：2026-08-21

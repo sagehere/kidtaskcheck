@@ -1,5 +1,5 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, normalizeTaskSubmissionDeadline, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards, ensureTaskSetSchema, listTaskSets, taskSetEligibleChildIds, taskSetHasOpenProgress, settleTaskSetIfReady } from "../utils.js";
 import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, collectReportComparison, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs, enqueueScheduleImageJob, loadScheduleImageJob, publicScheduleImageJob, processScheduleImageJobs } from "../ai/index.js";
 
 const PRINT_A4_STYLE = '@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933;line-height:1.5}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:24px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px;page-break-inside:auto}th,td{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}th{background:#f0f0f0}tr{break-inside:avoid}.print-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.print-task-card{border:1px solid #a7b0c0;border-radius:6px;padding:8px;background:#f8fafc;break-inside:avoid;page-break-inside:avoid}.print-task-card strong{display:block}.print-task-card small{display:block;color:#64748b}.print-plan{border:1px solid #cbd5e1;border-radius:6px;padding:8px;min-height:36px;background:#fff}.print-plan :first-child{margin-top:0}.print-plan :last-child{margin-bottom:0}.schedule-print-slot{break-inside:avoid;page-break-inside:avoid;margin-top:14px}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}.attention{background:#fff7ed;border-left:4px solid #f97316;padding:12px 16px;margin:18px 0}.ai-commentary{background:#f0f4ff;border-left:4px solid #6366f1;padding:16px 20px;margin:18px 0;border-radius:4px}.ai-commentary h2{margin:0 0 8px;border:none;padding:0}.ai-commentary p{margin:4px 0;line-height:1.8;white-space:pre-line}.ai-commentary .note{font-size:12px;color:#888;margin-top:8px}@media print{button{display:none}body{margin:0}.summary{grid-template-columns:repeat(3,1fr)}table,.print-task-card,.schedule-print-slot{break-inside:avoid;page-break-inside:avoid}}';
@@ -504,6 +504,7 @@ WHERE ra.child_id=? AND r.parent_id=? AND r.deleted_at IS NULL AND r.is_active=1
 ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
             env.DB.prepare("SELECT * FROM feedback_templates WHERE parent_id=? AND deleted_at IS NULL AND is_active=1 ORDER BY kind, created_at DESC").bind(a.id).all()
         ]);
+        const taskSets = (await listTaskSets(env, a.id)).filter((set) => Number(set.is_active) !== 0 && set.eligibleChildIds.includes(child.id));
         const table = (headers, rows) => `<table><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
         const taskRule = (item) => {
             const grading = item.grading_mode === "completion"
@@ -518,7 +519,9 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
             item.prerequisites ? `前置任务：${item.prerequisites}` : "",
             item.required_achievement ? `所需成就：${item.required_achievement}` : "",
         ].filter(Boolean).join("；");
-        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 当前规则清单</h1><p>仅展示当前启用内容；导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p><h2>任务目标</h2>${table(["任务","分类","规则与积分","可做星期","说明"], tasks.results.map((item) => [item.title, item.category_name || "未分类", taskRule(item), weekdaysText(item.enabled_weekdays), item.description || ""]))}<h2>可兑换奖励</h2>${table(["奖励","所需积分","兑换规则","可兑换星期","说明"], rewards.results.map((item) => [item.title, item.cost_points, rewardRule(item), weekdaysText(item.redeem_weekdays), item.description || ""]))}<h2>行为约定</h2>${table(["类型","条款","积分","补救规则","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, `${item.kind === "praise" ? "+" : "-"}${Math.abs(Number(item.points || 0))}`, item.kind === "criticism" && item.is_remediable ? `${item.remedy_condition || "按要求补救"}；可挽回${item.remedy_points || 0}分；限时${item.remedy_deadline_hours || 24}小时` : "无", item.description || ""]))}</body></html>`;
+        const groupedTaskIds = new Set(taskSets.flatMap((set) => set.taskIds));
+        const setRows = taskSets.map((set) => [set.title, set.members.map((member) => member.title).join("、"), `${set.minPoints}${set.maxPoints !== set.minPoints ? `-${set.maxPoints}` : ""}分`, set.description || ""]);
+        const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 当前规则清单</h1><p>仅展示当前启用内容；导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p>${setRows.length ? `<h2>任务集</h2>${table(["任务集","子任务","每轮积分","说明"], setRows)}` : ""}<h2>任务目标</h2>${table(["任务","分类","规则与积分","可做星期","说明"], tasks.results.filter((item) => !groupedTaskIds.has(item.id)).map((item) => [item.title, item.category_name || "未分类", taskRule(item), weekdaysText(item.enabled_weekdays), item.description || ""]))}<h2>可兑换奖励</h2>${table(["奖励","所需积分","兑换规则","可兑换星期","说明"], rewards.results.map((item) => [item.title, item.cost_points, rewardRule(item), weekdaysText(item.redeem_weekdays), item.description || ""]))}<h2>行为约定</h2>${table(["类型","条款","积分","补救规则","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, `${item.kind === "praise" ? "+" : "-"}${Math.abs(Number(item.points || 0))}`, item.kind === "criticism" && item.is_remediable ? `${item.remedy_condition || "按要求补救"}；可挽回${item.remedy_points || 0}分；限时${item.remedy_deadline_hours || 24}小时` : "无", item.description || ""]))}</body></html>`;
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     const childPrintImage = path.match(/^\/children\/([^/]+)\/print-checklist-image$/);
@@ -926,10 +929,78 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         }
         return ok(true);
     }
+    if (path === "/task-sets") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        await ensureTaskSetSchema(env);
+        if (method === "GET") return ok(await listTaskSets(env, a.id));
+        if (method === "POST") {
+            const input = await body(request);
+            const title = String(input.title || "").trim();
+            const taskIds = [...new Set(Array.isArray(input.taskIds) ? input.taskIds.filter(Boolean) : [])];
+            const error = validateInput(title, INPUT_RULES.title, "标题") || validateInput(input.description || "", INPUT_RULES.description, "说明") || validateEnum(input.iconType || "emoji", ["emoji"], "图标类型");
+            if (error) return fail("BAD_REQUEST", error, 400);
+            if (taskIds.length < 2) return fail("BAD_REQUEST", "任务集至少需要两个子任务", 400);
+            const placeholders = taskIds.map(() => "?").join(",");
+            const tasks = (await env.DB.prepare(`SELECT id FROM tasks WHERE parent_id=? AND id IN (${placeholders}) AND deleted_at IS NULL AND is_active=1 AND point_type='earn'`).bind(a.id, ...taskIds).all()).results;
+            if (tasks.length !== taskIds.length) return fail("BAD_REQUEST", "子任务必须属于当前家庭、启用且为赚取积分任务", 400);
+            const occupied = await env.DB.prepare(`SELECT task_id FROM task_set_members WHERE task_id IN (${placeholders})`).bind(...taskIds).all();
+            if (occupied.results.length) return fail("CONFLICT", "子任务已属于其他任务集", 409);
+            const eligible = await taskSetEligibleChildIds(env, a.id, taskIds);
+            if (!eligible.length) return fail("BAD_REQUEST", "至少要有一名儿童同时拥有全部子任务", 400);
+            const setId = id();
+            await env.DB.transaction(async () => {
+                await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, 'emoji', ?, ?)")
+                    .bind(setId, a.id, title, input.description || "", input.iconValue || "🧩", input.isActive === false ? 0 : 1).run();
+                for (let index = 0; index < taskIds.length; index++)
+                    await env.DB.prepare("INSERT INTO task_set_members (task_set_id, task_id, sort_order) VALUES (?, ?, ?)").bind(setId, taskIds[index], index).run();
+            });
+            return ok({ id: setId });
+        }
+    }
+    const taskSetPatch = path.match(/^\/task-sets\/([^/]+)$/);
+    if (taskSetPatch && (method === "PATCH" || method === "DELETE")) {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        await ensureTaskSetSchema(env);
+        const current = await env.DB.prepare("SELECT * FROM task_sets WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(taskSetPatch[1], a.id).first();
+        if (!current) return fail("NOT_FOUND", "任务集不存在", 404);
+        if (method === "DELETE") {
+            if (await taskSetHasOpenProgress(env, current.id)) return fail("TASK_SET_IN_PROGRESS", "任务集有待审核或未结算进度，暂不能解散", 409);
+            await env.DB.transaction(async () => {
+                await env.DB.prepare("UPDATE task_sets SET deleted_at=?, is_active=0, updated_at=? WHERE id=?").bind(nowIso(), nowIso(), current.id).run();
+                await env.DB.prepare("DELETE FROM task_set_members WHERE task_set_id=?").bind(current.id).run();
+            });
+            return ok(true);
+        }
+        const input = await body(request);
+        const title = String(input.title || "").trim();
+        const error = validateInput(title, INPUT_RULES.title, "标题") || validateInput(input.description || "", INPUT_RULES.description, "说明") || validateEnum(input.iconType || "emoji", ["emoji"], "图标类型");
+        if (error) return fail("BAD_REQUEST", error, 400);
+        const previousIds = (await env.DB.prepare("SELECT task_id FROM task_set_members WHERE task_set_id=? ORDER BY sort_order").bind(current.id).all()).results.map((row) => row.task_id);
+        const taskIds = input.taskIds === undefined ? previousIds : [...new Set(Array.isArray(input.taskIds) ? input.taskIds.filter(Boolean) : [])];
+        const structureChanged = taskIds.length !== previousIds.length || taskIds.some((taskId, index) => taskId !== previousIds[index]) || (input.isActive !== undefined && Number(current.is_active) !== (input.isActive === false ? 0 : 1));
+        if (structureChanged && await taskSetHasOpenProgress(env, current.id)) return fail("TASK_SET_IN_PROGRESS", "任务集有待审核或未结算进度，只能修改标题、说明和图标", 409);
+        if (taskIds.length < 2) return fail("BAD_REQUEST", "任务集至少需要两个子任务", 400);
+        const placeholders = taskIds.map(() => "?").join(",");
+        const tasks = (await env.DB.prepare(`SELECT id FROM tasks WHERE parent_id=? AND id IN (${placeholders}) AND deleted_at IS NULL AND is_active=1 AND point_type='earn'`).bind(a.id, ...taskIds).all()).results;
+        if (tasks.length !== taskIds.length) return fail("BAD_REQUEST", "子任务必须属于当前家庭、启用且为赚取积分任务", 400);
+        const occupied = await env.DB.prepare(`SELECT task_id FROM task_set_members WHERE task_id IN (${placeholders}) AND task_set_id<>?`).bind(...taskIds, current.id).all();
+        if (occupied.results.length) return fail("CONFLICT", "子任务已属于其他任务集", 409);
+        if (!(await taskSetEligibleChildIds(env, a.id, taskIds)).length) return fail("BAD_REQUEST", "至少要有一名儿童同时拥有全部子任务", 400);
+        await env.DB.transaction(async () => {
+            await env.DB.prepare("UPDATE task_sets SET title=?, description=?, icon_type='emoji', icon_value=?, is_active=?, updated_at=? WHERE id=?")
+                .bind(title, input.description || "", input.iconValue || "🧩", input.isActive === false ? 0 : 1, nowIso(), current.id).run();
+            if (structureChanged) {
+                await env.DB.prepare("DELETE FROM task_set_members WHERE task_set_id=?").bind(current.id).run();
+                for (let index = 0; index < taskIds.length; index++)
+                    await env.DB.prepare("INSERT INTO task_set_members (task_set_id, task_id, sort_order) VALUES (?, ?, ?)").bind(current.id, taskIds[index], index).run();
+            }
+        });
+        return ok(true);
+    }
     if (path === "/tasks") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         if (method === "GET") {
-            await ensureRequiredTaskSchema(env);
+            await Promise.all([ensureRequiredTaskSchema(env), ensureTaskSetSchema(env)]);
             return ok(await listWithAssignees(env, "tasks", a.id));
         }
         const input = await body(request);
@@ -1032,6 +1103,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .first();
         if (!task)
             return fail("NOT_FOUND", "任务不存在", 404);
+        const taskSetMember = await env.DB.prepare("SELECT task_set_id FROM task_set_members WHERE task_id=?").bind(taskPatch[1]).first();
+        if (taskSetMember && await taskSetHasOpenProgress(env, taskSetMember.task_set_id)) {
+            const currentChildIds = (await env.DB.prepare("SELECT child_id FROM task_assignees WHERE task_id=? ORDER BY child_id").bind(taskPatch[1]).all()).results.map((row) => row.child_id);
+            const nextChildIds = [...new Set(Array.isArray(input.childIds) ? input.childIds : [])].sort();
+            if (currentChildIds.join(",") !== nextChildIds.join(",") || input.isActive === false)
+                return fail("TASK_SET_IN_PROGRESS", "任务集有进行中进度，暂不能改变子任务分配或停用子任务", 409);
+        }
         const title = String(input.title || "").trim();
         const err = validateInput(title, INPUT_RULES.title, "标题") || validateInput(input.points, INPUT_RULES.points, "积分") || validateInput(input.limitCount, INPUT_RULES.limitCount, "次数限制")
             || validateEnum(input.period || "daily", ["daily", "weekly", "monthly", "once"], "周期")
@@ -1062,6 +1140,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .first();
         if (!task)
             return fail("NOT_FOUND", "任务不存在", 404);
+        const taskSetMember = await env.DB.prepare("SELECT task_set_id FROM task_set_members WHERE task_id=?").bind(taskPatch[1]).first();
+        if (taskSetMember && await taskSetHasOpenProgress(env, taskSetMember.task_set_id))
+            return fail("TASK_SET_IN_PROGRESS", "任务集有进行中进度，暂不能删除子任务", 409);
+        if (taskSetMember)
+            return fail("TASK_SET_MEMBER", "请先在任务集中移除此子任务，再删除任务", 409);
         await env.DB.prepare("UPDATE tasks SET deleted_at=?, is_active=0, updated_at=? WHERE id=?")
             .bind(nowIso(), nowIso(), taskPatch[1])
             .run();
@@ -1187,7 +1270,7 @@ WHERE id=?`)
         const a = requireRole(actor, ["parent", "parent_delegate"]);
         const audit = actorAudit(a);
         const input = await body(request);
-        const sub = await env.DB.prepare("SELECT s.*, t.point_type, t.points, t.grading_mode, t.completion_standards_json FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.id=? AND s.parent_id=? AND s.status='pending'")
+        const sub = await env.DB.prepare("SELECT s.*, t.title, t.point_type, t.points, t.grading_mode, t.completion_standards_json FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.id=? AND s.parent_id=? AND s.status='pending'")
             .bind(review[1], a.id)
             .first();
         if (!sub)
@@ -1204,37 +1287,48 @@ WHERE id=?`)
             return fail("BAD_REQUEST", "该任务需要在家长待办中选择完成程度标准", 400);
         const awardedPoints = selectedStandard ? selectedStandard.points : Number(sub.points);
         const reviewNote = selectedStandard ? `任务审核通过：${selectedStandard.label}` : "任务审核通过";
-        const stmts = [env.DB.prepare("UPDATE task_submissions SET status=?, reviewed_at=?, review_note=? WHERE id=?").bind(status, nowIso(), input.note || "", sub.id)];
-        if (status === "approved") {
-            stmts.push(env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)")
-                .bind(id(), sub.child_id, a.id, signedPoints(sub.point_type, awardedPoints), sub.id, sub.period_key, reviewNote, audit.type, audit.id, audit.label));
-            stmts.push(env.DB.prepare(`INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot)
+        let settlement = null;
+        await env.DB.transaction(async () => {
+            await env.DB.prepare("UPDATE task_submissions SET status=?, reviewed_at=?, review_note=?, approved_points=? WHERE id=?")
+                .bind(status, nowIso(), input.note || "", status === "approved" ? awardedPoints : null, sub.id).run();
+            if (status === "approved") {
+                if (sub.task_set_id) {
+                    settlement = await settleTaskSetIfReady(env, { ...sub, parent_id: a.id }, audit);
+                } else {
+                    await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)")
+                        .bind(id(), sub.child_id, a.id, signedPoints(sub.point_type, awardedPoints), sub.id, sub.period_key, reviewNote, audit.type, audit.id, audit.label).run();
+                }
+                await env.DB.prepare(`INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot)
 SELECT ?, p.child_id, p.parent_id, p.penalty_points, 'task_required_penalty', p.task_id, p.period_key, '跨周期审核通过，退回必做扣分', ?, ?, ?
 FROM task_required_penalties p
 WHERE p.task_id=? AND p.child_id=? AND p.parent_id=? AND p.period_key=? AND p.penalty_points>0
   AND (SELECT COUNT(*) FROM task_submissions WHERE task_id=p.task_id AND child_id=p.child_id AND parent_id=p.parent_id AND period_key=p.period_key AND status='approved') >= p.required_count
   AND NOT EXISTS (SELECT 1 FROM point_ledger WHERE child_id=p.child_id AND parent_id=p.parent_id AND source_type='task_required_penalty' AND source_id=p.task_id AND period_key=p.period_key AND amount>0)`)
-                .bind(id(), audit.type, audit.id, audit.label, sub.task_id, sub.child_id, a.id, sub.period_key));
-        }
-        stmts.push(env.DB.prepare("UPDATE notifications SET read_at=? WHERE recipient_type='user' AND recipient_id=? AND related_type='task_submission' AND related_id=? AND read_at IS NULL")
-            .bind(nowIso(), a.id, sub.id));
-        await env.DB.batch(stmts);
+                    .bind(id(), audit.type, audit.id, audit.label, sub.task_id, sub.child_id, a.id, sub.period_key).run();
+            }
+            await env.DB.prepare("UPDATE notifications SET read_at=? WHERE recipient_type='user' AND recipient_id=? AND related_type='task_submission' AND related_id=? AND read_at IS NULL")
+                .bind(nowIso(), a.id, sub.id).run();
+        });
         if (status === "approved") {
             await recalcAchievements(env, a.id, sub.child_id);
         }
+        const taskSetResult = settlement?.taskSet ? settlement : null;
         await notify(env, {
             recipientType: "child",
             recipientId: sub.child_id,
             actorType: audit.type,
             actorId: audit.id || a.id,
             actorLabel: audit.label,
-            title: status === "approved" ? "任务审核通过" : "任务被驳回",
-            body: status === "approved" ? (selectedStandard ? `家长已按「${selectedStandard.label}」通过你的任务，积分已结算。` : "家长已通过你的任务，积分已结算。") : input.note || "家长驳回了这次任务提交。",
-            eventType: status === "approved" ? "task_approved" : "task_rejected",
-            relatedType: "task_submission",
-            relatedId: sub.id
+            title: status === "approved" ? taskSetResult?.settled ? "任务集已完成" : "任务审核通过" : "任务被驳回",
+            body: status === "approved"
+                ? taskSetResult ? (taskSetResult.settled ? `任务集「${taskSetResult.taskSet.title}」已完成，获得 ${taskSetResult.totalPoints} 积分。` : `「${sub.title || "子任务"}」已通过，任务集「${taskSetResult.taskSet.title}」进度 ${taskSetResult.progress.approved}/${taskSetResult.progress.total}，暂未单独加分。`)
+                    : (selectedStandard ? `家长已按「${selectedStandard.label}」通过你的任务，积分已结算。` : "家长已通过你的任务，积分已结算。")
+                : input.note || "家长驳回了这次任务提交。",
+            eventType: status === "approved" ? taskSetResult?.settled ? "task_set_completed" : "task_approved" : "task_rejected",
+            relatedType: taskSetResult?.settled ? "task_set_settlement" : "task_submission",
+            relatedId: taskSetResult?.settled ? taskSetResult.settlementId : sub.id
         });
-        return ok(true);
+        return ok({ settled: !!taskSetResult?.settled, totalPoints: taskSetResult?.totalPoints || 0, progress: taskSetResult?.progress || null });
     }
     const redemptionAction = path.match(/^\/reward-redemptions\/([^/]+)\/(redeem|cancel)$/);
     if (redemptionAction && method === "PATCH") {

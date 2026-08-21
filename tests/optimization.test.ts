@@ -26,6 +26,6 @@ describe("hot-path optimizations", () => {
     env._db.resetQueryCount();
     const tasks = await listWithAssignees(env, "tasks", parentId);
     expect(tasks).toHaveLength(3);
-    expect(env._db.queryCount()).toBe(2);
+    expect(env._db.queryCount()).toBe(3);
   });
 });

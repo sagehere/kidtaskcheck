@@ -1,5 +1,11 @@
 # 2026-08-21
 
+- 类型：界面优化
+- 任务：任务集编辑时将子任务复选列表限制为固定高度并支持内部滚动。
+- 修改文件：`src/ParentApp.tsx`、`src/styles.css`、`docs/ai/FEATURE_INDEX.md`。
+- 行为：保留原有多选顺序与计算逻辑；子任务超过 240px 时仅列表区域显示纵向滚动条，桌面和移动端一致。
+- 验证：`rtk npm run build`。
+
 - 类型：功能新增
 - 任务：支持多任务组成任务集，并在所有成员审核通过后一次性结算实际积分。
 - 修改文件：`migrations/0035_task_sets.sql`、`server/api/{utils.js,routes/{parent,child,shared}.js,ai/orchestrator.js}`、`src/{ParentApp,ChildApp}.tsx`、`src/components/Shell.tsx`、`src/types/api.ts`、`tests/task-sets.test.ts`、功能索引。

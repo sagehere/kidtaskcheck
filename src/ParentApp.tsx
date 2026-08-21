@@ -1703,7 +1703,7 @@ function TaskSetForm({ item, tasks, children, onSave, onCancel }: { item?: TaskS
     <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, iconType: "emoji" }); }}>
       <Field label="任务集标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
-      <Field label="子任务（至少两项，顺序即结算明细顺序)"><div className="stack compact">{selectable.map((task) => <label className="toggle" key={task.id}><input type="checkbox" checked={data.taskIds.includes(task.id)} onChange={() => toggleTask(task.id)} /><span>{task.title} · {formatPeriod(task.period)}</span></label>)}</div></Field>
+      <Field label="子任务（至少两项，顺序即结算明细顺序)"><div className="stack compact task-set-member-list">{selectable.map((task) => <label className="toggle" key={task.id}><input type="checkbox" checked={data.taskIds.includes(task.id)} onChange={() => toggleTask(task.id)} /><span>{task.title} · {formatPeriod(task.period)}</span></label>)}</div></Field>
       <small>共同适用：{eligible.length ? eligible.map((child) => child.display_name).join("、") : "暂无"} · 每轮 {totals.min}{totals.max !== totals.min ? `-${totals.max}` : ""} 积分</small>
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用任务集" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />

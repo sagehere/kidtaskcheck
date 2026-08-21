@@ -1213,6 +1213,13 @@ button:disabled {
   padding-right: 4px;
 }
 
+.task-set-member-list {
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
 .row {
   display: flex;
   align-items: center;

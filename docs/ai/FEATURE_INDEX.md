@@ -227,5 +227,5 @@
 - 主要调用链：任务集管理 -> `/task-sets`; 孩子提交时快照 `task_set_id` -> `/task-submissions`; 审核 -> `/task-submissions/:id/review` -> SQLite `BEGIN IMMEDIATE` 内写审核积分快照、配对结算和唯一 `source_type=task_set` 账本。
 - 相关状态：`task_sets`、`task_set_members`、`task_set_settlements`、`task_set_settlement_items`、`task_submissions.task_set_id`、`task_submissions.approved_points`、`point_ledger`。
 - 相关接口：`GET/POST /api/task-sets`、`PATCH/DELETE /api/task-sets/:id`、`PATCH /api/task-submissions/:id/review`、`GET /api/dashboard/{parent,child}`、`GET/POST /api/config/{export,import}`。
-- 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；加入任务集之前的提交保持普通任务结算语义；存在待审或已通过未结算记录时，不得改成员、停用、解散或改变成员的儿童交集，返回 `409 TASK_SET_IN_PROGRESS`；完成程度分数以审核时 `approved_points` 快照为准；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。
+- 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；加入任务集之前的提交保持普通任务结算语义；存在待审或已通过未结算记录时，不得改成员、停用、解散或改变成员的儿童交集，返回 `409 TASK_SET_IN_PROGRESS`；完成程度分数以审核时 `approved_points` 快照为准；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。任务集子任务复选列表固定为 240px 高并在内容超出时内部滚动，移动端保持相同行为。
 - 最近更新时间：2026-08-21

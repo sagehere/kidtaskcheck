@@ -6,6 +6,8 @@ import { Empty, formatNotificationSource, formatTime } from "./UI";
 
 type NotificationTab = "all" | "action" | "ack" | "normal";
 
+export type ShellNavItem = { value: string; label: string; icon: ReactNode };
+
 const NOTIFICATION_TABS: { value: NotificationTab; label: string }[] = [
   { value: "all", label: "全部未读" },
   { value: "action", label: "待处理" },
@@ -13,7 +15,15 @@ const NOTIFICATION_TABS: { value: NotificationTab; label: string }[] = [
   { value: "normal", label: "普通消息" }
 ];
 
-export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullable<Me>; refresh: () => void; children: ReactNode; onQuickAction?: () => void }) {
+export function Shell({ me, refresh, children, onQuickAction, navigation = [], activeNavigation, onNavigate }: {
+  me: NonNullable<Me>;
+  refresh: () => void;
+  children: ReactNode;
+  onQuickAction?: () => void;
+  navigation?: ShellNavItem[];
+  activeNavigation?: string;
+  onNavigate?: (value: string) => void;
+}) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
@@ -179,7 +189,7 @@ export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullabl
   }
   const blockingAck = me.role === "child" ? notifications.find((item) => item.requires_ack && !item.read_at && (item.event_type === "praise" || item.event_type === "criticism")) : null;
   return (
-    <div className="app">
+    <div className={"app " + (navigation.length ? "app-with-navigation" : "")}>
       <header className="topbar">
         <div className="brand"><Sparkles />儿童任务打卡</div>
         <div className="account">
@@ -230,7 +240,27 @@ export function Shell({ me, refresh, children, onQuickAction }: { me: NonNullabl
           </section>
         </div>
       )}
-      <main className="content">{children}</main>
+      <div className="app-frame">
+        {navigation.length > 0 && (
+          <nav className="primary-navigation" aria-label="主导航">
+            {navigation.map((item) => (
+              <button type="button" key={item.value} className={activeNavigation === item.value ? "active" : ""} aria-current={activeNavigation === item.value ? "page" : undefined} onClick={() => onNavigate?.(item.value)}>
+                {item.icon}<span>{item.label}</span>
+              </button>
+            ))}
+          </nav>
+        )}
+        <main className="content">{children}</main>
+      </div>
+      {navigation.length > 0 && (
+        <nav className="mobile-navigation" aria-label="主导航">
+          {navigation.map((item) => (
+            <button type="button" key={item.value} className={activeNavigation === item.value ? "active" : ""} aria-current={activeNavigation === item.value ? "page" : undefined} onClick={() => onNavigate?.(item.value)}>
+              {item.icon}<span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+      )}
     </div>
   );
 }

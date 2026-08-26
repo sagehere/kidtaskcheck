@@ -18,6 +18,7 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [systemLogs, setSystemLogs] = useState<SystemErrorLog[]>([]);
   const [maintenanceStats, setMaintenanceStats] = useState<MaintenanceStats | null>(null);
   const [expandedLogId, setExpandedLogId] = useState("");
+  const [activeTab, setActiveTab] = useState<"overview" | "accounts" | "gallery" | "system" | "logs">("overview");
 
   async function load() {
     let hasError = false;
@@ -134,7 +135,19 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   }
 
   return (
-    <Shell me={me} refresh={refresh}>
+    <Shell
+      me={me}
+      refresh={refresh}
+      navigation={[
+        { value: "overview", label: "总览", icon: <Database /> },
+        { value: "accounts", label: "账号", icon: <UserRound /> },
+        { value: "gallery", label: "图库", icon: <Image /> },
+        { value: "system", label: "系统", icon: <Settings /> },
+        { value: "logs", label: "日志", icon: <AlertTriangle /> }
+      ]}
+      activeNavigation={activeTab}
+      onNavigate={(value) => setActiveTab(value as typeof activeTab)}
+    >
       <section className="hero-band admin">
         <div>
           <p>管理员面板</p>
@@ -148,7 +161,7 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
       </section>
       <FeedbackToast message={message} error={error} onDismiss={() => { setMessage(""); setError(""); }} />
       {error && <div className="actions" style={{ justifyContent: "center", marginBottom: "0.5rem" }}><button className="secondary" onClick={() => void load()}>重试</button></div>}
-      <section className="panel setting-group">
+      <section className={"panel setting-group " + (activeTab === "accounts" ? "" : "is-hidden")}>
         <div className="panel-title">
           <Shield />
           <h2>管理员账号设置</h2>
@@ -175,7 +188,7 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           </button>
         </form>
       </section>
-      <section className="panel setting-group">
+      <section className={"panel setting-group " + (activeTab === "system" ? "" : "is-hidden")}>
         <div className="panel-title">
           <Settings />
           <h2>系统设置</h2>
@@ -193,7 +206,7 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           <button className="primary"><Settings size={18} />保存系统设置</button>
         </form>
       </section>
-      <section className="panel setting-group">
+      <section className={"panel setting-group " + (activeTab === "overview" ? "" : "is-hidden")}>
         <div className="panel-title">
           <Database />
           <h2>维护与 AI 队列</h2>
@@ -240,7 +253,7 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           {!maintenanceStats && <div className="empty">维护统计加载中...</div>}
         </div>
       </section>
-      <section className="panel setting-group">
+      <section className={"panel setting-group " + (activeTab === "logs" ? "" : "is-hidden")}>
         <div className="panel-title">
           <AlertTriangle />
           <h2>系统错误日志</h2>
@@ -271,7 +284,7 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         </div>
       </section>
       <div className="grid two">
-        <section className="panel">
+        <section className={"panel " + (activeTab === "accounts" ? "" : "is-hidden")}>
           <div className="panel-title">
             <UserRound />
             <h2>家长用户</h2>
@@ -310,7 +323,7 @@ export function AdminApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
             ))}
           </div>
         </section>
-        <section className="panel">
+        <section className={"panel " + (activeTab === "gallery" ? "" : "is-hidden")}>
           <div className="panel-title">
             <Image />
             <h2>内置图库</h2>

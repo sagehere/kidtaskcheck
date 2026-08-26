@@ -42,6 +42,7 @@ Do not read these directories unless the user explicitly asks and gives a specif
 - On this workstation, GitHub HTTPS traffic uses the local SOCKS5 proxy at `127.0.0.1:10808`. Configure repository-local `http.proxy` and `https.proxy` as `socks5://127.0.0.1:10808`, never `http://127.0.0.1:10808`.
 - Before diagnosing an HTTPS push as an authentication failure, run `git ls-remote origin HEAD` with the SOCKS5 proxy configured. `gh auth status` and Git Credential Manager may have different token state; an invalid `gh` token alone does not justify asking the user to authenticate again.
 - If `git-remote-https.exe` crashes or a push stalls, correct the proxy protocol first, rerun `git ls-remote origin HEAD`, then retry `git push origin main` before changing credentials or using another publishing path.
+- When a sandboxed push exits without updating the remote, retry `rtk git push origin main` with sandbox escalation; confirm success by checking `git ls-remote origin refs/heads/main` matches local `HEAD`.
 
 ## Project Overview
 

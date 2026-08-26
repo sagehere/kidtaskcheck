@@ -513,7 +513,19 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   if (dashboardLoading) return <div className="loading">加载中...</div>;
 
   return (
-    <Shell me={me} refresh={refresh} onQuickAction={() => void loadDashboard()}>
+    <Shell
+      me={me}
+      refresh={refresh}
+      onQuickAction={() => void loadDashboard()}
+      navigation={[
+        { value: "tasks", label: "今日", icon: <ClipboardCheck /> },
+        { value: "rewards", label: "奖励", icon: <Gift /> },
+        { value: "warehouse", label: "仓库", icon: <Package /> },
+        { value: "schedule", label: "日程", icon: <Calendar /> }
+      ]}
+      activeNavigation={activeTab}
+      onNavigate={(value) => setActiveTab(value as typeof activeTab)}
+    >
       <section className="hero-band child">
         <div>
           <p>孩子面板</p>
@@ -583,16 +595,6 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
           </div>
         </section>
       )}
-      <Tabs
-        value={activeTab}
-        onChange={(value) => setActiveTab(value as typeof activeTab)}
-        options={[
-          { value: "tasks", label: "任务" },
-          { value: "rewards", label: "奖励" },
-          { value: "warehouse", label: "仓库" },
-          { value: "schedule", label: "日程表设置" }
-        ]}
-      />
       {activeTab === "tasks" && (
         <div className="grid">
           <section className="panel child-panel">

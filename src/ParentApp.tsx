@@ -64,7 +64,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [configGroups, setConfigGroups] = useState<ConfigGroupSummary[]>([]);
   const [delegates, setDelegates] = useState<ParentDelegate[]>([]);
   const [dashboard, setDashboard] = useState<any>({ children: [], pendingSubmissions: [], pendingRedemptions: [] });
-  const [activeTab, setActiveTab] = useState<"pending" | "children" | "settings">("pending");
+  const [activeTab, setActiveTab] = useState<"today" | "family" | "rules" | "reports" | "settings">("today");
   const [ledgerChild, setLedgerChild] = useState<{ id: string; display_name: string } | null>(null);
   const [refundChild, setRefundChild] = useState<Child | null>(null);
   const [refundRows, setRefundRows] = useState<WarehouseItem[]>([]);
@@ -197,37 +197,53 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     loadLockRef.current = true;
     let hasError = false;
     try {
-      const [childRows, categoryRows, taskRows, taskSetRows, rewardRows, achievementRows, feedbackRows, groupRows, delegateRows, dash, aiRows] = await Promise.all([
+      const [childRows, taskRows, feedbackRows, dash] = await Promise.all([
         api<Child[]>("/children").catch(() => { hasError = true; return [] as Child[]; }),
-        api<Category[]>("/task-categories").catch(() => { hasError = true; return [] as Category[]; }),
         api<Task[]>("/tasks").catch(() => { hasError = true; return [] as Task[]; }),
-        api<TaskSet[]>("/task-sets").catch(() => { hasError = true; return [] as TaskSet[]; }),
-        api<Reward[]>("/rewards").catch(() => { hasError = true; return [] as Reward[]; }),
-        api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
         api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; }),
-        api<ConfigGroupSummary[]>("/config-groups").catch(() => { hasError = true; return [] as ConfigGroupSummary[]; }),
-        me.role === "parent" ? api<ParentDelegate[]>("/parent/delegates").catch(() => []) : Promise.resolve([] as ParentDelegate[]),
-        api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; }),
-        api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => ({ ...EMPTY_AI_DRAFT, updatedAt: "" }))
+        api<any>("/dashboard/parent").catch(() => { hasError = true; return { pendingSubmissions: [], pendingRedemptions: [], children: [] }; })
       ]);
       setChildren(childRows);
-      setCategories(categoryRows);
       setTasks(taskRows);
-      setTaskSets(taskSetRows);
-      setRewards(rewardRows);
-      setAchievements(achievementRows);
       setFeedbackTemplates(feedbackRows);
-      setConfigGroups(groupRows);
-      setDelegates(delegateRows);
       setDashboard(dash);
-      storeSavedAiConfig(aiRows as ParentAiServiceStoredConfig);
       if (hasError) setError("部分数据加载失败，可点击重试");
-    } catch (err) {
+    } catch {
       setError("加载数据失败，可点击重试");
     } finally {
-      setAiConfigLoaded(true);
       loadLockRef.current = false;
     }
+  }
+
+  async function loadRules() {
+    let hasError = false;
+    const [categoryRows, taskSetRows, rewardRows, achievementRows, feedbackRows] = await Promise.all([
+      api<Category[]>("/task-categories").catch(() => { hasError = true; return [] as Category[]; }),
+      api<TaskSet[]>("/task-sets").catch(() => { hasError = true; return [] as TaskSet[]; }),
+      api<Reward[]>("/rewards").catch(() => { hasError = true; return [] as Reward[]; }),
+      api<any[]>("/achievements").catch(() => { hasError = true; return []; }),
+      api<FeedbackTemplate[]>("/feedback-templates").catch(() => { hasError = true; return [] as FeedbackTemplate[]; })
+    ]);
+    setCategories(categoryRows);
+    setTaskSets(taskSetRows);
+    setRewards(rewardRows);
+    setAchievements(achievementRows);
+    setFeedbackTemplates(feedbackRows);
+    if (hasError) setError("部分规则数据加载失败，可点击重试");
+  }
+
+  async function loadSettings() {
+    let hasError = false;
+    const [groupRows, delegateRows, aiRows] = await Promise.all([
+      api<ConfigGroupSummary[]>("/config-groups").catch(() => { hasError = true; return [] as ConfigGroupSummary[]; }),
+      me.role === "parent" ? api<ParentDelegate[]>("/parent/delegates").catch(() => { hasError = true; return [] as ParentDelegate[]; }) : Promise.resolve([] as ParentDelegate[]),
+      api<ParentAiServiceStoredConfig>("/parent/ai-service").catch(() => { hasError = true; return { ...EMPTY_AI_DRAFT, updatedAt: "" }; })
+    ]);
+    setConfigGroups(groupRows);
+    setDelegates(delegateRows);
+    storeSavedAiConfig(aiRows as ParentAiServiceStoredConfig);
+    setAiConfigLoaded(true);
+    if (hasError) setError("部分设置数据加载失败，可点击重试");
   }
 
   async function loadDashboard() {
@@ -256,37 +272,13 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     };
   }, []);
   useEffect(() => {
+    if (activeTab === "rules") void loadRules();
+    if (activeTab === "settings") void loadSettings();
+  }, [activeTab]);
+  useEffect(() => {
     if (activeTab !== "settings" || !aiConfigLoaded || aiDraftInitializedRef.current || aiDraftDirtyRef.current) return;
     syncAiDraft(savedAiConfig);
   }, [activeTab, aiConfigLoaded, savedAiConfig.baseUrl, savedAiConfig.model, savedAiConfig.prompt, savedAiConfig.hasKey, savedAiConfig.imageBaseUrl, savedAiConfig.imageModel, savedAiConfig.imagePrompt, savedAiConfig.checklistImagePrompt, savedAiConfig.hasImageKey]);
-  useEffect(() => {
-    if (activeTab !== "settings") return;
-    const frame = window.requestAnimationFrame(() => {
-      document.querySelectorAll<HTMLElement>(".settings-surface > .setting-group").forEach((section, index) => {
-        if (section.classList.contains("config-groups-panel")) { section.classList.add("is-open"); return; }
-        const title = section.querySelector<HTMLElement>(":scope > .panel-title");
-        if (!title || title.querySelector(".settings-collapse-toggle")) return;
-        section.classList.add("is-collapsed");
-        title.classList.add("collapsible-title");
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "icon settings-collapse-toggle";
-        button.setAttribute("aria-label", "展开设置区域");
-        button.setAttribute("title", "展开设置区域");
-        button.textContent = "▼";
-        button.addEventListener("click", () => {
-          const collapsed = section.classList.toggle("is-collapsed");
-          section.classList.toggle("is-open", !collapsed);
-          button.textContent = collapsed ? "▼" : "▲";
-          button.setAttribute("aria-label", collapsed ? "展开设置区域" : "收起设置区域");
-          button.setAttribute("title", collapsed ? "展开设置区域" : "收起设置区域");
-        });
-        title.appendChild(button);
-        title.dataset.sectionIndex = String(index);
-      });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [activeTab, tasks.length, rewards.length, achievements.length, feedbackTemplates.length, children.length]);
   useEffect(() => {
     if (ledgerChild) void loadLedger(ledgerChild);
   }, [dashboard, ledgerChild?.id]);
@@ -306,6 +298,8 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       await action();
       setMessage(note);
       await load();
+      if (activeTab === "rules") await loadRules();
+      if (activeTab === "settings") await loadSettings();
       window.dispatchEvent(new CustomEvent("app:refresh-notifications"));
       return true;
     } catch (err) {
@@ -691,7 +685,20 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const aiTestChildId = selectedAiTestChildId || aiTestChildren[0]?.id || "";
 
   return (
-    <Shell me={me} refresh={refresh} onQuickAction={() => void load()}>
+    <Shell
+      me={me}
+      refresh={refresh}
+      onQuickAction={() => void load()}
+      navigation={[
+        { value: "today", label: "今日", icon: <ClipboardCheck /> },
+        { value: "family", label: "家庭", icon: <Users /> },
+        { value: "rules", label: "规则", icon: <Star /> },
+        { value: "reports", label: "报告", icon: <Printer /> },
+        { value: "settings", label: "设置", icon: <KeyRound /> }
+      ]}
+      activeNavigation={activeTab}
+      onNavigate={(value) => setActiveTab(value as typeof activeTab)}
+    >
       <section className="hero-band parent">
         <div>
           <p className="hidden-reset-trigger" onClick={tapHiddenReset}>家长面板</p>
@@ -713,17 +720,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       <FeedbackToast message={message} error={error} onDismiss={() => { setMessage(""); setError(""); }} />
       {error && <div className="actions" style={{ justifyContent: "center", marginBottom: "0.5rem" }}><button className="secondary" onClick={() => void load()}>重试</button></div>}
 
-      <Tabs
-        value={activeTab}
-        onChange={(value) => setActiveTab(value as typeof activeTab)}
-        options={[
-          { value: "pending", label: "待处理事务" },
-          { value: "children", label: "儿童管理" },
-          { value: "settings", label: "设置" }
-        ]}
-      />
-
-      {activeTab === "pending" && (
+      {activeTab === "today" && (
         <>
           <div className="dashboard-strip">
             {dashboard.children?.map((child: Child) => (
@@ -747,7 +744,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         </>
       )}
 
-      {activeTab === "children" && (
+      {activeTab === "family" && (
         <>
           <div className="grid two">
             <CreateChild onCreate={(data) => create("/children", data, "孩子账号已创建")} />
@@ -756,8 +753,29 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
         </>
       )}
 
-      {activeTab === "settings" && (
+      {activeTab === "reports" && (
+        <section className="panel reports-home">
+          <div className="panel-title"><Printer /><h2>成长报告与记录</h2></div>
+          <p className="muted">从孩子卡片进入积分清单、打印、报告、退款与反馈召回。</p>
+          <div className="cards">
+            {children.length ? children.map((child) => (
+              <article className="mini-card" key={child.id}>
+                <div><strong>{child.display_name}</strong><small>{child.username}</small></div>
+                <div className="actions">
+                  <button className="secondary" onClick={() => setLedgerChild(child)}>积分清单</button>
+                  <button className="secondary" onClick={() => setReportChild(child)}><Printer size={16} />报告</button>
+                  <button className="secondary" onClick={() => void refundChildReward(child)}>退款</button>
+                  <button className="secondary" onClick={() => void openFeedbackRecall(child)}>撤回反馈</button>
+                </div>
+              </article>
+            )) : <Empty text="请先在家庭中创建孩子账号" />}
+          </div>
+        </section>
+      )}
+
+      {(activeTab === "rules" || activeTab === "settings") && (
         <div className="settings-surface">
+          {activeTab === "settings" && (
           <ConfigGroupsPanel
             groups={configGroups}
             onCreate={(name) => void createConfigGroup(name)}
@@ -767,10 +785,11 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             onDelete={(group) => void deleteConfigGroup(group)}
             onClearCurrent={() => void clearCurrentConfig()}
           />
-          <section className="panel setting-group">
+          )}
+          <section className={"panel setting-group " + (activeTab === "rules" ? "" : "is-hidden")}>
             <div className="panel-title"><Star /><h2>任务配置</h2></div>
             <div className="grid two">
-              <CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} />
+              <details className="create-disclosure"><summary><Plus size={16} />新建任务</summary><CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} /></details>
               <CategoryOverview
                 items={categories}
                 onCreate={(data) => create("/task-categories", data, "任务分类已创建")}
@@ -788,23 +807,23 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             />
             <Overview title="现有任务" items={tasks} kind="task" children={children} categories={categories} onUpdate={(item, data) => update(`/tasks/${item.id}`, data, "任务已更新")} onDelete={(item) => remove(`/tasks/${item.id}`, "任务已删除", `确认删除任务「${item.title}」？历史记录会保留。`)} />
           </section>
-          <section className="panel setting-group">
+          <section className={"panel setting-group " + (activeTab === "rules" ? "" : "is-hidden")}>
             <div className="panel-title"><Gift /><h2>奖励配置</h2></div>
-              <CreateReward children={children} tasks={tasks} achievements={achievements} onCreate={(data) => create("/rewards", data, "奖励已创建")} />
+              <details className="create-disclosure"><summary><Plus size={16} />新建奖励</summary><CreateReward children={children} tasks={tasks} achievements={achievements} onCreate={(data) => create("/rewards", data, "奖励已创建")} /></details>
             <Overview title="现有奖励" items={rewards} kind="reward" children={children} tasks={tasks} achievements={achievements} onUpdate={(item, data) => update(`/rewards/${item.id}`, data, "奖励已更新")} onDelete={(item) => remove(`/rewards/${item.id}`, "奖励已删除", `确认删除奖励「${item.title}」？历史兑换记录会保留。`)} />
           </section>
-          <section className="panel setting-group">
+          <section className={"panel setting-group " + (activeTab === "rules" ? "" : "is-hidden")}>
             <div className="panel-title"><Award /><h2>成就称号</h2></div>
-            <CreateAchievement tasks={tasks} categories={categories} onCreate={(data) => create("/achievements", data, "成就称号已创建")} />
+            <details className="create-disclosure"><summary><Plus size={16} />新建成就</summary><CreateAchievement tasks={tasks} categories={categories} onCreate={(data) => create("/achievements", data, "成就称号已创建")} /></details>
             <Overview title="成就称号" items={achievements} kind="achievement" tasks={tasks} categories={categories} onUpdate={(item, data) => update(`/achievements/${item.id}`, data, "成就称号已更新")} onDelete={(item) => remove(`/achievements/${item.id}`, "成就称号已删除", `确认删除成就称号「${item.title}」？已解锁历史会保留。`)} />
           </section>
-          <section className="panel setting-group">
+          <section className={"panel setting-group " + (activeTab === "rules" ? "" : "is-hidden")}>
             <div className="panel-title"><MessageSquare /><h2>表扬与批评条款</h2></div>
-            <CreateFeedbackTemplate onCreate={(data) => create("/feedback-templates", data, "条款已创建")} />
+            <details className="create-disclosure"><summary><Plus size={16} />新建条款</summary><CreateFeedbackTemplate onCreate={(data) => create("/feedback-templates", data, "条款已创建")} /></details>
             <FeedbackOverview items={feedbackTemplates} onUpdate={(item, data) => update(`/feedback-templates/${item.id}`, data, "条款已更新")} onDelete={(item) => remove(`/feedback-templates/${item.id}`, "条款已删除", `确认删除${item.kind === "praise" ? "表扬" : "批评"}条款「${item.title}」？历史积分记录会保留。`)} />
           </section>
-          <ConfigPortPanel onImported={load} />
-          {me.role === "parent" && (
+          {activeTab === "settings" && <ConfigPortPanel onImported={load} />}
+          {activeTab === "settings" && me.role === "parent" && (
             <DelegateManager
               delegates={delegates}
               onCreate={(data) => void createDelegate(data)}
@@ -812,7 +831,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               onDelete={(delegate) => void deleteDelegate(delegate)}
             />
           )}
-          <section className="panel setting-group">
+          <section className={"panel setting-group " + (activeTab === "settings" ? "" : "is-hidden")}>
             <div className="panel-title"><KeyRound /><h2>修改密码</h2></div>
             <form className="stack compact" onSubmit={updateProfile}>
               <Field label="操作者称谓">
@@ -830,7 +849,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
               <button className="primary"><KeyRound size={18} />保存账号设置</button>
             </form>
           </section>
-          <section className="panel setting-group">
+          <section className={"panel setting-group " + (activeTab === "settings" ? "" : "is-hidden")}>
             <div className="panel-title">
               <Sparkles />
               <h2>AI 服务</h2>

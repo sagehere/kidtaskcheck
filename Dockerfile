@@ -15,5 +15,6 @@ COPY src/lib/domain.js ./src/lib/domain.js
 COPY server ./server
 COPY scripts ./scripts
 COPY migrations ./migrations
+RUN node --check server/api/utils.js
 EXPOSE 3000
 CMD ["node", "server/index.mjs"]

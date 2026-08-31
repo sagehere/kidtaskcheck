@@ -1,5 +1,10 @@
 # 2026-08-31
 
+- 类型：部署热修复
+- 任务：修复 Docker 运行镜像启动时 `server/api/utils.js` 的重复 ESM 导入错误。
+- 修改文件：删除重复导入；Dockerfile 增加原生 Node 语法检查；同步任务集功能索引。
+- 验证：`node --check server/api/utils.js`；`npm run build`；`npm test`（171 项通过）。本机 Docker Desktop Linux 引擎未启动，镜像构建待 GitHub Actions 执行。
+
 - 类型：功能新增与缺陷修复
 - 任务：合并周/月报内容设置，新增时间窗任务集，修复 Emoji 符号偶发加载空白。
 - 修改文件：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`src/components/EmojiSelect.tsx`、`server/api/{utils.js,routes/{parent,child,shared}.js}`、`server/scheduler-tick.mjs`、`migrations/0037_task_set_windows.sql`、任务集测试与功能索引。

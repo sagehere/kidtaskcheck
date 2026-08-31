@@ -240,5 +240,5 @@
 - 主要调用链：任务集管理 -> `/task-sets`; 孩子提交时快照 `task_set_id` -> `/task-submissions`; 逐轮审核 -> `/task-submissions/:id/review`; 时间窗结算 -> `schedulerTick` -> `settleTaskSetWindows`; 未达成决定 -> `/task-set-settlements/:id/resolve`。
 - 相关状态：`task_sets.settlement_mode/window_*`、`task_set_members`、`task_set_settlements.status`、`task_set_settlement_items`、`task_submissions.task_set_id`、`task_submissions.approved_points`、`point_ledger`。
 - 相关接口：`GET/POST /api/task-sets`、`PATCH/DELETE /api/task-sets/:id`、`PATCH /api/task-set-settlements/:id/resolve`、`PATCH /api/task-submissions/:id/review`、`GET /api/dashboard/{parent,child}`、`GET/POST /api/config/{export,import}`。
-- 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；时间窗开始日期只能是明天或以后，日期范围和星期同时生效，结束后等待全部待审记录处理；窗口开始后锁定任务集和成员任务，直到每名适用儿童达到终态；完成程度分数以审核时 `approved_points` 快照为准；成功统一记任务集账本，补发改记单任务账本，作废只消费结算明细；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。任务集子任务复选列表固定为 240px 高并在内容超出时内部滚动，移动端保持相同行为。
+- 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；时间窗开始日期只能是明天或以后，日期范围和星期同时生效，结束后等待全部待审记录处理；窗口开始后锁定任务集和成员任务，直到每名适用儿童达到终态；完成程度分数以审核时 `approved_points` 快照为准；成功统一记任务集账本，补发改记单任务账本，作废只消费结算明细；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。任务集子任务复选列表固定为 240px 高并在内容超出时内部滚动，移动端保持相同行为。Docker 镜像构建会以原生 Node 语法检查 `server/api/utils.js`；Vite/Vitest 转换通过不等价于生产 ESM 可解析。
 - 最近更新时间：2026-08-31

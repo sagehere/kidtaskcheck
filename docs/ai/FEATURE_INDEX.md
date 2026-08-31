@@ -147,6 +147,8 @@
 
 - Maintenance note (2026-06-30): long-running SQLite cleanup keeps detailed ledger/submission/redemption rows for `detail_retention_days` (default 365) and summarizes old ledger rows into `activity_archives`. `archiveOldActivity` must update existing monthly archives and the matching `activity_archive` ledger row when late old rows appear, because `point_ledger` remains the balance source of truth. `db:compact` is the low-frequency maintenance-window command for shrinking the SQLite file after cleanup; do not run VACUUM on the normal request/bootstrap path. Report/ledger window queries are supported by `idx_ledger_child_parent_created`, `idx_submissions_child_parent_submitted`, `idx_redemptions_child_parent_requested`, and `idx_child_achievements_child_unlocked`; keep runtime `ensureReportWindowIndexes` in sync with migration 0028.
 
+<!-- 2026-08-31：家长可通过 /parent/report-settings 分别配置打印清单、周报和月报的展示章节。设置按 parent_id 保存，缺省为全部启用；仅影响 HTML 输出，不影响统计口径、日程打印、AI 图片或缓存/定时生成。报告页加载并保存设置；任务、奖励、成就和条款列表默认仅显示启用项，任务分类改由弹窗入口管理。 -->
+
 ## 11. 通知中心
 
 - 功能说明：家长和孩子查看未读通知，标记已读，家长可对任务/奖励通知快捷审批。

@@ -496,6 +496,66 @@ describe("Input Validation", () => {
   });
 });
 
+describe("Parent report content settings", () => {
+  let env: any;
+  let pid: string;
+  let cid: string;
+  const parentActor = () => ({ type: "user", role: "parent", id: pid, displayName: "Parent" });
+  beforeEach(() => {
+    env = resetTestEnv();
+    pid = id();
+    cid = id();
+    env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, 'report-parent', 'x', 'parent', 'Parent')").bind(pid).run();
+    env.DB.prepare("INSERT INTO children (id, parent_id, username, password_hash, display_name, status) VALUES (?, ?, 'report-child', 'x', 'Child', 'active')").bind(cid, pid).run();
+  });
+  it("defaults to every section enabled and persists independent report types", async () => {
+    const first = await safe(handleParentRoutes, "/parent/report-settings", "GET", makeRequest("GET", "/parent/report-settings"), env, parentActor());
+    const defaults = await first!.json();
+    expect(defaults.data.checklist.tasks).toBe(true);
+    expect(defaults.data.weekly.taskDetails).toBe(true);
+    expect(defaults.data.monthly.taskDetails).toBe(true);
+
+    const saved = await safe(handleParentRoutes, "/parent/report-settings", "PATCH", makeRequest("PATCH", "/parent/report-settings", { checklist: { tasks: false }, weekly: { taskDetails: false }, monthly: { comparison: false } }), env, parentActor());
+    expect(saved!.status).toBe(200);
+    const settings = await saved!.json();
+    expect(settings.data.checklist.tasks).toBe(false);
+    expect(settings.data.weekly.taskDetails).toBe(false);
+    expect(settings.data.monthly.taskDetails).toBe(true);
+    expect(settings.data.monthly.comparison).toBe(false);
+  });
+  it("validates section names, values, family isolation, and delegate ownership", async () => {
+    const invalid = await safe(handleParentRoutes, "/parent/report-settings", "PATCH", makeRequest("PATCH", "/parent/report-settings", { weekly: { unknown: false } }), env, parentActor());
+    expect(invalid!.status).toBe(400);
+    const invalidValue = await safe(handleParentRoutes, "/parent/report-settings", "PATCH", makeRequest("PATCH", "/parent/report-settings", { weekly: { taskDetails: 0 } }), env, parentActor());
+    expect(invalidValue!.status).toBe(400);
+
+    const delegate = { type: "user", role: "parent_delegate", id: pid, parentId: pid, parent_id: pid, delegateId: id(), displayName: "Delegate" };
+    const delegated = await safe(handleParentRoutes, "/parent/report-settings", "PATCH", makeRequest("PATCH", "/parent/report-settings", { weekly: { taskDetails: false } }), env, delegate);
+    expect(delegated!.status).toBe(200);
+
+    const otherParentId = id();
+    env.DB.prepare("INSERT INTO users (id, username, password_hash, role, display_name) VALUES (?, 'other-report-parent', 'x', 'parent', 'Other')").bind(otherParentId).run();
+    const other = await safe(handleParentRoutes, "/parent/report-settings", "GET", makeRequest("GET", "/parent/report-settings"), env, { type: "user", role: "parent", id: otherParentId });
+    expect((await other!.json()).data.weekly.taskDetails).toBe(true);
+  });
+  it("hides configured sections while retaining report basics", async () => {
+    await safe(handleParentRoutes, "/parent/report-settings", "PATCH", makeRequest("PATCH", "/parent/report-settings", { checklist: { tasks: false, rewards: false, feedback: false, taskSets: false }, weekly: { actionItems: false, taskDetails: false, comparison: false } }), env, parentActor());
+    const checklist = await safe(handleParentRoutes, `/children/${cid}/export-print`, "GET", makeRequest("GET", `/children/${cid}/export-print`), env, parentActor());
+    const checklistHtml = await checklist!.text();
+    expect(checklistHtml).not.toContain("任务目标");
+    expect(checklistHtml).not.toContain("可兑换奖励");
+    expect(checklistHtml).toContain("当前规则清单");
+
+    const reportRequest = makeRequest("GET", `/children/${cid}/report?period=weekly&anchor=2026-06-03T00:00:00.000Z`);
+    const report = await safe(handleParentRoutes, `/children/${cid}/report`, "GET", reportRequest, env, parentActor(), new URL(reportRequest.url));
+    const reportHtml = await report!.text();
+    expect(reportHtml).not.toContain("待处理与改进");
+    expect(reportHtml).not.toContain("任务明细");
+    expect(reportHtml).not.toContain("与上一周期对比");
+    expect(reportHtml).toContain("当前积分");
+  });
+});
+
 describe("Child schedule plan text", () => {
   let env: any;
   let pid: string;

@@ -3,7 +3,7 @@ import {
   Award, BadgeCheck, Check, ClipboardCheck, Download, Edit3, Gift, KeyRound,
   MessageSquare, Plus, Printer, RotateCcw, Sparkles, Star, Trash2, Upload, Users, AlertTriangle
 } from "lucide-react";
-import { Me, Child, Category, Task, TaskSet, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ScheduleImageResponse, ParentDelegate, RemedyCriticismItem, ConfigGroupSummary } from "./types/api";
+import { Me, Child, Category, Task, TaskSet, Reward, FeedbackTemplate, LedgerRow, WarehouseItem, FeedbackEvent, LedgerResponse, REFRESH_INTERVAL_MS, DEFAULT_WEEKDAYS, ParentAiServiceConfig, CartoonReportResponse, ChecklistImageResponse, ScheduleImageResponse, ParentDelegate, RemedyCriticismItem, ConfigGroupSummary, ReportContentSettings } from "./types/api";
 import { api } from "./api/client";
 import { Field, Empty, FeedbackToast, Tabs, Toggle, EditDialog, icon, WeekdayPicker, formatPeriod, formatTime, weekdayLabel, rewardDisplayTitle, PrerequisiteEditor, normalizeWeekdaysLocal } from "./components/UI";
 import { EmojiSelect } from "./components/EmojiSelect";
@@ -13,6 +13,14 @@ import { ACHIEVEMENT_CONDITIONS, conditionFromAchievement, achievementPayload, f
 
 type ParentAiServiceStoredConfig = Omit<ParentAiServiceConfig, "apiKey"> & { updatedAt?: string };
 const EMPTY_AI_DRAFT: ParentAiServiceConfig = { baseUrl: "", model: "", prompt: "", reportPrompt: "", monthlyPrompt: "", hasKey: false, imageBaseUrl: "", imageModel: "gpt-image-2", imagePrompt: "", checklistImagePrompt: "", scheduleImagePrompt: "", imageSize: "1248x1760", imageQuality: "low", imageFormat: "jpeg", imageN: 1, hasImageKey: false };
+const DEFAULT_REPORT_CONTENT_SETTINGS: ReportContentSettings = {
+  checklist: { taskSets: true, tasks: true, rewards: true, feedback: true },
+  weekly: { actionItems: true, aiCommentary: true, comparison: true, taskDetails: true, categorySummary: true, pointSources: true, requiredTaskExceptions: true, ledgerDetails: true, rewards: true, feedback: true, achievements: true, scheduleTemplate: true },
+  monthly: { actionItems: true, aiCommentary: true, comparison: true, taskDetails: true, categorySummary: true, pointSources: true, requiredTaskExceptions: true, ledgerDetails: true, rewards: true, feedback: true, achievements: true, scheduleTemplate: true }
+};
+function cloneReportContentSettings(value: ReportContentSettings = DEFAULT_REPORT_CONTENT_SETTINGS): ReportContentSettings {
+  return { checklist: { ...value.checklist }, weekly: { ...value.weekly }, monthly: { ...value.monthly } };
+}
 type CompletionStandard = { label: string; points: number };
 function parseCompletionStandards(item: any): CompletionStandard[] {
   if (Array.isArray(item?.completionStandards)) return item.completionStandards;
@@ -62,6 +70,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [achievements, setAchievements] = useState<any[]>([]);
   const [feedbackTemplates, setFeedbackTemplates] = useState<FeedbackTemplate[]>([]);
   const [configGroups, setConfigGroups] = useState<ConfigGroupSummary[]>([]);
+  const [reportSettings, setReportSettings] = useState<ReportContentSettings>(() => cloneReportContentSettings());
   const [delegates, setDelegates] = useState<ParentDelegate[]>([]);
   const [dashboard, setDashboard] = useState<any>({ children: [], pendingSubmissions: [], pendingRedemptions: [] });
   const [activeTab, setActiveTab] = useState<"today" | "family" | "rules" | "reports" | "settings">("today");
@@ -71,6 +80,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   const [feedbackChild, setFeedbackChild] = useState<Child | null>(null);
   const [feedbackRows, setFeedbackRows] = useState<FeedbackEvent[]>([]);
   const [reportChild, setReportChild] = useState<Child | null>(null);
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [savedAiConfig, setSavedAiConfig] = useState<ParentAiServiceStoredConfig>({ ...EMPTY_AI_DRAFT });
   const [draftAiConfig, setDraftAiConfig] = useState<ParentAiServiceConfig>({ ...EMPTY_AI_DRAFT });
@@ -245,6 +255,13 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
     setAiConfigLoaded(true);
     if (hasError) setError("部分设置数据加载失败，可点击重试");
   }
+  async function loadReportSettings() {
+    try {
+      setReportSettings(cloneReportContentSettings(await api<ReportContentSettings>("/parent/report-settings")));
+    } catch {
+      setError("报表内容设置加载失败，可点击重试");
+    }
+  }
 
   async function loadDashboard() {
     if (loadLockRef.current) return;
@@ -274,6 +291,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
   useEffect(() => {
     if (activeTab === "rules") void loadRules();
     if (activeTab === "settings") void loadSettings();
+    if (activeTab === "reports") void loadReportSettings();
   }, [activeTab]);
   useEffect(() => {
     if (activeTab !== "settings" || !aiConfigLoaded || aiDraftInitializedRef.current || aiDraftDirtyRef.current) return;
@@ -310,6 +328,19 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
 
   async function create(path: string, data: Record<string, unknown>, note: string) {
     return run(() => api(path, { method: "POST", body: JSON.stringify(data) }), note);
+  }
+  async function saveReportSettings(type: keyof ReportContentSettings, sections: ReportContentSettings[keyof ReportContentSettings]) {
+    setError("");
+    try {
+      const saved = await api<ReportContentSettings>("/parent/report-settings", {
+        method: "PATCH",
+        body: JSON.stringify({ [type]: sections })
+      });
+      setReportSettings(cloneReportContentSettings(saved));
+      setMessage("报表内容设置已保存");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "报表内容设置保存失败");
+    }
   }
 
   async function update(path: string, data: Record<string, unknown>, note: string) {
@@ -754,23 +785,26 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       )}
 
       {activeTab === "reports" && (
-        <section className="panel reports-home">
-          <div className="panel-title"><Printer /><h2>成长报告与记录</h2></div>
-          <p className="muted">从孩子卡片进入积分清单、打印、报告、退款与反馈召回。</p>
-          <div className="cards">
-            {children.length ? children.map((child) => (
-              <article className="mini-card" key={child.id}>
-                <div><strong>{child.display_name}</strong><small>{child.username}</small></div>
-                <div className="actions">
-                  <button className="secondary" onClick={() => setLedgerChild(child)}>积分清单</button>
-                  <button className="secondary" onClick={() => setReportChild(child)}><Printer size={16} />报告</button>
-                  <button className="secondary" onClick={() => void refundChildReward(child)}>退款</button>
-                  <button className="secondary" onClick={() => void openFeedbackRecall(child)}>撤回反馈</button>
-                </div>
-              </article>
-            )) : <Empty text="请先在家庭中创建孩子账号" />}
-          </div>
-        </section>
+        <>
+          <ReportContentSettingsPanel value={reportSettings} onSave={saveReportSettings} />
+          <section className="panel reports-home">
+            <div className="panel-title"><Printer /><h2>成长报告与记录</h2></div>
+            <p className="muted">从孩子卡片进入积分清单、打印、报告、退款与反馈召回。</p>
+            <div className="cards">
+              {children.length ? children.map((child) => (
+                <article className="mini-card" key={child.id}>
+                  <div><strong>{child.display_name}</strong><small>{child.username}</small></div>
+                  <div className="actions">
+                    <button className="secondary" onClick={() => setLedgerChild(child)}>积分清单</button>
+                    <button className="secondary" onClick={() => setReportChild(child)}><Printer size={16} />报告</button>
+                    <button className="secondary" onClick={() => void refundChildReward(child)}>退款</button>
+                    <button className="secondary" onClick={() => void openFeedbackRecall(child)}>撤回反馈</button>
+                  </div>
+                </article>
+              )) : <Empty text="请先在家庭中创建孩子账号" />}
+            </div>
+          </section>
+        </>
       )}
 
       {(activeTab === "rules" || activeTab === "settings") && (
@@ -787,16 +821,18 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           />
           )}
           <section className={"panel setting-group " + (activeTab === "rules" ? "" : "is-hidden")}>
-            <div className="panel-title"><Star /><h2>任务配置</h2></div>
+            <div className="panel-title"><Star /><h2>任务配置</h2><div className="actions"><button type="button" className="secondary" onClick={() => setCategoryDialogOpen(true)}><Star size={16} />任务分类设置</button></div></div>
             <div className="grid two">
               <details className="create-disclosure"><summary><Plus size={16} />新建任务</summary><CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} /></details>
+            </div>
+            {categoryDialogOpen && <EditDialog title="任务分类设置" icon={<Star />} onClose={() => setCategoryDialogOpen(false)}>
               <CategoryOverview
                 items={categories}
                 onCreate={(data) => create("/task-categories", data, "任务分类已创建")}
                 onUpdate={(item, data) => update(`/task-categories/${item.id}`, data, "任务分类已更新")}
                 onDelete={(item) => remove(`/task-categories/${item.id}`, "任务分类已删除，分类下任务已一并删除", `确认删除任务分类「${item.name}」？该分类下所有任务会一并删除，历史记录会保留。`)}
               />
-            </div>
+            </EditDialog>}
             <TaskSetsPanel
               taskSets={taskSets}
               tasks={tasks}
@@ -1490,6 +1526,46 @@ export function ReportDialog({ child, onPrint, onReport, onCartoonReport, onChec
   );
 }
 
+export function ReportContentSettingsPanel({ value, onSave }: { value: ReportContentSettings; onSave: (type: keyof ReportContentSettings, sections: any) => Promise<void> }) {
+  const [draft, setDraft] = useState(() => cloneReportContentSettings(value));
+  const [saving, setSaving] = useState<"" | keyof ReportContentSettings>("");
+  useEffect(() => setDraft(cloneReportContentSettings(value)), [value]);
+  const groups: { type: keyof ReportContentSettings; title: string; sections: { key: string; label: string }[] }[] = [
+    { type: "checklist", title: "打印清单", sections: [{ key: "taskSets", label: "任务集" }, { key: "tasks", label: "任务目标" }, { key: "rewards", label: "可兑换奖励" }, { key: "feedback", label: "行为约定" }] },
+    { type: "weekly", title: "周报", sections: reportGrowthSettingSections() },
+    { type: "monthly", title: "月报", sections: reportGrowthSettingSections() }
+  ];
+  async function save(type: keyof ReportContentSettings) {
+    setSaving(type);
+    await onSave(type, draft[type]);
+    setSaving("");
+  }
+  return (
+    <section className="panel">
+      <div className="panel-title"><Printer /><h2>报表内容设置</h2></div>
+      <p className="muted">标题、周期信息和周/月报核心摘要会始终保留。</p>
+      <div className="grid three">
+        {groups.map((group) => (
+          <div className="stack compact" key={group.type}>
+            <strong>{group.title}</strong>
+            {group.sections.map((section) => <Toggle key={section.key} label={section.label} checked={Boolean((draft[group.type] as any)[section.key])} onChange={(checked) => setDraft((current) => ({ ...current, [group.type]: { ...current[group.type], [section.key]: checked } } as ReportContentSettings))} />)}
+            <button type="button" className="secondary" disabled={saving === group.type} onClick={() => void save(group.type)}>{saving === group.type ? "保存中..." : "保存" + group.title + "设置"}</button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function reportGrowthSettingSections() {
+  return [
+    { key: "actionItems", label: "待处理与改进" }, { key: "aiCommentary", label: "AI 评语" }, { key: "comparison", label: "与上一周期对比" },
+    { key: "taskDetails", label: "任务明细" }, { key: "categorySummary", label: "分类完成" }, { key: "pointSources", label: "积分来源" },
+    { key: "requiredTaskExceptions", label: "必做任务异常" }, { key: "ledgerDetails", label: "积分明细" }, { key: "rewards", label: "奖励记录" },
+    { key: "feedback", label: "表扬与批评" }, { key: "achievements", label: "成就解锁" }, { key: "scheduleTemplate", label: "当前日程模板" }
+  ];
+}
+
 export function CartoonReportDialog({ result, onRetry, onRegenerate, onClose }: { result: CartoonReportResponse & { title: string }; onRetry: (result: CartoonReportResponse & { title: string }) => void; onRegenerate: (result: CartoonReportResponse & { title: string }) => void; onClose: () => void }) {
   const working = result.status === "pending" || result.status === "processing" || (!result.status && !result.imageUrl);
   return (
@@ -1814,11 +1890,15 @@ export function CreateFeedbackTemplate({ onCreate }: { onCreate: (data: any) => 
 
 export function FeedbackOverview({ items, onUpdate, onDelete }: { items: FeedbackTemplate[]; onUpdate: (item: FeedbackTemplate, data: any) => any; onDelete: (item: FeedbackTemplate) => void }) {
   const [editing, setEditing] = useState<FeedbackTemplate | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"active" | "inactive" | "all">("active");
+  const filteredItems = items.filter((item) => statusFilter === "all" || (item.is_active !== 0) === (statusFilter === "active"));
+  const emptyText = statusFilter === "active" ? "暂无启用条款" : statusFilter === "inactive" ? "暂无未启用条款" : "暂无表扬与批评条款";
   return (
     <section className="panel">
       <div className="panel-title"><MessageSquare /><h2>现有条款</h2></div>
+      <Tabs value={statusFilter} options={[{ value: "active", label: "启用" }, { value: "inactive", label: "未启用" }, { value: "all", label: "全部" }]} onChange={(value) => setStatusFilter(value as typeof statusFilter)} />
       <div className="list config-list scroll-list">
-        {items.length ? items.map((item) => (
+        {filteredItems.length ? filteredItems.map((item) => (
           <article className={`row config-row ${item.kind}`} key={item.id}>
             <div className="config-main">
               {icon(item.icon_type, item.icon_value, item.title)}
@@ -1833,7 +1913,7 @@ export function FeedbackOverview({ items, onUpdate, onDelete }: { items: Feedbac
               <button className="icon danger" title="删除" onClick={() => onDelete(item)}><Trash2 size={18} /></button>
             </div>
           </article>
-        )) : <Empty text="暂无表扬与批评条款" />}
+        )) : <Empty text={emptyText} />}
       </div>
       {editing && (
         <EditDialog title="编辑条款" icon={<MessageSquare />} onClose={() => setEditing(null)}>
@@ -2138,9 +2218,9 @@ export function FormPanel({ title, icon, children, onSubmit, submitLabel = "保�
 export function CategoryOverview({ items, onCreate, onUpdate, onDelete }: { items: Category[]; onCreate: (data: any) => any; onUpdate: (item: Category, data: any) => any; onDelete: (item: Category) => void }) {
   const [editing, setEditing] = useState<Category | null>(null);
   const [data, setData] = useState({ name: "", iconValue: "📚" });
+  if (editing) return <CategoryEditForm item={editing} onCancel={() => setEditing(null)} onSave={async (data) => { if (await onUpdate(editing, data)) setEditing(null); }} />;
   return (
-    <section className="panel">
-      <div className="panel-title"><Star /><h2>任务分类</h2></div>
+    <div className="stack">
       <form className="stack compact" onSubmit={async (event) => { event.preventDefault(); if (await onCreate({ ...data, iconType: "emoji" })) setData({ name: "", iconValue: "📚" }); }}>
         <Field label="名称"><input required value={data.name} onChange={(e) => setData({ ...data, name: e.target.value })} /></Field>
         <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
@@ -2163,12 +2243,7 @@ export function CategoryOverview({ items, onCreate, onUpdate, onDelete }: { item
           </article>
         )) : <Empty text="暂无分类" />}
       </div>
-      {editing && (
-        <EditDialog title="编辑任务分类" icon={<Star />} onClose={() => setEditing(null)}>
-          <CategoryEditForm item={editing} onCancel={() => setEditing(null)} onSave={async (data) => { if (await onUpdate(editing, data)) setEditing(null); }} />
-        </EditDialog>
-      )}
-    </section>
+    </div>
   );
 }
 
@@ -2185,12 +2260,18 @@ export function CategoryEditForm({ item, onSave, onCancel }: { item: Category; o
 
 export function Overview({ title, items, kind, children = [], categories = [], tasks = [], achievements = [], onUpdate, onDelete }: { title: string; items: any[]; kind: "task" | "reward" | "achievement"; children?: Child[]; categories?: Category[]; tasks?: Task[]; achievements?: any[]; onUpdate?: (item: any, data: any) => any; onDelete?: (item: any) => void }) {
   const [editing, setEditing] = useState<any | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"active" | "inactive" | "all">("active");
   const titleLabel = kind === "reward" ? "奖励" : kind === "achievement" ? "成就称号" : "任务";
+  const filteredItems = items.filter((item) => statusFilter === "all" || (item.is_active !== 0) === (statusFilter === "active"));
+  const emptyText = statusFilter === "active" ? "暂无启用内容" : statusFilter === "inactive" ? "暂无未启用内容" : "暂无内容";
   return (
     <section className="panel">
       <div className="panel-title"><Star /><h2>{title}</h2></div>
+      <Tabs value={statusFilter} options={[{ value: "active", label: "启用" }, { value: "inactive", label: "未启用" }, { value: "all", label: "全部" }]} onChange={(value) => setStatusFilter(value as typeof statusFilter)} />
       <div className="list config-list scroll-list">
-        {items.length ? items.map((item) => (
+        {filteredItems.length ? filteredItems.map((item) => {
+          const itemActive = item.is_active !== 0;
+          return (
           <article className="row config-row" key={item.id}>
             <div className="config-main">
               {icon(item.icon_type, item.icon_value, item.title)}
@@ -2201,7 +2282,7 @@ export function Overview({ title, items, kind, children = [], categories = [], t
                   {kind === "task" && `${item.is_active ? "启用" : "停用"} · ${formatPeriod(item.period)} · ${item.grading_mode === "completion" ? "完成程度给分" : `+${item.points}`} · ${item.limit_count || 1}次 · ${weekdayLabel(item.enabled_weekdays || item.enabledWeekdays)}${item.is_required === 1 ? ` · 必做 ${item.required_count || 1} 次 · 未达标扣 ${item.required_penalty_points || 0} 分${item.required_remedy_enabled === 1 ? ` · 可补救 ${item.required_remedy_points || 0} 分 / ${item.required_remedy_deadline_hours || 24} 小时` : ""}` : ""}`}
                   {kind === "task" && submissionDeadlineText(item.period, parseSubmissionDeadline(item)) ? ` · ${submissionDeadlineText(item.period, parseSubmissionDeadline(item))}` : ""}
                   {kind === "reward" && `${item.is_active ? "启用" : "停用"} · ${item.cost_points}积分 · ${formatPeriod(item.limit_period)}${item.limit_period === "once" ? "" : ` · ${item.limit_count || 1}次`} · 核销${weekdayLabel(item.redeem_weekdays || item.redeemWeekdays)}${item.requiredAchievementTitle ? ` · 解锁${item.requiredAchievementTitle}` : ""}`}
-                  {kind === "achievement" && formatAchievementRule(item, tasks, categories)}
+                  {kind === "achievement" && ((itemActive ? "启用" : "未启用") + " · " + formatAchievementRule(item, tasks, categories))}
                 </small>
               </div>
             </div>
@@ -2210,7 +2291,8 @@ export function Overview({ title, items, kind, children = [], categories = [], t
               {onDelete && <button className="icon danger" title="删除" onClick={() => onDelete(item)}><Trash2 size={18} /></button>}
             </div>
           </article>
-        )) : <Empty text="暂无内容" />}
+          );
+        }) : <Empty text={emptyText} />}
       </div>
       {editing && onUpdate && (
         <EditDialog title={`编辑${titleLabel}`} icon={kind === "reward" ? <Gift /> : kind === "achievement" ? <Award /> : <ClipboardCheck />} onClose={() => setEditing(null)}>

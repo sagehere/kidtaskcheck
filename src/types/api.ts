@@ -126,6 +126,15 @@ export type AiServiceConfig = {
   updatedAt?: string;
 };
 export type ParentAiServiceConfig = AiServiceConfig;
+export type ReportContentSettings = {
+  checklist: { taskSets: boolean; tasks: boolean; rewards: boolean; feedback: boolean };
+  weekly: ReportGrowthSections;
+  monthly: ReportGrowthSections;
+};
+export type ReportGrowthSections = {
+  actionItems: boolean; aiCommentary: boolean; comparison: boolean; taskDetails: boolean; categorySummary: boolean; pointSources: boolean;
+  requiredTaskExceptions: boolean; ledgerDetails: boolean; rewards: boolean; feedback: boolean; achievements: boolean; scheduleTemplate: boolean;
+};
 export type CartoonReportResponse = { id?: string; childId?: string; period?: "weekly" | "monthly"; periodKey?: string; status?: "pending" | "processing" | "completed" | "failed"; retryCount?: number; lastError?: string; imageUrl?: string; format: string; filename: string; promptPreview?: string; createdAt?: string; updatedAt?: string; completedAt?: string };
 export type ChecklistImageResponse = Omit<CartoonReportResponse, "period" | "periodKey">;
 export type ScheduleImageResponse = Omit<CartoonReportResponse, "period" | "periodKey">;

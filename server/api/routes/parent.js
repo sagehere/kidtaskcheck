@@ -1,5 +1,5 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, normalizeTaskSubmissionDeadline, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards, ensureTaskSetSchema, listTaskSets, taskSetEligibleChildIds, taskSetHasOpenProgress, settleTaskSetIfReady } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards, ensureTaskSetSchema, listTaskSets, taskSetEligibleChildIds, taskSetHasOpenProgress, settleTaskSetIfReady, REPORT_CONTENT_SECTION_KEYS, getParentReportContentSettings, saveParentReportContentSettings } from "../utils.js";
 import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, collectReportComparison, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs, enqueueScheduleImageJob, loadScheduleImageJob, publicScheduleImageJob, processScheduleImageJobs } from "../ai/index.js";
 
 const PRINT_A4_STYLE = '@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933;line-height:1.5}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:24px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px;page-break-inside:auto}th,td{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}th{background:#f0f0f0}tr{break-inside:avoid}.print-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.print-task-card{border:1px solid #a7b0c0;border-radius:6px;padding:8px;background:#f8fafc;break-inside:avoid;page-break-inside:avoid}.print-task-card strong{display:block}.print-task-card small{display:block;color:#64748b}.print-plan{border:1px solid #cbd5e1;border-radius:6px;padding:8px;min-height:36px;background:#fff}.print-plan :first-child{margin-top:0}.print-plan :last-child{margin-bottom:0}.schedule-print-slot{break-inside:avoid;page-break-inside:avoid;margin-top:14px}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}.attention{background:#fff7ed;border-left:4px solid #f97316;padding:12px 16px;margin:18px 0}.ai-commentary{background:#f0f4ff;border-left:4px solid #6366f1;padding:16px 20px;margin:18px 0;border-radius:4px}.ai-commentary h2{margin:0 0 8px;border:none;padding:0}.ai-commentary p{margin:4px 0;line-height:1.8;white-space:pre-line}.ai-commentary .note{font-size:12px;color:#888;margin-top:8px}@media print{button{display:none}body{margin:0}.summary{grid-template-columns:repeat(3,1fr)}table,.print-task-card,.schedule-print-slot{break-inside:avoid;page-break-inside:avoid}}';
@@ -61,6 +61,31 @@ function taskRequiredRemedy(input, isRequired, requiredPenaltyPoints) {
     return { enabled: 1, condition, points, deadlineHours };
 }
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
+    if (path === "/parent/report-settings" && method === "GET") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        return ok(await getParentReportContentSettings(env, a.id));
+    }
+    if (path === "/parent/report-settings" && method === "PATCH") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const input = await body(request);
+        if (!input || typeof input !== "object" || Array.isArray(input))
+            return fail("BAD_REQUEST", "报表内容设置格式无效");
+        const current = await getParentReportContentSettings(env, a.id);
+        for (const [type, sections] of Object.entries(input)) {
+            if (!Object.prototype.hasOwnProperty.call(REPORT_CONTENT_SECTION_KEYS, type))
+                return fail("BAD_REQUEST", "报表类型无效");
+            if (!sections || typeof sections !== "object" || Array.isArray(sections))
+                return fail("BAD_REQUEST", "报表章节格式无效");
+            for (const [section, enabled] of Object.entries(sections)) {
+                if (!REPORT_CONTENT_SECTION_KEYS[type].includes(section))
+                    return fail("BAD_REQUEST", "报表章节无效");
+                if (typeof enabled !== "boolean")
+                    return fail("BAD_REQUEST", "报表章节开关必须为布尔值");
+                current[type][section] = enabled;
+            }
+        }
+        return ok(await saveParentReportContentSettings(env, a.id, current));
+    }
     if (path === "/parent/profile" && method === "PATCH") {
         const a = requireRole(actor, ["parent"]);
         const input = await body(request);
@@ -489,6 +514,7 @@ ON CONFLICT(parent_id) DO UPDATE SET base_url=excluded.base_url, api_key=exclude
             .first();
         if (!child)
             return fail("NOT_FOUND", "孩子账号不存在", 404);
+        const reportSections = await getParentReportContentSettings(env, a.id);
         const [tasks, rewards, feedbackTemplates] = await Promise.all([
             env.DB.prepare(`SELECT t.*, tc.name category_name FROM tasks t
 JOIN task_assignees ta ON ta.task_id=t.id
@@ -522,7 +548,13 @@ ORDER BY r.cost_points, r.created_at DESC`).bind(child.id, a.id).all(),
         const groupedTaskIds = new Set(taskSets.flatMap((set) => set.taskIds));
         const setRows = taskSets.map((set) => [set.title, set.members.map((member) => member.title).join("、"), `${set.minPoints}${set.maxPoints !== set.minPoints ? `-${set.maxPoints}` : ""}分`, set.description || ""]);
         const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} 打印清单</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} 当前规则清单</h1><p>仅展示当前启用内容；导出时间：${escapeHtml(localTimeText(nowIso(), await timezoneOffsetMinutes(env)))}</p>${setRows.length ? `<h2>任务集</h2>${table(["任务集","子任务","每轮积分","说明"], setRows)}` : ""}<h2>任务目标</h2>${table(["任务","分类","规则与积分","可做星期","说明"], tasks.results.filter((item) => !groupedTaskIds.has(item.id)).map((item) => [item.title, item.category_name || "未分类", taskRule(item), weekdaysText(item.enabled_weekdays), item.description || ""]))}<h2>可兑换奖励</h2>${table(["奖励","所需积分","兑换规则","可兑换星期","说明"], rewards.results.map((item) => [item.title, item.cost_points, rewardRule(item), weekdaysText(item.redeem_weekdays), item.description || ""]))}<h2>行为约定</h2>${table(["类型","条款","积分","补救规则","说明"], feedbackTemplates.results.map((item) => [item.kind === "praise" ? "表扬" : "批评", item.title, `${item.kind === "praise" ? "+" : "-"}${Math.abs(Number(item.points || 0))}`, item.kind === "criticism" && item.is_remediable ? `${item.remedy_condition || "按要求补救"}；可挽回${item.remedy_points || 0}分；限时${item.remedy_deadline_hours || 24}小时` : "无", item.description || ""]))}</body></html>`;
-        return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+        const visibleHtml = [
+            [reportSections.checklist.taskSets, /<h2>任务集<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.checklist.tasks, /<h2>任务目标<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.checklist.rewards, /<h2>可兑换奖励<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.checklist.feedback, /<h2>行为约定<\/h2><table>[\s\S]*?<\/table>/]
+        ].reduce((output, [included, pattern]) => included ? output : output.replace(pattern, ""), html);
+        return new Response(visibleHtml, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     const childPrintImage = path.match(/^\/children\/([^/]+)\/print-checklist-image$/);
     if (childPrintImage && method === "POST") {
@@ -654,6 +686,7 @@ ORDER BY tc.name, t.created_at DESC`).bind(child.id, a.id).all()).results
             return fail("NOT_FOUND", "孩子账号不存在", 404);
         const offset = await timezoneOffsetMinutes(env);
         const period = url.searchParams.get("period") === "monthly" ? "monthly" : "weekly";
+        const reportSections = (await getParentReportContentSettings(env, a.id))[period];
         const anchor = url.searchParams.get("anchor");
         const range = anchor ? reportWindowRange(period, anchor, offset) : previousCompletedReportRange(period, nowIso(), offset);
         const periodKey = range.label;
@@ -720,7 +753,21 @@ WHERE csi.child_id=? ORDER BY csi.sort_order, csi.created_at`).bind(child.id).al
             ["解锁成就", summary.achievementCount, previousSummary.achievementCount, deltaText(summary.achievementCount, previousSummary.achievementCount)],
         ];
         const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(child.display_name)} ${reportTitle}</title><style>${PRINT_A4_STYLE}</style></head><body><button onclick="window.print()">打印</button><h1>${escapeHtml(child.display_name)} ${reportTitle}</h1><p>周期：${escapeHtml(reportDateText(range.start, offset))} 至 ${escapeHtml(reportDateText(inclusiveEnd, offset))}；生成时间：${escapeHtml(localTimeText(nowIso(), offset))}</p><div class="summary"><div><span>当前积分</span><strong>${reportData.currentBalance}</strong></div><div><span>本期净积分</span><strong>${signedText(summary.netPoints)}</strong></div><div><span>已审核通过率</span><strong>${rateText(summary.approvalRate)}</strong></div><div><span>待审核</span><strong>${summary.pending}</strong></div><div><span>任务通过</span><strong>${summary.approved}</strong></div><div><span>成就解锁</span><strong>${summary.achievementCount}</strong></div></div>${actionSection}${commentarySection}<h2>与上一周期对比</h2>${tableHtml(["指标","本期","上期","变化"], comparisonRows)}<h2>任务明细</h2>${tableHtml(["任务","分类","状态","实际积分","审核意见","提交时间"], tasks.map((item) => [item.title, item.category_name || "未分类", TASK_STATUS_LABELS[item.status] || item.status, item.status === "approved" ? signedText(item.awardedPoints) : "—", item.review_note || item.awardNote || "", localTimeText(item.submitted_at, offset)]))}<h2>分类完成</h2>${tableHtml(["分类","通过次数"], reportData.categoryCounts)}<h2>积分来源</h2>${tableHtml(["来源","记录数","积分变化"], pointBreakdown.map((item) => [item.label, item.count, signedText(item.points)]))}${requiredEvents.length ? `<h2>必做任务异常</h2>${tableHtml(["任务","周期","实际/要求","结果"], requiredEvents.map((item) => [item.title, item.period_key, `${item.actual_count}/${item.required_count}`, requiredStatus(item)]))}` : ""}<h2>积分明细</h2>${tableHtml(["来源","内容","积分变化","时间"], ledger.map((item) => [item.sourceTypeLabel, item.sourceLabel, item.frozen_amount ? `冻结${item.frozen_amount}（账面${signedText(item.amount)}）` : signedText(item.amount), item.localCreatedAt]))}<h2>奖励记录</h2>${tableHtml(["奖励","状态","积分影响","申请时间"], rewards.map((item) => [item.title, REWARD_STATUS_LABELS[item.status] || item.status, signedText(rewardImpact(item)), localTimeText(item.requested_at, offset)]))}<h2>表扬与批评</h2>${tableHtml(["类型","条款","积分影响","状态","时间"], feedback.map((item) => [item.source_type === "praise" ? "表扬" : "批评", item.sourceLabel || item.note || "", item.frozen_amount ? `冻结${item.frozen_amount}` : signedText(item.amount), item.freeze_status === "frozen" ? "待补救" : item.freeze_status === "remedied" ? "已补救" : item.freeze_status === "settled" ? "已结算" : "已生效", item.localCreatedAt]))}<h2>成就解锁</h2>${tableHtml(["成就","解锁时间"], achievements.map((item) => [item.title, localTimeText(item.unlocked_at, offset)]))}${scheduleSection}</body></html>`;
-        return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+        const visibleReportHtml = [
+            [reportSections.actionItems, /<div class="attention">[\s\S]*?<\/div>/],
+            [reportSections.aiCommentary, /<div class="ai-commentary">[\s\S]*?<\/div>/],
+            [reportSections.comparison, /<h2>与上一周期对比<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.taskDetails, /<h2>任务明细<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.categorySummary, /<h2>分类完成<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.pointSources, /<h2>积分来源<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.requiredTaskExceptions, /<h2>必做任务异常<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.ledgerDetails, /<h2>积分明细<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.rewards, /<h2>奖励记录<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.feedback, /<h2>表扬与批评<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.achievements, /<h2>成就解锁<\/h2><table>[\s\S]*?<\/table>/],
+            [reportSections.scheduleTemplate, /<h2>当前日程模板（参考）<\/h2>[\s\S]*?(?=<\/body>)/]
+        ].reduce((output, [included, pattern]) => included ? output : output.replace(pattern, ""), html);
+        return new Response(visibleReportHtml, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     const childWarehouse = path.match(/^\/children\/([^/]+)\/warehouse$/);
     if (childWarehouse && method === "GET") {

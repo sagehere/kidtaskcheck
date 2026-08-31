@@ -221,8 +221,56 @@ export async function ensureSystemSettings(env) {
 )`).run();
     await ensureParentDelegatesSchema(env);
     await ensureOperatorAuditSchema(env);
-    await ensureParentAiServiceSettings(env);
+   await ensureParentAiServiceSettings(env);
+    await ensureParentReportSettings(env);
     await ensureCriticismRemedySchema(env);
+}
+export const REPORT_CONTENT_SECTION_KEYS = {
+    checklist: ["taskSets", "tasks", "rewards", "feedback"],
+    weekly: ["actionItems", "aiCommentary", "comparison", "taskDetails", "categorySummary", "pointSources", "requiredTaskExceptions", "ledgerDetails", "rewards", "feedback", "achievements", "scheduleTemplate"],
+    monthly: ["actionItems", "aiCommentary", "comparison", "taskDetails", "categorySummary", "pointSources", "requiredTaskExceptions", "ledgerDetails", "rewards", "feedback", "achievements", "scheduleTemplate"]
+};
+export function defaultReportContentSettings() {
+    return Object.fromEntries(Object.entries(REPORT_CONTENT_SECTION_KEYS).map(([type, sections]) => [type, Object.fromEntries(sections.map((section) => [section, true]))]));
+}
+export function normalizeReportContentSettings(input) {
+    const settings = defaultReportContentSettings();
+    if (!input || typeof input !== "object" || Array.isArray(input)) return settings;
+    for (const [type, sections] of Object.entries(REPORT_CONTENT_SECTION_KEYS)) {
+        const source = input[type];
+        if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+        for (const section of sections) {
+            if (typeof source[section] === "boolean") settings[type][section] = source[section];
+        }
+    }
+    return settings;
+}
+async function ensureParentReportSettingsNow(env) {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS parent_report_settings (
+  parent_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  settings_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`).run();
+}
+export function ensureParentReportSettings(env) {
+    return oncePerDb(env, "parent-report-settings", () => ensureParentReportSettingsNow(env));
+}
+export async function getParentReportContentSettings(env, parentId) {
+    await ensureParentReportSettings(env);
+    const row = await env.DB.prepare('SELECT settings_json FROM parent_report_settings WHERE parent_id=?').bind(parentId).first();
+    try {
+        return normalizeReportContentSettings(JSON.parse(row?.settings_json || '{}'));
+    } catch {
+        return defaultReportContentSettings();
+    }
+}
+export async function saveParentReportContentSettings(env, parentId, settings) {
+    await ensureParentReportSettings(env);
+    const normalized = normalizeReportContentSettings(settings);
+    await env.DB.prepare('INSERT INTO parent_report_settings (parent_id, settings_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(parent_id) DO UPDATE SET settings_json=excluded.settings_json, updated_at=excluded.updated_at')
+        .bind(parentId, JSON.stringify(normalized), nowIso())
+        .run();
+    return normalized;
 }
 async function ensureParentAiServiceSettingsNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS parent_ai_service_settings (

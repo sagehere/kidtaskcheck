@@ -1,4 +1,4 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, nextPeriodReset, normalizeTaskSubmissionDeadline, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints } from "../../src/lib/domain.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, consecutiveDayStreak, consecutiveSameTaskStreak, daysWithoutEvents, inAchievementWindow, isWeekdayAllowed, localDateKey, nextPeriodReset, normalizeTaskSubmissionDeadline, normalizeWeekdays, periodKey, prerequisitePeriodKey, reportWindowRange, signedPoints, weekdayInTimezone } from "../../src/lib/domain.js";
 export const json = (data, init) => new Response(JSON.stringify(data), {
     ...init,
     headers: { "content-type": "application/json; charset=utf-8", ...(init?.headers || {}) }
@@ -676,11 +676,71 @@ export async function ensureTaskSetSchema(env) {
 )`).run();
         await ensureColumn(env, "task_submissions", "task_set_id", "task_set_id TEXT REFERENCES task_sets(id)");
         await ensureColumn(env, "task_submissions", "approved_points", "approved_points INTEGER");
+        await ensureColumn(env, "task_sets", "settlement_mode", "settlement_mode TEXT NOT NULL DEFAULT 'round'");
+        await ensureColumn(env, "task_sets", "window_start", "window_start TEXT");
+        await ensureColumn(env, "task_sets", "window_end", "window_end TEXT");
+        await ensureColumn(env, "task_sets", "window_weekdays", "window_weekdays TEXT NOT NULL DEFAULT '[0,1,2,3,4,5,6]'");
+        await ensureColumn(env, "task_set_settlements", "status", "status TEXT NOT NULL DEFAULT 'settled'");
+        await ensureColumn(env, "task_set_settlements", "resolved_at", "resolved_at TEXT");
+        await ensureColumn(env, "task_set_settlements", "resolved_by_type", "resolved_by_type TEXT");
+        await ensureColumn(env, "task_set_settlements", "resolved_by_id", "resolved_by_id TEXT");
+        await ensureColumn(env, "task_set_settlements", "resolved_by_label", "resolved_by_label TEXT");
         await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_sets_parent ON task_sets(parent_id, is_active, deleted_at, created_at)").run();
         await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_set_members_set ON task_set_members(task_set_id, sort_order)").run();
         await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_set_items_submission ON task_set_settlement_items(submission_id)").run();
         await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_submissions_task_set_progress ON task_submissions(task_set_id, child_id, status, submitted_at)").run();
+        await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_task_set_settlements_status ON task_set_settlements(task_set_id, child_id, status)").run();
     });
+}
+
+function taskSetMode(taskSet) {
+    return taskSet?.settlement_mode === "window" ? "window" : "round";
+}
+function parseDateKey(value) {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const [year, month, day] = match.slice(1).map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? { year, month, day } : null;
+}
+function dateAtTimezoneDay(parts, timezoneOffsetMinutes) {
+    return new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12) - timezoneOffsetMinutes * 60000).toISOString();
+}
+function taskSetWindow(taskSet) {
+    const start = parseDateKey(taskSet?.window_start);
+    const end = parseDateKey(taskSet?.window_end);
+    const weekdays = normalizeWeekdays(taskSet?.window_weekdays);
+    return start && end && taskSet.window_start <= taskSet.window_end && weekdays.length ? { start, end, weekdays } : null;
+}
+function taskSetWindowDateAllowed(taskSet, at, timezoneOffsetMinutes) {
+    const window = taskSetWindow(taskSet);
+    if (!window) return false;
+    const key = localDateKey(at, timezoneOffsetMinutes);
+    return key >= taskSet.window_start && key <= taskSet.window_end && window.weekdays.includes(weekdayInTimezone(at, timezoneOffsetMinutes));
+}
+function taskSetWindowRequirements(taskSet, members, timezoneOffsetMinutes) {
+    const window = taskSetWindow(taskSet);
+    if (!window) return [];
+    const requirements = [];
+    const cursor = new Date(Date.UTC(window.start.year, window.start.month - 1, window.start.day));
+    const end = Date.UTC(window.end.year, window.end.month - 1, window.end.day);
+    for (; cursor.getTime() <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+        const weekday = cursor.getUTCDay();
+        if (!window.weekdays.includes(weekday)) continue;
+        const at = dateAtTimezoneDay({ year: cursor.getUTCFullYear(), month: cursor.getUTCMonth() + 1, day: cursor.getUTCDate() }, timezoneOffsetMinutes);
+        for (const member of members) {
+            if (!normalizeWeekdays(member.enabled_weekdays).includes(weekday)) continue;
+            const periodKeyValue = periodKey(member.period, at, timezoneOffsetMinutes);
+            const key = `${member.task_id}:${periodKeyValue}`;
+            if (requirements.some((item) => item.key === key)) continue;
+            requirements.push({ key, taskId: member.task_id, periodKey: periodKeyValue, requiredCount: Number(member.is_required) ? Math.max(1, Number(member.required_count || 1)) : 1 });
+        }
+    }
+    return requirements;
+}
+async function taskSetMembers(env, taskSetId) {
+    return (await env.DB.prepare(`SELECT m.task_set_id, m.task_id, m.sort_order, t.title, t.points, t.period, t.enabled_weekdays, t.is_required, t.required_count, t.grading_mode, t.completion_standards_json
+FROM task_set_members m JOIN tasks t ON t.id=m.task_id WHERE m.task_set_id=? ORDER BY m.sort_order`).bind(taskSetId).all()).results;
 }
 export async function taskSetEligibleChildIds(env, parentId, taskIds) {
     if (!taskIds.length) return [];
@@ -694,21 +754,39 @@ WHERE t.parent_id=? AND t.id IN (${placeholders}) AND t.is_active=1 AND t.delete
 GROUP BY ta.child_id HAVING COUNT(DISTINCT ta.task_id)=?`).bind(parentId, ...taskIds, parentId, taskIds.length).all()).results;
     return rows.map((row) => row.child_id);
 }
-export async function taskSetForSubmission(env, parentId, childId, taskId) {
+export async function taskSetForSubmission(env, parentId, childId, taskId, at = nowIso()) {
     await ensureTaskSetSchema(env);
-    const set = await env.DB.prepare(`SELECT ts.id, ts.title FROM task_sets ts
+    const set = await env.DB.prepare(`SELECT ts.* FROM task_sets ts
 JOIN task_set_members m ON m.task_set_id=ts.id AND m.task_id=?
 WHERE ts.parent_id=? AND ts.is_active=1 AND ts.deleted_at IS NULL`).bind(taskId, parentId).first();
     if (!set) return null;
+    if (taskSetMode(set) === "window" && !taskSetWindowDateAllowed(set, at, await timezoneOffsetMinutes(env))) return null;
     const eligible = await taskSetEligibleChildIds(env, parentId, (await env.DB.prepare("SELECT task_id FROM task_set_members WHERE task_set_id=? ORDER BY sort_order").bind(set.id).all()).results.map((row) => row.task_id));
     return eligible.includes(childId) ? set : null;
 }
 export async function taskSetHasOpenProgress(env, taskSetId) {
     await ensureTaskSetSchema(env);
-    return !!(await env.DB.prepare(`SELECT 1 FROM task_submissions s
+    const [submission, decision] = await Promise.all([
+        env.DB.prepare(`SELECT 1 FROM task_submissions s
 WHERE s.task_set_id=? AND (s.status='pending' OR (s.status='approved' AND NOT EXISTS (
   SELECT 1 FROM task_set_settlement_items i WHERE i.submission_id=s.id
-))) LIMIT 1`).bind(taskSetId).first());
+))) LIMIT 1`).bind(taskSetId).first(),
+        env.DB.prepare("SELECT 1 FROM task_set_settlements WHERE task_set_id=? AND status='awaiting_decision' LIMIT 1").bind(taskSetId).first()
+    ]);
+    return !!(submission || decision);
+}
+export async function taskSetWindowLocked(env, taskSetId, at = nowIso()) {
+    await ensureTaskSetSchema(env);
+    const taskSet = await env.DB.prepare("SELECT * FROM task_sets WHERE id=? AND deleted_at IS NULL").bind(taskSetId).first();
+    if (!taskSet || taskSetMode(taskSet) !== "window" || !taskSet.window_start) return false;
+    const offset = await timezoneOffsetMinutes(env);
+    if (localDateKey(at, offset) < taskSet.window_start) return false;
+    const members = await taskSetMembers(env, taskSetId);
+    const childIds = await taskSetEligibleChildIds(env, taskSet.parent_id, members.map((member) => member.task_id));
+    if (!childIds.length) return false;
+    const terminal = (await env.DB.prepare(`SELECT COUNT(*) v FROM task_set_settlements
+WHERE task_set_id=? AND child_id IN (${childIds.map(() => "?").join(",")}) AND status IN ('settled','released','forfeited')`).bind(taskSetId, ...childIds).first())?.v || 0;
+    return Number(terminal) < childIds.length;
 }
 export async function listTaskSets(env, parentId) {
     await ensureTaskSetSchema(env);
@@ -716,7 +794,7 @@ export async function listTaskSets(env, parentId) {
     if (!sets.length) return [];
     const ids = sets.map((row) => row.id);
     const placeholders = ids.map(() => "?").join(",");
-    const members = (await env.DB.prepare(`SELECT m.task_set_id, m.task_id, m.sort_order, t.title, t.points, t.grading_mode, t.completion_standards_json
+    const members = (await env.DB.prepare(`SELECT m.task_set_id, m.task_id, m.sort_order, t.title, t.points, t.period, t.enabled_weekdays, t.is_required, t.required_count, t.grading_mode, t.completion_standards_json
 FROM task_set_members m JOIN tasks t ON t.id=m.task_id
 WHERE m.task_set_id IN (${placeholders}) ORDER BY m.task_set_id, m.sort_order`).bind(...ids).all()).results;
     const bySet = new Map();
@@ -732,10 +810,28 @@ WHERE m.task_set_id IN (${placeholders}) ORDER BY m.task_set_id, m.sort_order`).
             const points = standards.length ? standards.map((item) => item.points) : [Number(row.points || 0)];
             return { ...row, minPoints: Math.min(...points), maxPoints: Math.max(...points) };
         });
-        return { ...set, members: possible, taskIds: rows.map((row) => row.task_id), eligibleChildIds: await taskSetEligibleChildIds(env, parentId, rows.map((row) => row.task_id)), minPoints: possible.reduce((sum, row) => sum + row.minPoints, 0), maxPoints: possible.reduce((sum, row) => sum + row.maxPoints, 0) };
+        return { ...set, settlementMode: taskSetMode(set), windowStart: set.window_start || null, windowEnd: set.window_end || null, windowWeekdays: normalizeWeekdays(set.window_weekdays), members: possible, taskIds: rows.map((row) => row.task_id), eligibleChildIds: await taskSetEligibleChildIds(env, parentId, rows.map((row) => row.task_id)), minPoints: possible.reduce((sum, row) => sum + row.minPoints, 0), maxPoints: possible.reduce((sum, row) => sum + row.maxPoints, 0) };
     }));
 }
+async function taskSetWindowProgress(env, taskSet, childId) {
+    const offset = await timezoneOffsetMinutes(env);
+    const members = await taskSetMembers(env, taskSet.id);
+    const requirements = taskSetWindowRequirements(taskSet, members, offset);
+    const [approvedRows, pendingRow, settlement] = await Promise.all([
+        env.DB.prepare("SELECT task_id, period_key, approved_points FROM task_submissions WHERE task_set_id=? AND child_id=? AND status='approved'").bind(taskSet.id, childId).all(),
+        env.DB.prepare("SELECT COUNT(*) v FROM task_submissions WHERE task_set_id=? AND child_id=? AND status='pending'").bind(taskSet.id, childId).first(),
+        env.DB.prepare("SELECT * FROM task_set_settlements WHERE task_set_id=? AND child_id=? ORDER BY created_at DESC LIMIT 1").bind(taskSet.id, childId).first()
+    ]);
+    const counts = new Map();
+    for (const row of approvedRows.results) counts.set(`${row.task_id}:${row.period_key}`, (counts.get(`${row.task_id}:${row.period_key}`) || 0) + 1);
+    const completed = requirements.filter((item) => (counts.get(item.key) || 0) >= item.requiredCount).length;
+    const today = localDateKey(undefined, offset);
+    const status = settlement?.status || (today < taskSet.window_start ? "upcoming" : Number(pendingRow?.v || 0) ? "waiting_review" : "active");
+    return { mode: "window", status, completed, total: requirements.length, pending: Number(pendingRow?.v || 0), settledRounds: settlement?.status === "settled" ? 1 : 0, windowStart: taskSet.window_start, windowEnd: taskSet.window_end, windowWeekdays: normalizeWeekdays(taskSet.window_weekdays) };
+}
 export async function taskSetProgress(env, taskSetId, childId) {
+    const taskSet = await env.DB.prepare("SELECT * FROM task_sets WHERE id=? AND deleted_at IS NULL").bind(taskSetId).first();
+    if (taskSetMode(taskSet) === "window") return taskSetWindowProgress(env, taskSet, childId);
     const members = (await env.DB.prepare("SELECT task_id FROM task_set_members WHERE task_set_id=? ORDER BY sort_order").bind(taskSetId).all()).results;
     if (!members.length) return { approved: 0, pending: 0, total: 0, settledRounds: 0 };
     const taskIds = members.map((row) => row.task_id);
@@ -753,6 +849,7 @@ GROUP BY s.task_id`).bind(taskSetId, childId, ...taskIds).all(),
 export async function settleTaskSetIfReady(env, submission, audit) {
     const taskSet = await env.DB.prepare("SELECT * FROM task_sets WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(submission.task_set_id, submission.parent_id).first();
     if (!taskSet) return { settled: false, taskSet: null, progress: { approved: 0, pending: 0, total: 0, settledRounds: 0 } };
+    if (taskSetMode(taskSet) === "window") return { settled: false, taskSet, progress: await taskSetProgress(env, taskSet.id, submission.child_id) };
     const members = (await env.DB.prepare("SELECT m.task_id, t.title FROM task_set_members m JOIN tasks t ON t.id=m.task_id WHERE m.task_set_id=? ORDER BY m.sort_order").bind(taskSet.id).all()).results;
     const selected = [];
     for (const member of members) {
@@ -776,6 +873,85 @@ ORDER BY s.reviewed_at, s.submitted_at, s.id LIMIT 1`).bind(taskSet.id, submissi
     await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'task_set', ?, NULL, ?, ?, ?, ?)")
         .bind(id(), submission.child_id, submission.parent_id, totalPoints, settlementId, `任务集结算：${taskSet.title}（${detail}）`, audit.type, audit.id, audit.label).run();
     return { settled: true, taskSet, settlementId, totalPoints, progress: await taskSetProgress(env, taskSet.id, submission.child_id) };
+}
+export async function settleTaskSetWindows(env, at = nowIso()) {
+    await ensureTaskSetSchema(env);
+    const offset = await timezoneOffsetMinutes(env);
+    const sets = (await env.DB.prepare("SELECT * FROM task_sets WHERE settlement_mode='window' AND is_active=1 AND deleted_at IS NULL AND window_end IS NOT NULL").all()).results;
+    const result = { settled: 0, awaitingDecision: 0, waitingReview: 0 };
+    for (const taskSet of sets) {
+        if (localDateKey(at, offset) <= taskSet.window_end) continue;
+        const members = await taskSetMembers(env, taskSet.id);
+        const childIds = await taskSetEligibleChildIds(env, taskSet.parent_id, members.map((member) => member.task_id));
+        const requirements = taskSetWindowRequirements(taskSet, members, offset);
+        for (const childId of childIds) {
+            const existing = await env.DB.prepare("SELECT id FROM task_set_settlements WHERE task_set_id=? AND child_id=? LIMIT 1").bind(taskSet.id, childId).first();
+            if (existing) continue;
+            const pending = await env.DB.prepare("SELECT 1 FROM task_submissions WHERE task_set_id=? AND child_id=? AND status='pending' LIMIT 1").bind(taskSet.id, childId).first();
+            if (pending) { result.waitingReview += 1; continue; }
+            const approved = (await env.DB.prepare("SELECT s.id, s.task_id, s.approved_points, s.period_key, t.title FROM task_submissions s JOIN tasks t ON t.id=s.task_id WHERE s.task_set_id=? AND s.child_id=? AND s.status='approved' ORDER BY s.reviewed_at, s.submitted_at, s.id").bind(taskSet.id, childId).all()).results;
+            const counts = new Map();
+            for (const row of approved) counts.set(`${row.task_id}:${row.period_key}`, (counts.get(`${row.task_id}:${row.period_key}`) || 0) + 1);
+            const successful = requirements.length > 0 && requirements.every((item) => (counts.get(item.key) || 0) >= item.requiredCount);
+            const settlementId = id();
+            const totalPoints = approved.reduce((sum, row) => sum + Number(row.approved_points || 0), 0);
+            let created = false;
+            await env.DB.transaction(async () => {
+                const inserted = await env.DB.prepare("INSERT OR IGNORE INTO task_set_settlements (id, task_set_id, child_id, parent_id, round_number, total_points, status, created_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?)")
+                    .bind(settlementId, taskSet.id, childId, taskSet.parent_id, successful ? totalPoints : 0, successful ? "settled" : "awaiting_decision", at).run();
+                if (!(inserted.meta?.changes || 0)) return;
+                created = true;
+                if (!successful) return;
+                for (const row of approved)
+                    await env.DB.prepare("INSERT INTO task_set_settlement_items (settlement_id, submission_id, task_id, approved_points) VALUES (?, ?, ?, ?)").bind(settlementId, row.id, row.task_id, Number(row.approved_points || 0)).run();
+                const detail = approved.map((row) => `${row.title} ${Number(row.approved_points || 0)}分`).join("、");
+                await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'task_set', ?, NULL, ?, 'system', '', '系统')")
+                    .bind(id(), childId, taskSet.parent_id, totalPoints, settlementId, `任务集结算：${taskSet.title}（${detail}）`).run();
+            });
+            if (!created) continue;
+            if (successful) {
+                result.settled += 1;
+                await recalcAchievements(env, taskSet.parent_id, childId);
+                await notify(env, { recipientType: "child", recipientId: childId, actorType: "system", actorId: null, title: "任务集已完成", body: `任务集「${taskSet.title}」已完成，获得 ${totalPoints} 积分。`, eventType: "task_set_completed", relatedType: "task_set_settlement", relatedId: settlementId, createdAt: at });
+            } else {
+                result.awaitingDecision += 1;
+                await notify(env, { recipientType: "user", recipientId: taskSet.parent_id, actorType: "system", actorId: null, title: "任务集未达成", body: `任务集「${taskSet.title}」有待决定的积分处理。`, eventType: "task_set_decision", relatedType: "task_set_settlement", relatedId: settlementId, createdAt: at });
+            }
+        }
+    }
+    return result;
+}
+export async function pendingTaskSetDecisions(env, parentId) {
+    await ensureTaskSetSchema(env);
+    return (await env.DB.prepare(`SELECT ss.id, ss.task_set_id, ss.child_id, ts.title task_set_title, c.display_name child_name,
+  COALESCE((SELECT SUM(s.approved_points) FROM task_submissions s WHERE s.task_set_id=ss.task_set_id AND s.child_id=ss.child_id AND s.status='approved' AND NOT EXISTS (SELECT 1 FROM task_set_settlement_items i WHERE i.submission_id=s.id)), 0) potential_points
+FROM task_set_settlements ss JOIN task_sets ts ON ts.id=ss.task_set_id JOIN children c ON c.id=ss.child_id
+WHERE ss.parent_id=? AND ss.status='awaiting_decision' ORDER BY ss.created_at`).bind(parentId).all()).results;
+}
+export async function resolveTaskSetSettlement(env, parentId, settlementId, action, audit) {
+    await ensureTaskSetSchema(env);
+    if (!["release", "forfeit"].includes(action)) throw fail("BAD_REQUEST", "任务集处理方式无效");
+    const settlement = await env.DB.prepare("SELECT ss.*, ts.title task_set_title FROM task_set_settlements ss JOIN task_sets ts ON ts.id=ss.task_set_id WHERE ss.id=? AND ss.parent_id=?").bind(settlementId, parentId).first();
+    if (!settlement) throw fail("NOT_FOUND", "待处理任务集不存在", 404);
+    if (settlement.status !== "awaiting_decision") throw fail("TASK_SET_ALREADY_RESOLVED", "该任务集已处理", 409);
+    const submissions = (await env.DB.prepare(`SELECT s.*, t.title, t.point_type FROM task_submissions s JOIN tasks t ON t.id=s.task_id
+WHERE s.task_set_id=? AND s.child_id=? AND s.status='approved' AND NOT EXISTS (SELECT 1 FROM task_set_settlement_items i WHERE i.submission_id=s.id)
+ORDER BY s.reviewed_at, s.submitted_at, s.id`).bind(settlement.task_set_id, settlement.child_id).all()).results;
+    const totalPoints = submissions.reduce((sum, row) => sum + Number(row.approved_points || 0), 0);
+    await env.DB.transaction(async () => {
+        const current = await env.DB.prepare("SELECT status FROM task_set_settlements WHERE id=?").bind(settlementId).first();
+        if (current?.status !== "awaiting_decision") throw fail("TASK_SET_ALREADY_RESOLVED", "该任务集已处理", 409);
+        for (const row of submissions) {
+            await env.DB.prepare("INSERT INTO task_set_settlement_items (settlement_id, submission_id, task_id, approved_points) VALUES (?, ?, ?, ?)").bind(settlementId, row.id, row.task_id, Number(row.approved_points || 0)).run();
+            if (action === "release") await env.DB.prepare("INSERT INTO point_ledger (id, child_id, parent_id, amount, source_type, source_id, period_key, note, actor_type, actor_id, actor_label_snapshot) VALUES (?, ?, ?, ?, 'task', ?, ?, '任务集未达成，补发积分', ?, ?, ?)")
+                .bind(id(), row.child_id, parentId, signedPoints(row.point_type, row.approved_points), row.id, row.period_key, audit.type, audit.id, audit.label).run();
+        }
+        await env.DB.prepare("UPDATE task_set_settlements SET status=?, total_points=?, resolved_at=?, resolved_by_type=?, resolved_by_id=?, resolved_by_label=? WHERE id=?")
+            .bind(action === "release" ? "released" : "forfeited", action === "release" ? totalPoints : 0, nowIso(), audit.type, audit.id, audit.label, settlementId).run();
+    });
+    if (action === "release") await recalcAchievements(env, parentId, settlement.child_id);
+    await notify(env, { recipientType: "child", recipientId: settlement.child_id, actorType: audit.type, actorId: audit.id || parentId, actorLabel: audit.label, title: action === "release" ? "任务积分已补发" : "任务集积分已作废", body: action === "release" ? `任务集「${settlement.task_set_title}」未达成，已补发 ${totalPoints} 积分。` : `任务集「${settlement.task_set_title}」未达成，积分已作废。`, eventType: "task_set_decision", relatedType: "task_set_settlement", relatedId: settlementId });
+    return { action, totalPoints };
 }
 async function ensureChildScheduleSchemaNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_schedule_slots (
@@ -2210,10 +2386,15 @@ WHERE ts.parent_id=? AND ts.deleted_at IS NULL AND (s.status='pending' OR (s.sta
         }
         for (const item of snapshot.taskSets || []) {
             const taskIds = (item.taskIds || []).map((taskId) => taskMap.get(taskId)).filter(Boolean);
-            if (taskIds.length < 2 || !(await taskSetEligibleChildIds(env, parentId, taskIds)).length) continue;
+            const settlementMode = item.settlementMode === "window" || item.settlement_mode === "window" ? "window" : "round";
+            const windowStart = item.windowStart || item.window_start || null;
+            const windowEnd = item.windowEnd || item.window_end || null;
+            const windowWeekdays = normalizeWeekdays(item.windowWeekdays || item.window_weekdays);
+            const tomorrow = localDateKey(new Date(Date.now() + DAY_MS), await timezoneOffsetMinutes(env));
+            if (taskIds.length < (settlementMode === "window" ? 1 : 2) || (settlementMode === "window" && (!windowStart || !windowEnd || windowStart > windowEnd || windowStart < tomorrow)) || !(await taskSetEligibleChildIds(env, parentId, taskIds)).length) continue;
             const taskSetId = id();
-            await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, 'emoji', ?, ?)")
-                .bind(taskSetId, parentId, String(item.title || "未命名任务集").trim() || "未命名任务集", item.description || "", item.icon_value || item.iconValue || "🧩", Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1).run();
+            await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active, settlement_mode, window_start, window_end, window_weekdays) VALUES (?, ?, ?, ?, 'emoji', ?, ?, ?, ?, ?, ?)")
+                .bind(taskSetId, parentId, String(item.title || "未命名任务集").trim() || "未命名任务集", item.description || "", item.icon_value || item.iconValue || "🧩", Number(item.is_active ?? item.isActive ?? 1) === 0 ? 0 : 1, settlementMode, windowStart, windowEnd, JSON.stringify(windowWeekdays)).run();
             for (let index = 0; index < taskIds.length; index++)
                 await env.DB.prepare("INSERT INTO task_set_members (task_set_id, task_id, sort_order) VALUES (?, ?, ?)").bind(taskSetId, taskIds[index], index).run();
             stats.taskSets += 1;
@@ -2352,12 +2533,17 @@ export async function importConfig(env, parentId, input) {
         const title = String(item.title || "").trim();
         const exists = title ? await env.DB.prepare("SELECT 1 FROM task_sets WHERE parent_id=? AND title=? AND deleted_at IS NULL").bind(parentId, title).first() : true;
         const taskIds = (item.members || []).map((member) => taskMapByKey.get(`${member.title}:${member.period || "daily"}`) || taskMap.get(member.title)).filter(Boolean);
-        if (exists || taskIds.length < 2 || new Set(taskIds).size !== taskIds.length) { stats.taskSets.skipped += 1; continue; }
+        const settlementMode = item.settlementMode === "window" || item.settlement_mode === "window" ? "window" : "round";
+        const windowStart = item.windowStart || item.window_start || null;
+        const windowEnd = item.windowEnd || item.window_end || null;
+        const windowWeekdays = normalizeWeekdays(item.windowWeekdays || item.window_weekdays);
+        const tomorrow = localDateKey(new Date(Date.now() + DAY_MS), await timezoneOffsetMinutes(env));
+        if (exists || taskIds.length < (settlementMode === "window" ? 1 : 2) || new Set(taskIds).size !== taskIds.length || (settlementMode === "window" && (!windowStart || !windowEnd || windowStart > windowEnd || windowStart < tomorrow))) { stats.taskSets.skipped += 1; continue; }
         const occupied = await env.DB.prepare(`SELECT 1 FROM task_set_members WHERE task_id IN (${taskIds.map(() => "?").join(",")}) LIMIT 1`).bind(...taskIds).first();
         if (occupied) { stats.taskSets.skipped += 1; continue; }
         const taskSetId = id();
-        await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, 'emoji', ?, 0)")
-            .bind(taskSetId, parentId, title, item.description || "", item.icon_value || item.iconValue || "🧩").run();
+        await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active, settlement_mode, window_start, window_end, window_weekdays) VALUES (?, ?, ?, ?, 'emoji', ?, 0, ?, ?, ?, ?)")
+            .bind(taskSetId, parentId, title, item.description || "", item.icon_value || item.iconValue || "🧩", settlementMode, windowStart, windowEnd, JSON.stringify(windowWeekdays)).run();
         for (let index = 0; index < taskIds.length; index++)
             await env.DB.prepare("INSERT INTO task_set_members (task_set_id, task_id, sort_order) VALUES (?, ?, ?)").bind(taskSetId, taskIds[index], index).run();
         stats.taskSets.created += 1;
@@ -2797,3 +2983,4 @@ export function isPrivateUrl(urlString) {
         return true;
     }
 }
+import { localDateKey, weekdayInTimezone } from "../../src/lib/domain.js";

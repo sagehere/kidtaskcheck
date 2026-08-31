@@ -395,6 +395,11 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
       "任务已通过，积分将按适用规则结算"
     );
   }
+  async function resolveTaskSetDecision(id: string, action: "release" | "forfeit") {
+    const label = action === "release" ? "补发单任务积分" : "作废全部积分";
+    if (!window.confirm(`确认${label}？该操作不可撤销。`)) return;
+    await run(() => api(`/task-set-settlements/${id}/resolve`, { method: "PATCH", body: JSON.stringify({ action }) }), action === "release" ? "任务积分已补发" : "任务集积分已作废");
+  }
 
   async function finishRedemption(id: string, action: "redeem" | "cancel") {
     await run(
@@ -767,6 +772,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
             <ReviewPanel title="任务审核" items={dashboard.pendingSubmissions || []} empty="没有待审核任务" approve={(id, completionLabel) => review(id, true, completionLabel)} reject={(id) => review(id, false)} />
             <RedemptionPanel items={dashboard.pendingRedemptions || []} onFinish={finishRedemption} />
           </div>
+          {(dashboard.pendingTaskSetDecisions || []).length > 0 && <section className="panel"><div className="panel-title"><Users /><h2>任务集积分处理</h2></div><div className="list">{dashboard.pendingTaskSetDecisions.map((item: any) => <article className="row" key={item.id}><div><strong>{item.task_set_title}</strong><span>{item.child_name} · 待处理 {item.potential_points || 0} 积分</span></div><div className="actions"><button className="secondary" onClick={() => void resolveTaskSetDecision(item.id, "release")}>补发单任务积分</button><button className="danger" onClick={() => void resolveTaskSetDecision(item.id, "forfeit")}>全部作废</button></div></article>)}</div></section>}
           <div className="grid two">
             <PraiseCriticismPanel children={children} templates={feedbackTemplates.filter((item) => item.is_active !== 0)} onSubmit={applyFeedback} remedyItems={[...(dashboard.remedyCriticisms || []), ...(dashboard.requiredPenaltyRemedies || [])]} onRemedy={(id, sourceType) => void confirmRemedy(id, sourceType)} />
             <RequiredPenaltyExemptionPanel children={children} tasks={tasks} exemptions={dashboard.requiredPenaltyExemptions || []} onSubmit={exemptRequiredPenalty} onRevoke={revokeRequiredPenaltyExemption} />
@@ -833,14 +839,14 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
                 onDelete={(item) => remove(`/task-categories/${item.id}`, "任务分类已删除，分类下任务已一并删除", `确认删除任务分类「${item.name}」？该分类下所有任务会一并删除，历史记录会保留。`)}
               />
             </EditDialog>}
-            <TaskSetsPanel
+            <details className="create-disclosure"><summary><Users size={16} />任务集</summary><TaskSetsPanel
               taskSets={taskSets}
               tasks={tasks}
               children={children}
               onCreate={(data) => create("/task-sets", data, "任务集已创建")}
               onUpdate={(item, data) => update(`/task-sets/${item.id}`, data, "任务集已更新")}
               onDelete={(item) => remove(`/task-sets/${item.id}`, "任务集已解散", `确认解散任务集「${item.title}」？之后子任务将恢复独立计分。`)}
-            />
+            /></details>
             <Overview title="现有任务" items={tasks} kind="task" children={children} categories={categories} onUpdate={(item, data) => update(`/tasks/${item.id}`, data, "任务已更新")} onDelete={(item) => remove(`/tasks/${item.id}`, "任务已删除", `确认删除任务「${item.title}」？历史记录会保留。`)} />
           </section>
           <section className={"panel setting-group " + (activeTab === "rules" ? "" : "is-hidden")}>
@@ -1528,32 +1534,46 @@ export function ReportDialog({ child, onPrint, onReport, onCartoonReport, onChec
 
 export function ReportContentSettingsPanel({ value, onSave }: { value: ReportContentSettings; onSave: (type: keyof ReportContentSettings, sections: any) => Promise<void> }) {
   const [draft, setDraft] = useState(() => cloneReportContentSettings(value));
-  const [saving, setSaving] = useState<"" | keyof ReportContentSettings>("");
+  const [saving, setSaving] = useState<"" | "checklist" | "growth">("");
   useEffect(() => setDraft(cloneReportContentSettings(value)), [value]);
-  const groups: { type: keyof ReportContentSettings; title: string; sections: { key: string; label: string }[] }[] = [
+  const groups: { type: "checklist" | "growth"; title: string; sections: { key: string; label: string }[] }[] = [
     { type: "checklist", title: "打印清单", sections: [{ key: "taskSets", label: "任务集" }, { key: "tasks", label: "任务目标" }, { key: "rewards", label: "可兑换奖励" }, { key: "feedback", label: "行为约定" }] },
-    { type: "weekly", title: "周报", sections: reportGrowthSettingSections() },
-    { type: "monthly", title: "月报", sections: reportGrowthSettingSections() }
+    { type: "growth", title: "周报与月报", sections: reportGrowthSettingSections() }
   ];
-  async function save(type: keyof ReportContentSettings) {
+  function checked(type: "checklist" | "growth", key: string) {
+    return type === "checklist" ? Boolean(draft.checklist[key as keyof typeof draft.checklist]) : Boolean(draft.weekly[key as keyof typeof draft.weekly] && draft.monthly[key as keyof typeof draft.monthly]);
+  }
+  function change(type: "checklist" | "growth", key: string, enabled: boolean) {
+    setDraft((current) => type === "checklist"
+      ? { ...current, checklist: { ...current.checklist, [key]: enabled } }
+      : { ...current, weekly: { ...current.weekly, [key]: enabled }, monthly: { ...current.monthly, [key]: enabled } });
+  }
+  async function save(type: "checklist" | "growth") {
     setSaving(type);
-    await onSave(type, draft[type]);
+    if (type === "checklist") await onSave("checklist", draft.checklist);
+    else {
+      const sections = { ...draft.weekly };
+      await onSave("weekly", sections);
+      await onSave("monthly", sections);
+    }
     setSaving("");
   }
   return (
-    <section className="panel">
-      <div className="panel-title"><Printer /><h2>报表内容设置</h2></div>
-      <p className="muted">标题、周期信息和周/月报核心摘要会始终保留。</p>
-      <div className="grid three">
-        {groups.map((group) => (
-          <div className="stack compact" key={group.type}>
-            <strong>{group.title}</strong>
-            {group.sections.map((section) => <Toggle key={section.key} label={section.label} checked={Boolean((draft[group.type] as any)[section.key])} onChange={(checked) => setDraft((current) => ({ ...current, [group.type]: { ...current[group.type], [section.key]: checked } } as ReportContentSettings))} />)}
-            <button type="button" className="secondary" disabled={saving === group.type} onClick={() => void save(group.type)}>{saving === group.type ? "保存中..." : "保存" + group.title + "设置"}</button>
-          </div>
-        ))}
-      </div>
-    </section>
+    <details className="create-disclosure">
+      <summary><Printer size={16} />报表内容设置</summary>
+      <section className="panel">
+        <p className="muted">标题、周期信息和周/月报核心摘要会始终保留。</p>
+        <div className="grid two">
+          {groups.map((group) => (
+            <div className="stack compact" key={group.type}>
+              <strong>{group.title}</strong>
+              {group.sections.map((section) => <Toggle key={section.key} label={section.label} checked={checked(group.type, section.key)} onChange={(enabled) => change(group.type, section.key, enabled)} />)}
+              <button type="button" className="secondary" disabled={saving === group.type} onClick={() => void save(group.type)}>{saving === group.type ? "保存中..." : "保存" + group.title + "设置"}</button>
+            </div>
+          ))}
+        </div>
+      </section>
+    </details>
   );
 }
 
@@ -1784,8 +1804,8 @@ export function CreateTask({ children, categories, onCreate }: { children: Child
 }
 
 function TaskSetForm({ item, tasks, children, onSave, onCancel }: { item?: TaskSet; tasks: Task[]; children: Child[]; onSave: (data: any) => void; onCancel?: () => void }) {
-  const [data, setData] = useState(() => ({ title: item?.title || "", description: item?.description || "", iconValue: item?.icon_value || "🧩", isActive: item?.is_active !== 0, taskIds: item?.taskIds || [] as string[] }));
-  const selectable = tasks.filter((task) => task.is_active !== 0 && (!task.taskSetId || task.taskSetId === item?.id));
+  const [data, setData] = useState(() => ({ title: item?.title || "", description: item?.description || "", iconValue: item?.icon_value || "🧩", isActive: item?.is_active !== 0, taskIds: item?.taskIds || [] as string[], settlementMode: item?.settlementMode || item?.settlement_mode || "round", windowStart: item?.windowStart || item?.window_start || "", windowEnd: item?.windowEnd || item?.window_end || "", windowWeekdays: item?.windowWeekdays || normalizeWeekdaysLocal(item?.window_weekdays) }));
+  const selectable = tasks.filter((task) => task.is_active !== 0 && task.point_type === "earn" && (!task.taskSetId || task.taskSetId === item?.id));
   const selectedTasks = selectable.filter((task) => data.taskIds.includes(task.id));
   const eligible = children.filter((child) => selectedTasks.length && selectedTasks.every((task) => (task.assignees || []).includes(child.id)));
   const totals = selectedTasks.reduce((sum, task) => {
@@ -1798,7 +1818,9 @@ function TaskSetForm({ item, tasks, children, onSave, onCancel }: { item?: TaskS
     <form className="stack" onSubmit={(event) => { event.preventDefault(); onSave({ ...data, iconType: "emoji" }); }}>
       <Field label="任务集标题"><input required value={data.title} onChange={(e) => setData({ ...data, title: e.target.value })} /></Field>
       <Field label="说明"><textarea value={data.description} onChange={(e) => setData({ ...data, description: e.target.value })} /></Field>
-      <Field label="子任务（至少两项，顺序即结算明细顺序)"><div className="stack compact task-set-member-list">{selectable.map((task) => <label className="toggle" key={task.id}><input type="checkbox" checked={data.taskIds.includes(task.id)} onChange={() => toggleTask(task.id)} /><span>{task.title} · {formatPeriod(task.period)}</span></label>)}</div></Field>
+      <Field label="结算方式"><select value={data.settlementMode} onChange={(e) => setData({ ...data, settlementMode: e.target.value })}><option value="round">子任务各完成一次凑一轮</option><option value="window">时间窗内全部周期达成一次</option></select></Field>
+      {data.settlementMode === "window" && <><div className="grid two compact-fields"><Field label="开始日期"><input required type="date" value={data.windowStart} onChange={(e) => setData({ ...data, windowStart: e.target.value })} /></Field><Field label="结束日期"><input required type="date" value={data.windowEnd} onChange={(e) => setData({ ...data, windowEnd: e.target.value })} /></Field></div><Field label="参与星期"><WeekdayPicker value={data.windowWeekdays} onChange={(windowWeekdays) => setData({ ...data, windowWeekdays })} /></Field><small>范围内所选星期按子任务自身周期完成；结束后统一结算。</small></>}
+      <Field label={data.settlementMode === "window" ? "子任务（至少一项）" : "子任务（至少两项，顺序即结算明细顺序)"}><div className="stack compact task-set-member-list">{selectable.map((task) => <label className="toggle" key={task.id}><input type="checkbox" checked={data.taskIds.includes(task.id)} onChange={() => toggleTask(task.id)} /><span>{task.title} · {formatPeriod(task.period)}</span></label>)}</div></Field>
       <small>共同适用：{eligible.length ? eligible.map((child) => child.display_name).join("、") : "暂无"} · 每轮 {totals.min}{totals.max !== totals.min ? `-${totals.max}` : ""} 积分</small>
       <Field label="符号"><EmojiSelect value={data.iconValue} onChange={(iconValue) => setData({ ...data, iconValue })} /></Field>
       <Toggle label="启用任务集" checked={data.isActive} onChange={(isActive) => setData({ ...data, isActive })} />
@@ -1811,11 +1833,10 @@ function TaskSetsPanel({ taskSets, tasks, children, onCreate, onUpdate, onDelete
   const [editing, setEditing] = useState<TaskSet | null>(null);
   return (
     <section className="panel">
-      <div className="panel-title"><Users /><h2>任务集</h2></div>
       <TaskSetForm tasks={tasks} children={children} onSave={onCreate} />
       <div className="list config-list scroll-list">
         {taskSets.length ? taskSets.map((set) => <article className="row config-row" key={set.id}>
-          <div className="config-main">{icon(set.icon_type, set.icon_value, set.title)}<div><strong>{set.title}</strong>{set.description && <span>{set.description}</span>}<small>{set.members.map((member: any) => member.title).join(" + ")} · {set.minPoints}{set.maxPoints !== set.minPoints ? `-${set.maxPoints}` : ""}分 · {set.eligibleChildIds.length}名儿童{set.is_active === 0 ? " · 已停用" : ""}</small></div></div>
+          <div className="config-main">{icon(set.icon_type, set.icon_value, set.title)}<div><strong>{set.title}</strong>{set.description && <span>{set.description}</span>}<small>{set.settlementMode === "window" ? `${set.windowStart} 至 ${set.windowEnd} · ${set.windowWeekdays.map(weekdayLabel).join("、")} · 时间窗达成` : set.members.map((member: any) => member.title).join(" + ")} · {set.minPoints}{set.maxPoints !== set.minPoints ? `-${set.maxPoints}` : ""}分 · {set.eligibleChildIds.length}名儿童{set.is_active === 0 ? " · 已停用" : ""}</small></div></div>
           <div className="actions"><button className="secondary" onClick={() => setEditing(set)}><Edit3 size={16} />编辑</button><button className="icon danger" title="解散" onClick={() => onDelete(set)}><Trash2 size={18} /></button></div>
         </article>) : <Empty text="可把两个或更多任务组合为一次性结算的任务集" />}
       </div>

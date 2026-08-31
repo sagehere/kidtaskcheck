@@ -9,7 +9,7 @@ const MIGRATIONS_DIR = join(__dirname, "../migrations");
 describe("Task 35: Migration Smoke Test", () => {
   it("all migration files apply sequentially on empty DB without errors", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    expect(files.length).toBe(36);
+    expect(files.length).toBe(37);
     const db = new SqliteTestDb();
     for (const file of files) {
       const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");

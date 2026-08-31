@@ -36,7 +36,7 @@ export async function handleChildRoutes(path, method, request, env, actor, ctx) 
         if (used >= Number(task.limit_count || 1))
             return fail("LIMIT_REACHED", "已达到本周期提交次数限制", 409);
         const submissionId = id();
-        const taskSet = await taskSetForSubmission(env, a.parent_id, a.id, task.id);
+        const taskSet = await taskSetForSubmission(env, a.parent_id, a.id, task.id, submittedAt);
         await env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, period_key, submitted_at, status, task_set_id) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)")
             .bind(submissionId, task.id, a.id, a.parent_id, pkey, submittedAt, taskSet?.id || null)
             .run();

@@ -1,5 +1,5 @@
 import { periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup, clearCurrentConfig, ensureRequiredTaskSchema, ensureTaskSetSchema, taskSetProgress } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, timezoneLabel, settingNumber, recalcAchievements, notificationRecipient, withNotificationSources, childIdsForParent, withLedgerSources, balancesForChildren, frozenPointsForChildren, listConfig, importConfig, ensureRewardOnceSchema, notify, actorAudit, DAY_MS, listConfigGroups, createConfigGroup, renameConfigGroup, refreshConfigGroupSnapshot, activateConfigGroup, deleteConfigGroup, clearCurrentConfig, ensureRequiredTaskSchema, ensureTaskSetSchema, pendingTaskSetDecisions, taskSetProgress } from "../utils.js";
 import { ensureCriticismRemedySchema, settleExpiredCriticismFreezes, activeRemedyItemsForChildren } from "../utils.js";
 
 async function confirmFrozenRemedy(env, actor, ledgerId, sourceType) {
@@ -381,6 +381,7 @@ WHERE t.parent_id=? AND t.is_active=1 AND t.deleted_at IS NULL`).bind(a.id).all(
             requiredPenaltyExemptions,
             submissionDeadlineExemptions,
             pendingSubmissions,
+            pendingTaskSetDecisions: await pendingTaskSetDecisions(env, a.id),
             pendingRedemptions: (await env.DB.prepare("SELECT rr.*, r.title, r.redeem_weekdays, c.display_name child_name FROM reward_redemptions rr JOIN rewards r ON r.id=rr.reward_id JOIN children c ON c.id=rr.child_id WHERE rr.parent_id=? AND rr.status='pending' ORDER BY rr.requested_at").bind(a.id).all()).results
         });
     }

@@ -611,8 +611,9 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                   const members = sortedTasks.filter((task: any) => task.taskSetId === set.id);
                   if (!members.length) return null;
                   const progress = set.progress || {};
+                  const windowMode = set.settlementMode === "window" || set.settlement_mode === "window";
                   return <section className="panel task-set-wall" key={set.id}>
-                    <div className="panel-title">{icon(set.icon_type, set.icon_value, set.title)}<div><h2>{set.title}</h2><small>下一轮已通过 {progress.approved || 0}/{progress.total || members.length} · 已结算 {progress.settledRounds || 0} 轮 · {set.minPoints}{set.maxPoints !== set.minPoints ? `-${set.maxPoints}` : ""} 积分</small></div></div>
+                    <div className="panel-title">{icon(set.icon_type, set.icon_value, set.title)}<div><h2>{set.title}</h2><small>{windowMode ? `${set.windowStart || set.window_start} 至 ${set.windowEnd || set.window_end} · 已达成 ${progress.completed || 0}/${progress.total || 0} 个周期 · ${progress.status || "active"}` : `下一轮已通过 ${progress.approved || 0}/${progress.total || members.length} · 已结算 ${progress.settledRounds || 0} 轮`} · {set.minPoints}{set.maxPoints !== set.minPoints ? `-${set.maxPoints}` : ""} 积分</small></div></div>
                     {set.description && <p className="card-description">{set.description}</p>}
                     <div className="wall-grid">{members.map((task: any) => renderTaskCard(task))}</div>
                   </section>;

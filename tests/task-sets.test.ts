@@ -3,6 +3,7 @@ import { resetTestEnv } from "./helpers/setup";
 import { ensureAdmin, hashPassword, id } from "../server/api/utils.js";
 import { handleChildRoutes } from "../server/api/routes/child.js";
 import { handleParentRoutes } from "../server/api/routes/parent.js";
+import { schedulerTick } from "../server/scheduler-tick.mjs";
 
 function request(method: string, path: string, body?: any) {
   return new Request(`http://localhost/api${path}`, { method, headers: { "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
@@ -36,6 +37,19 @@ describe("task sets", () => {
     return safe(handleParentRoutes, `/task-submissions/${sub.id}/review`, "PATCH", request("PATCH", `/task-submissions/${sub.id}/review`, { approved: true, completionLabel }), env, parent());
   }
 
+  async function createWindow(taskIds: string[]) {
+    env.DB.prepare("DELETE FROM task_set_members").run();
+    env.DB.prepare("DELETE FROM task_sets").run();
+    const response = await safe(handleParentRoutes, "/task-sets", "POST", request("POST", "/task-sets", { title: "九月目标", taskIds, settlementMode: "window", windowStart: "2026-09-01", windowEnd: "2026-09-01", windowWeekdays: [2], iconType: "emoji", iconValue: "🧩", isActive: true }), env, parent());
+    expect(response!.status).toBe(200);
+    return env.DB.prepare("SELECT id FROM task_sets WHERE parent_id=?").bind(parentId).first() as any;
+  }
+
+  function approvedWindowSubmission(taskSetId: string, taskId: string, points: number) {
+    env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, period_key, submitted_at, reviewed_at, status, task_set_id, approved_points) VALUES (?, ?, ?, ?, '2026-09-01', '2026-09-01T09:00:00.000Z', '2026-09-01T10:00:00.000Z', 'approved', ?, ?)")
+      .bind(id(), taskId, childId, parentId, taskSetId, points).run();
+  }
+
   it("holds child-task points until every member is approved", async () => {
     expect((await submitAndApprove(taskA))!.status).toBe(200);
     expect(env.DB.prepare("SELECT COUNT(*) v FROM point_ledger WHERE source_type='task_set'").first().v).toBe(0);
@@ -67,5 +81,27 @@ describe("task sets", () => {
     const set = env.DB.prepare("SELECT id FROM task_sets WHERE parent_id=?").bind(parentId).first() as any;
     const response = await safe(handleParentRoutes, `/task-sets/${set.id}`, "PATCH", request("PATCH", `/task-sets/${set.id}`, { taskIds: [taskB, taskA] }), env, parent());
     expect(response!.status).toBe(409);
+  });
+
+  it("settles a completed time window exactly once in the scheduler", async () => {
+    const set = await createWindow([taskA]);
+    approvedWindowSubmission(set.id, taskA, 5);
+    const first = await schedulerTick(env, new Date("2026-09-02T00:00:00.000Z"));
+    expect(first.taskSetWindows.settled).toBe(1);
+    expect(env.DB.prepare("SELECT amount FROM point_ledger WHERE source_type='task_set'").first()).toMatchObject({ amount: 5 });
+    const second = await schedulerTick(env, new Date("2026-09-02T00:00:00.000Z"));
+    expect(second.taskSetWindows.settled).toBe(0);
+  });
+
+  it("creates a parent decision and releases approved task points on demand", async () => {
+    const set = await createWindow([taskA, taskB]);
+    approvedWindowSubmission(set.id, taskA, 5);
+    const scheduled = await schedulerTick(env, new Date("2026-09-02T00:00:00.000Z"));
+    expect(scheduled.taskSetWindows.awaitingDecision).toBe(1);
+    const settlement = env.DB.prepare("SELECT id, status FROM task_set_settlements WHERE task_set_id=?").bind(set.id).first() as any;
+    expect(settlement.status).toBe("awaiting_decision");
+    const resolved = await safe(handleParentRoutes, `/task-set-settlements/${settlement.id}/resolve`, "PATCH", request("PATCH", `/task-set-settlements/${settlement.id}/resolve`, { action: "release" }), env, parent());
+    expect(resolved!.status).toBe(200);
+    expect(env.DB.prepare("SELECT amount FROM point_ledger WHERE source_type='task' AND source_id IN (SELECT id FROM task_submissions WHERE task_set_id=?)").bind(set.id).first()).toMatchObject({ amount: 5 });
   });
 });

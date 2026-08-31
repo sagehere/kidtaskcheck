@@ -1,5 +1,11 @@
 # 2026-08-31
 
+- 类型：功能新增与缺陷修复
+- 任务：合并周/月报内容设置，新增时间窗任务集，修复 Emoji 符号偶发加载空白。
+- 修改文件：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`src/components/EmojiSelect.tsx`、`server/api/{utils.js,routes/{parent,child,shared}.js}`、`server/scheduler-tick.mjs`、`migrations/0037_task_set_windows.sql`、任务集测试与功能索引。
+- 行为：报表和任务集区域默认收起；周/月报统一保存相同章节开关。时间窗任务集在系统时区下按日期、星期与任务周期累计审核积分，scheduler 自动结算成功目标；未达成项由家长选择补发或作废。Emoji 懒加载失败时保留常用符号并支持重试。
+- 验证：`npm run build`；`npm test -- --run tests/task-sets.test.ts tests/scheduler.test.ts`；`npm test`（171 项通过）。
+
 - 类型：功能优化
 - 任务：家长自定义打印清单、周报和月报的展示内容；优化规则配置交互与启用状态筛选。
 - 修改文件：迁移、家长报表路由与工具、家长端 UI 与类型、API/迁移测试、功能索引。

@@ -7,52 +7,51 @@ function unifiedToEmoji(unified: string) {
 }
 
 let allOptions: EmojiOption[] | null = null;
+let optionsPromise: Promise<EmojiOption[]> | null = null;
+const fallbackOptions: EmojiOption[] = ["⭐", "✅", "📚", "🧩", "🎁", "🏅", "✨", "🌱", "🧹", "🏃", "❤️", "🎯"].map((emoji, sortOrder) => ({ emoji, name: emoji, shortNames: [], category: "常用", sortOrder, search: "", rank: 0 }));
 
 async function buildEmojiOptions(): Promise<EmojiOption[]> {
   if (allOptions) return allOptions;
-  const { default: rawEmojiData } = await import("emoji-datasource/emoji.json");
-  const emojiData = rawEmojiData as EmojiSource[];
-  const seen = new Set<string>();
-  const options: EmojiOption[] = [];
-  for (const source of emojiData) {
-    const names = source.short_names?.length ? source.short_names : [source.short_name];
-    if (names.some((name) => name?.startsWith("flag-"))) continue;
-    const emoji = unifiedToEmoji(source.unified);
-    if (seen.has(emoji)) continue;
-    seen.add(emoji);
-    const shortNames = source.short_names?.length ? source.short_names : [source.short_name];
-    options.push({
-      emoji,
-      name: source.name,
-      shortNames,
-      category: source.category,
-      sortOrder: source.sort_order,
-      search: "",
-      rank: 0
-    });
-  }
-  allOptions = options.sort((a, b) => a.category.localeCompare(b.category) || a.sortOrder - b.sortOrder);
-  return allOptions;
+  if (!optionsPromise) optionsPromise = import("emoji-datasource/emoji.json").then(({ default: rawEmojiData }) => {
+    const seen = new Set<string>();
+    const options: EmojiOption[] = [];
+    for (const source of rawEmojiData as EmojiSource[]) {
+      const names = source.short_names?.length ? source.short_names : [source.short_name];
+      if (names.some((name) => name?.startsWith("flag-"))) continue;
+      const emoji = unifiedToEmoji(source.unified);
+      if (seen.has(emoji)) continue;
+      seen.add(emoji);
+      options.push({ emoji, name: source.name, shortNames: source.short_names?.length ? source.short_names : [source.short_name], category: source.category, sortOrder: source.sort_order, search: "", rank: 0 });
+    }
+    allOptions = options.sort((a, b) => a.category.localeCompare(b.category) || a.sortOrder - b.sortOrder);
+    return allOptions;
+  }).catch((error) => { optionsPromise = null; throw error; });
+  return optionsPromise;
 }
 
 export function EmojiSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const [options, setOptions] = useState<EmojiOption[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open || options.length > 0) return;
     let cancelled = false;
     setLoading(true);
+    setFailed(false);
     buildEmojiOptions().then((result) => {
       if (cancelled) return;
       setOptions(result);
+    }).catch(() => {
+      if (!cancelled) { setOptions(fallbackOptions); setFailed(true); }
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [open, options.length]);
+  }, [open, retry]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -78,13 +77,13 @@ export function EmojiSelect({ value, onChange }: { value: string; onChange: (val
             {loading ? (
               <span className="empty">加载中...</span>
             ) : (
-              options.map((opt) => (
+              <>{failed && <div className="empty">完整符号加载失败，正在显示常用符号。<button type="button" className="secondary" onClick={() => { setOptions([]); setRetry((value) => value + 1); }}>重试完整符号</button></div>}{options.map((opt) => (
                 <button key={opt.emoji} type="button" className={opt.emoji === value ? "active" : ""}
                   onClick={() => { onChange(opt.emoji); setOpen(false); }}
                   title={opt.name}>
                   {opt.emoji}
                 </button>
-              ))
+              ))}</>
             )}
           </div>
         </div>

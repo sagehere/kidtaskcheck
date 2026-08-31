@@ -1,5 +1,5 @@
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES, normalizeWeekdays, normalizeTaskSubmissionDeadline, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards, ensureTaskSetSchema, listTaskSets, taskSetEligibleChildIds, taskSetHasOpenProgress, settleTaskSetIfReady, REPORT_CONTENT_SECTION_KEYS, getParentReportContentSettings, saveParentReportContentSettings } from "../utils.js";
+import { DEFAULT_TIMEZONE_OFFSET_MINUTES, localDateKey, normalizeWeekdays, normalizeTaskSubmissionDeadline, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards, ensureTaskSetSchema, listTaskSets, resolveTaskSetSettlement, taskSetEligibleChildIds, taskSetHasOpenProgress, taskSetWindowLocked, settleTaskSetIfReady, REPORT_CONTENT_SECTION_KEYS, getParentReportContentSettings, saveParentReportContentSettings } from "../utils.js";
 import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, collectReportComparison, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs, enqueueScheduleImageJob, loadScheduleImageJob, publicScheduleImageJob, processScheduleImageJobs } from "../ai/index.js";
 
 const PRINT_A4_STYLE = '@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933;line-height:1.5}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:24px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px;page-break-inside:auto}th,td{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}th{background:#f0f0f0}tr{break-inside:avoid}.print-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.print-task-card{border:1px solid #a7b0c0;border-radius:6px;padding:8px;background:#f8fafc;break-inside:avoid;page-break-inside:avoid}.print-task-card strong{display:block}.print-task-card small{display:block;color:#64748b}.print-plan{border:1px solid #cbd5e1;border-radius:6px;padding:8px;min-height:36px;background:#fff}.print-plan :first-child{margin-top:0}.print-plan :last-child{margin-bottom:0}.schedule-print-slot{break-inside:avoid;page-break-inside:avoid;margin-top:14px}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}.attention{background:#fff7ed;border-left:4px solid #f97316;padding:12px 16px;margin:18px 0}.ai-commentary{background:#f0f4ff;border-left:4px solid #6366f1;padding:16px 20px;margin:18px 0;border-radius:4px}.ai-commentary h2{margin:0 0 8px;border:none;padding:0}.ai-commentary p{margin:4px 0;line-height:1.8;white-space:pre-line}.ai-commentary .note{font-size:12px;color:#888;margin-top:8px}@media print{button{display:none}body{margin:0}.summary{grid-template-columns:repeat(3,1fr)}table,.print-task-card,.schedule-print-slot{break-inside:avoid;page-break-inside:avoid}}';
@@ -59,6 +59,19 @@ function taskRequiredRemedy(input, isRequired, requiredPenaltyPoints) {
     if (!Number.isInteger(points) || points < 1 || points > requiredPenaltyPoints) return { error: "可挽回积分需在 1 到未达标扣分之间" };
     if (!Number.isInteger(deadlineHours) || deadlineHours < 1) return { error: "补救时限至少为 1 小时" };
     return { enabled: 1, condition, points, deadlineHours };
+}
+function taskSetWindowInput(input, tasks, today) {
+    const settlementMode = input.settlementMode === "window" || input.settlement_mode === "window" ? "window" : "round";
+    if (settlementMode === "round") return { settlementMode, windowStart: null, windowEnd: null, windowWeekdays: [] };
+    const windowStart = String(input.windowStart ?? input.window_start ?? "");
+    const windowEnd = String(input.windowEnd ?? input.window_end ?? "");
+    const rawWeekdays = Array.isArray(input.windowWeekdays ?? input.window_weekdays) ? input.windowWeekdays ?? input.window_weekdays : [];
+    const windowWeekdays = [...new Set(rawWeekdays.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(windowStart) || !/^\d{4}-\d{2}-\d{2}$/.test(windowEnd) || windowStart > windowEnd) return { error: "时间窗日期范围无效" };
+    if (windowStart <= today) return { error: "时间窗开始日期必须从明天起" };
+    if (!windowWeekdays.length) return { error: "请至少选择一个星期" };
+    if (tasks.some((task) => !normalizeWeekdays(task.enabled_weekdays).some((day) => windowWeekdays.includes(day)))) return { error: "每个子任务都需至少有一个与时间窗重叠的可做星期" };
+    return { settlementMode, windowStart, windowEnd, windowWeekdays };
 }
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/report-settings" && method === "GET") {
@@ -986,18 +999,21 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             const taskIds = [...new Set(Array.isArray(input.taskIds) ? input.taskIds.filter(Boolean) : [])];
             const error = validateInput(title, INPUT_RULES.title, "标题") || validateInput(input.description || "", INPUT_RULES.description, "说明") || validateEnum(input.iconType || "emoji", ["emoji"], "图标类型");
             if (error) return fail("BAD_REQUEST", error, 400);
-            if (taskIds.length < 2) return fail("BAD_REQUEST", "任务集至少需要两个子任务", 400);
+            const settlementMode = input.settlementMode === "window" || input.settlement_mode === "window" ? "window" : "round";
+            if (taskIds.length < (settlementMode === "window" ? 1 : 2)) return fail("BAD_REQUEST", settlementMode === "window" ? "时间窗任务集至少需要一个子任务" : "任务集至少需要两个子任务", 400);
             const placeholders = taskIds.map(() => "?").join(",");
-            const tasks = (await env.DB.prepare(`SELECT id FROM tasks WHERE parent_id=? AND id IN (${placeholders}) AND deleted_at IS NULL AND is_active=1 AND point_type='earn'`).bind(a.id, ...taskIds).all()).results;
+            const tasks = (await env.DB.prepare(`SELECT * FROM tasks WHERE parent_id=? AND id IN (${placeholders}) AND deleted_at IS NULL AND is_active=1 AND point_type='earn'`).bind(a.id, ...taskIds).all()).results;
             if (tasks.length !== taskIds.length) return fail("BAD_REQUEST", "子任务必须属于当前家庭、启用且为赚取积分任务", 400);
+            const window = taskSetWindowInput(input, tasks, localDateKey(undefined, await timezoneOffsetMinutes(env)));
+            if (window.error) return fail("BAD_REQUEST", window.error, 400);
             const occupied = await env.DB.prepare(`SELECT task_id FROM task_set_members WHERE task_id IN (${placeholders})`).bind(...taskIds).all();
             if (occupied.results.length) return fail("CONFLICT", "子任务已属于其他任务集", 409);
             const eligible = await taskSetEligibleChildIds(env, a.id, taskIds);
             if (!eligible.length) return fail("BAD_REQUEST", "至少要有一名儿童同时拥有全部子任务", 400);
             const setId = id();
             await env.DB.transaction(async () => {
-                await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active) VALUES (?, ?, ?, ?, 'emoji', ?, ?)")
-                    .bind(setId, a.id, title, input.description || "", input.iconValue || "🧩", input.isActive === false ? 0 : 1).run();
+                await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active, settlement_mode, window_start, window_end, window_weekdays) VALUES (?, ?, ?, ?, 'emoji', ?, ?, ?, ?, ?, ?)")
+                    .bind(setId, a.id, title, input.description || "", input.iconValue || "🧩", input.isActive === false ? 0 : 1, window.settlementMode, window.windowStart, window.windowEnd, JSON.stringify(window.windowWeekdays)).run();
                 for (let index = 0; index < taskIds.length; index++)
                     await env.DB.prepare("INSERT INTO task_set_members (task_set_id, task_id, sort_order) VALUES (?, ?, ?)").bind(setId, taskIds[index], index).run();
             });
@@ -1011,6 +1027,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         const current = await env.DB.prepare("SELECT * FROM task_sets WHERE id=? AND parent_id=? AND deleted_at IS NULL").bind(taskSetPatch[1], a.id).first();
         if (!current) return fail("NOT_FOUND", "任务集不存在", 404);
         if (method === "DELETE") {
+            if (await taskSetWindowLocked(env, current.id)) return fail("TASK_SET_IN_PROGRESS", "时间窗任务集已开始，终态处理完成前不能解散", 409);
             if (await taskSetHasOpenProgress(env, current.id)) return fail("TASK_SET_IN_PROGRESS", "任务集有待审核或未结算进度，暂不能解散", 409);
             await env.DB.transaction(async () => {
                 await env.DB.prepare("UPDATE task_sets SET deleted_at=?, is_active=0, updated_at=? WHERE id=?").bind(nowIso(), nowIso(), current.id).run();
@@ -1024,18 +1041,21 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         if (error) return fail("BAD_REQUEST", error, 400);
         const previousIds = (await env.DB.prepare("SELECT task_id FROM task_set_members WHERE task_set_id=? ORDER BY sort_order").bind(current.id).all()).results.map((row) => row.task_id);
         const taskIds = input.taskIds === undefined ? previousIds : [...new Set(Array.isArray(input.taskIds) ? input.taskIds.filter(Boolean) : [])];
-        const structureChanged = taskIds.length !== previousIds.length || taskIds.some((taskId, index) => taskId !== previousIds[index]) || (input.isActive !== undefined && Number(current.is_active) !== (input.isActive === false ? 0 : 1));
-        if (structureChanged && await taskSetHasOpenProgress(env, current.id)) return fail("TASK_SET_IN_PROGRESS", "任务集有待审核或未结算进度，只能修改标题、说明和图标", 409);
-        if (taskIds.length < 2) return fail("BAD_REQUEST", "任务集至少需要两个子任务", 400);
+        const settlementMode = input.settlementMode === "window" || input.settlement_mode === "window" ? "window" : "round";
+        const structureChanged = taskIds.length !== previousIds.length || taskIds.some((taskId, index) => taskId !== previousIds[index]) || settlementMode !== (current.settlement_mode || "round") || (input.isActive !== undefined && Number(current.is_active) !== (input.isActive === false ? 0 : 1));
+        if (structureChanged && (await taskSetWindowLocked(env, current.id) || await taskSetHasOpenProgress(env, current.id))) return fail("TASK_SET_IN_PROGRESS", "任务集有进行中进度，只能修改标题、说明和图标", 409);
+        if (taskIds.length < (settlementMode === "window" ? 1 : 2)) return fail("BAD_REQUEST", settlementMode === "window" ? "时间窗任务集至少需要一个子任务" : "任务集至少需要两个子任务", 400);
         const placeholders = taskIds.map(() => "?").join(",");
-        const tasks = (await env.DB.prepare(`SELECT id FROM tasks WHERE parent_id=? AND id IN (${placeholders}) AND deleted_at IS NULL AND is_active=1 AND point_type='earn'`).bind(a.id, ...taskIds).all()).results;
+        const tasks = (await env.DB.prepare(`SELECT * FROM tasks WHERE parent_id=? AND id IN (${placeholders}) AND deleted_at IS NULL AND is_active=1 AND point_type='earn'`).bind(a.id, ...taskIds).all()).results;
         if (tasks.length !== taskIds.length) return fail("BAD_REQUEST", "子任务必须属于当前家庭、启用且为赚取积分任务", 400);
+        const window = taskSetWindowInput(input, tasks, localDateKey(undefined, await timezoneOffsetMinutes(env)));
+        if (window.error) return fail("BAD_REQUEST", window.error, 400);
         const occupied = await env.DB.prepare(`SELECT task_id FROM task_set_members WHERE task_id IN (${placeholders}) AND task_set_id<>?`).bind(...taskIds, current.id).all();
         if (occupied.results.length) return fail("CONFLICT", "子任务已属于其他任务集", 409);
         if (!(await taskSetEligibleChildIds(env, a.id, taskIds)).length) return fail("BAD_REQUEST", "至少要有一名儿童同时拥有全部子任务", 400);
         await env.DB.transaction(async () => {
-            await env.DB.prepare("UPDATE task_sets SET title=?, description=?, icon_type='emoji', icon_value=?, is_active=?, updated_at=? WHERE id=?")
-                .bind(title, input.description || "", input.iconValue || "🧩", input.isActive === false ? 0 : 1, nowIso(), current.id).run();
+            await env.DB.prepare("UPDATE task_sets SET title=?, description=?, icon_type='emoji', icon_value=?, is_active=?, settlement_mode=?, window_start=?, window_end=?, window_weekdays=?, updated_at=? WHERE id=?")
+                .bind(title, input.description || "", input.iconValue || "🧩", input.isActive === false ? 0 : 1, window.settlementMode, window.windowStart, window.windowEnd, JSON.stringify(window.windowWeekdays), nowIso(), current.id).run();
             if (structureChanged) {
                 await env.DB.prepare("DELETE FROM task_set_members WHERE task_set_id=?").bind(current.id).run();
                 for (let index = 0; index < taskIds.length; index++)
@@ -1043,6 +1063,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             }
         });
         return ok(true);
+    }
+    const taskSetSettlementResolve = path.match(/^\/task-set-settlements\/([^/]+)\/resolve$/);
+    if (taskSetSettlementResolve && method === "PATCH") {
+        const a = requireRole(actor, ["parent", "parent_delegate"]);
+        const input = await body(request);
+        return ok(await resolveTaskSetSettlement(env, a.id, taskSetSettlementResolve[1], input.action, actorAudit(a)));
     }
     if (path === "/tasks") {
         const a = requireRole(actor, ["parent", "parent_delegate"]);
@@ -1151,6 +1177,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         if (!task)
             return fail("NOT_FOUND", "任务不存在", 404);
         const taskSetMember = await env.DB.prepare("SELECT task_set_id FROM task_set_members WHERE task_id=?").bind(taskPatch[1]).first();
+        if (taskSetMember && await taskSetWindowLocked(env, taskSetMember.task_set_id))
+            return fail("TASK_SET_IN_PROGRESS", "时间窗任务集进行中，暂不能修改子任务", 409);
         if (taskSetMember && await taskSetHasOpenProgress(env, taskSetMember.task_set_id)) {
             const currentChildIds = (await env.DB.prepare("SELECT child_id FROM task_assignees WHERE task_id=? ORDER BY child_id").bind(taskPatch[1]).all()).results.map((row) => row.child_id);
             const nextChildIds = [...new Set(Array.isArray(input.childIds) ? input.childIds : [])].sort();
@@ -1188,6 +1216,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         if (!task)
             return fail("NOT_FOUND", "任务不存在", 404);
         const taskSetMember = await env.DB.prepare("SELECT task_set_id FROM task_set_members WHERE task_id=?").bind(taskPatch[1]).first();
+        if (taskSetMember && await taskSetWindowLocked(env, taskSetMember.task_set_id))
+            return fail("TASK_SET_IN_PROGRESS", "时间窗任务集进行中，暂不能删除子任务", 409);
         if (taskSetMember && await taskSetHasOpenProgress(env, taskSetMember.task_set_id))
             return fail("TASK_SET_IN_PROGRESS", "任务集有进行中进度，暂不能删除子任务", 409);
         if (taskSetMember)

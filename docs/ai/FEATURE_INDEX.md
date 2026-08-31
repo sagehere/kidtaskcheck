@@ -232,13 +232,13 @@
 
 ## 17. 任务集与延迟积分结算
 
-- 功能说明：家长可把至少两个赚取积分任务组成有标题、说明和 Emoji 的任务集。仅同时分配全部成员任务的孩子适用；每个成员仍维持自己的周期、次数、必做、截止和完成程度规则。审核通过记录按成员最早未消费提交配对，一轮凑齐后才一次性写入任务集总积分账本。
+- 功能说明：家长可把赚取积分任务组成有标题、说明和 Emoji 的任务集。默认“逐轮”模式至少两个成员，审核通过记录按成员最早未消费提交配对后统一结算；时间窗模式允许一个或多个成员，在未来日期范围及所选星期内按每个任务自身周期达成（普通至少一次、必做达到 required_count），窗口结束且无待审后一次性结算全部审核积分。未达成时由家长决定补发为单任务积分或全部作废。
 - 用户入口：家长设置“任务集”、待处理审核、儿童任务墙、通知中心、打印清单与配置导入导出。
 - P0：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`server/api/routes/{parent,child,shared}.js`、`server/api/utils.js`
 - P1：`src/components/Shell.tsx`、`src/types/api.ts`、`server/api/ai/orchestrator.js`
-- P2：`migrations/0035_task_sets.sql`、`tests/task-sets.test.ts`、`tests/concurrency.test.ts`、`tests/migration.test.ts`
-- 主要调用链：任务集管理 -> `/task-sets`; 孩子提交时快照 `task_set_id` -> `/task-submissions`; 审核 -> `/task-submissions/:id/review` -> SQLite `BEGIN IMMEDIATE` 内写审核积分快照、配对结算和唯一 `source_type=task_set` 账本。
-- 相关状态：`task_sets`、`task_set_members`、`task_set_settlements`、`task_set_settlement_items`、`task_submissions.task_set_id`、`task_submissions.approved_points`、`point_ledger`。
-- 相关接口：`GET/POST /api/task-sets`、`PATCH/DELETE /api/task-sets/:id`、`PATCH /api/task-submissions/:id/review`、`GET /api/dashboard/{parent,child}`、`GET/POST /api/config/{export,import}`。
-- 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；加入任务集之前的提交保持普通任务结算语义；存在待审或已通过未结算记录时，不得改成员、停用、解散或改变成员的儿童交集，返回 `409 TASK_SET_IN_PROGRESS`；完成程度分数以审核时 `approved_points` 快照为准；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。任务集子任务复选列表固定为 240px 高并在内容超出时内部滚动，移动端保持相同行为。
-- 最近更新时间：2026-08-21
+- P2：`migrations/0035_task_sets.sql`、`migrations/0037_task_set_windows.sql`、`tests/task-sets.test.ts`、`tests/concurrency.test.ts`、`tests/migration.test.ts`
+- 主要调用链：任务集管理 -> `/task-sets`; 孩子提交时快照 `task_set_id` -> `/task-submissions`; 逐轮审核 -> `/task-submissions/:id/review`; 时间窗结算 -> `schedulerTick` -> `settleTaskSetWindows`; 未达成决定 -> `/task-set-settlements/:id/resolve`。
+- 相关状态：`task_sets.settlement_mode/window_*`、`task_set_members`、`task_set_settlements.status`、`task_set_settlement_items`、`task_submissions.task_set_id`、`task_submissions.approved_points`、`point_ledger`。
+- 相关接口：`GET/POST /api/task-sets`、`PATCH/DELETE /api/task-sets/:id`、`PATCH /api/task-set-settlements/:id/resolve`、`PATCH /api/task-submissions/:id/review`、`GET /api/dashboard/{parent,child}`、`GET/POST /api/config/{export,import}`。
+- 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；时间窗开始日期只能是明天或以后，日期范围和星期同时生效，结束后等待全部待审记录处理；窗口开始后锁定任务集和成员任务，直到每名适用儿童达到终态；完成程度分数以审核时 `approved_points` 快照为准；成功统一记任务集账本，补发改记单任务账本，作废只消费结算明细；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。任务集子任务复选列表固定为 240px 高并在内容超出时内部滚动，移动端保持相同行为。
+- 最近更新时间：2026-08-31

@@ -232,13 +232,13 @@
 
 ## 17. 任务集与延迟积分结算
 
-- 功能说明：家长可把赚取积分任务组成有标题、说明和 Emoji 的任务集。默认“逐轮”模式至少两个成员，审核通过记录按成员最早未消费提交配对后统一结算；时间窗模式允许一个或多个成员，在未来日期范围及所选星期内按每个任务自身周期达成（普通至少一次、必做达到 required_count），窗口结束且无待审后一次性结算全部审核积分。未达成时由家长决定补发为单任务积分或全部作废。
+- 功能说明：家长可把赚取积分任务组成有标题、说明和 Emoji 的任务集。默认“逐轮”模式至少两个成员，审核通过记录按成员最早未消费提交配对后统一结算；时间窗模式允许一个或多个成员，分为指定日期、循环每周和循环每月。指定日期在未来日期范围及所选星期内按任务自身周期达成；循环模式按系统时区的自然周或自然月自动重置并分别结算，每个成员仍按自身周期达成（普通至少一次、必做达到 required_count）。首个不完整循环只从启用后新开始的成员周期纳入，审核积分延迟到对应任务集周期结束；未达成时由家长决定补发为单任务积分或全部作废，旧周期待审或待决定不阻塞新周期。
 - 用户入口：家长设置“任务集”、待处理审核、儿童任务墙、通知中心、打印清单与配置导入导出。
 - P0：`src/ParentApp.tsx`、`src/ChildApp.tsx`、`server/api/routes/{parent,child,shared}.js`、`server/api/utils.js`
 - P1：`src/components/Shell.tsx`、`src/types/api.ts`、`server/api/ai/orchestrator.js`
-- P2：`migrations/0035_task_sets.sql`、`migrations/0037_task_set_windows.sql`、`tests/task-sets.test.ts`、`tests/concurrency.test.ts`、`tests/migration.test.ts`
+- P2：`migrations/0035_task_sets.sql`、`migrations/0037_task_set_windows.sql`、`migrations/0038_recurring_task_set_windows.sql`、`tests/task-sets.test.ts`、`tests/concurrency.test.ts`、`tests/migration.test.ts`
 - 主要调用链：任务集管理 -> `/task-sets`; 孩子提交时快照 `task_set_id` -> `/task-submissions`; 逐轮审核 -> `/task-submissions/:id/review`; 时间窗结算 -> `schedulerTick` -> `settleTaskSetWindows`; 未达成决定 -> `/task-set-settlements/:id/resolve`。
-- 相关状态：`task_sets.settlement_mode/window_*`、`task_set_members`、`task_set_settlements.status`、`task_set_settlement_items`、`task_submissions.task_set_id`、`task_submissions.approved_points`、`point_ledger`。
+- 相关状态：`task_sets.settlement_mode/window_type/window_*`、`task_sets.recurrence_started_at/recurrence_stopped_at`、`task_set_members`、`task_set_settlements.status/cycle_key/cycle_*_at`、`task_set_settlement_items`、`task_submissions.task_set_id`、`task_submissions.approved_points`、`point_ledger`。
 - 相关接口：`GET/POST /api/task-sets`、`PATCH/DELETE /api/task-sets/:id`、`PATCH /api/task-set-settlements/:id/resolve`、`PATCH /api/task-submissions/:id/review`、`GET /api/dashboard/{parent,child}`、`GET/POST /api/config/{export,import}`。
-- 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；时间窗开始日期只能是明天或以后，日期范围和星期同时生效，结束后等待全部待审记录处理；窗口开始后锁定任务集和成员任务，直到每名适用儿童达到终态；完成程度分数以审核时 `approved_points` 快照为准；成功统一记任务集账本，补发改记单任务账本，作废只消费结算明细；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。任务集子任务复选列表固定为 240px 高并在内容超出时内部滚动，移动端保持相同行为。Docker 镜像构建会以原生 Node 语法检查 `server/api/utils.js`；Vite/Vitest 转换通过不等价于生产 ESM 可解析。
+- 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；指定日期窗开始日期只能是明天或以后，日期范围和星期同时生效，结束后等待全部待审记录处理。循环每周仅允许日/周任务，循环每月允许日/周/月任务，不允许一次性任务；启用期间锁定成员、周期、星期和成员任务配置，停用会截断当前周期且同一自然周期不得重新启用。每个循环结算以任务集、儿童和 `cycle_key` 唯一，完成程度分数以审核时 `approved_points` 快照为准；成功统一记任务集账本，补发改记单任务账本，作废只消费结算明细；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。配置导出只保存循环类型和星期，导入的循环任务集默认停用。任务集子任务复选列表固定为 240px 高并在内容超出时内部滚动，移动端保持相同行为。Docker 镜像构建会以原生 Node 语法检查 `server/api/utils.js`；Vite/Vitest 转换通过不等价于生产 ESM 可解析。
 - 最近更新时间：2026-08-31

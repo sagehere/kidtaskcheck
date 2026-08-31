@@ -1,5 +1,5 @@
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES, localDateKey, normalizeWeekdays, normalizeTaskSubmissionDeadline, isWeekdayAllowed, prerequisitePeriodKey, signedPoints, nextPeriodReset, reportWindowRange, periodKey } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards, ensureTaskSetSchema, listTaskSets, resolveTaskSetSettlement, taskSetEligibleChildIds, taskSetHasOpenProgress, taskSetWindowLocked, settleTaskSetIfReady, REPORT_CONTENT_SECTION_KEYS, getParentReportContentSettings, saveParentReportContentSettings } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, validateInput, INPUT_RULES, validateEnum, weekdayJson, replaceAssignees, validateChildIds, validateTaskIds, validateCategoryOwnership, usernameExists, hashPassword, verifyPassword, timezoneOffsetMinutes, timezoneLabel, settingNumber, localTimeText, escapeHtml, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, unmetRewardPrerequisites, balance, balancesForChildren, recalcAchievements, notify, rewardPrerequisites, replaceRewardPrerequisites, replaceRewardAchievementRequirement, deleteAchievementWithExclusiveReward, listWithAssignees, normalizeAchievementInput, validateHttpsUrl, ensureRewardOnceSchema, ensureParentDelegatesSchema, actorAudit, ensureCriticismRemedySchema, settleExpiredCriticismFreezes, ensureRequiredTaskSchema, ensureChildScheduleSchema, schedulePlanHtmlToText, normalizeCompletionStandards, ensureTaskSetSchema, listTaskSets, resolveTaskSetSettlement, taskSetEligibleChildIds, taskSetHasOpenProgress, taskSetWindowLocked, settleTaskSetIfReady, settleTaskSetWindows, REPORT_CONTENT_SECTION_KEYS, getParentReportContentSettings, saveParentReportContentSettings } from "../utils.js";
 import { generateParentAiGreeting, getParentAiServiceConfig, generateReportCommentary, previousCompletedReportRange, collectReportComparison, aiConfigHash, aiReportConfigHash, ensureAiReportCommentaries, AI_FETCH_TIMEOUT_MS, listModels, enqueueCartoonReportJob, loadCartoonReportJob, publicCartoonJob, processCartoonReportJobs, enqueuePrintChecklistImageJob, loadPrintChecklistImageJob, publicPrintChecklistJob, processPrintChecklistImageJobs, enqueueScheduleImageJob, loadScheduleImageJob, publicScheduleImageJob, processScheduleImageJobs } from "../ai/index.js";
 
 const PRINT_A4_STYLE = '@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:"Microsoft YaHei",Arial,sans-serif;margin:32px;color:#1f2933;line-height:1.5}button{margin-bottom:16px}h1{margin:0 0 8px}h2{margin-top:24px;border-bottom:2px solid #111;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-top:12px;page-break-inside:auto}th,td{border:1px solid #999;padding:7px;text-align:left;vertical-align:top}th{background:#f0f0f0}tr{break-inside:avoid}.print-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}.print-task-card{border:1px solid #a7b0c0;border-radius:6px;padding:8px;background:#f8fafc;break-inside:avoid;page-break-inside:avoid}.print-task-card strong{display:block}.print-task-card small{display:block;color:#64748b}.print-plan{border:1px solid #cbd5e1;border-radius:6px;padding:8px;min-height:36px;background:#fff}.print-plan :first-child{margin-top:0}.print-plan :last-child{margin-bottom:0}.schedule-print-slot{break-inside:avoid;page-break-inside:avoid;margin-top:14px}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:18px 0}.summary div{border:1px solid #999;padding:10px}.summary strong{display:block;font-size:24px}.attention{background:#fff7ed;border-left:4px solid #f97316;padding:12px 16px;margin:18px 0}.ai-commentary{background:#f0f4ff;border-left:4px solid #6366f1;padding:16px 20px;margin:18px 0;border-radius:4px}.ai-commentary h2{margin:0 0 8px;border:none;padding:0}.ai-commentary p{margin:4px 0;line-height:1.8;white-space:pre-line}.ai-commentary .note{font-size:12px;color:#888;margin-top:8px}@media print{button{display:none}body{margin:0}.summary{grid-template-columns:repeat(3,1fr)}table,.print-task-card,.schedule-print-slot{break-inside:avoid;page-break-inside:avoid}}';
@@ -62,16 +62,22 @@ function taskRequiredRemedy(input, isRequired, requiredPenaltyPoints) {
 }
 function taskSetWindowInput(input, tasks, today) {
     const settlementMode = input.settlementMode === "window" || input.settlement_mode === "window" ? "window" : "round";
-    if (settlementMode === "round") return { settlementMode, windowStart: null, windowEnd: null, windowWeekdays: [] };
+    if (settlementMode === "round") return { settlementMode, windowType: "custom", windowStart: null, windowEnd: null, windowWeekdays: [] };
+    const windowType = ["weekly", "monthly"].includes(input.windowType ?? input.window_type) ? input.windowType ?? input.window_type : "custom";
     const windowStart = String(input.windowStart ?? input.window_start ?? "");
     const windowEnd = String(input.windowEnd ?? input.window_end ?? "");
     const rawWeekdays = Array.isArray(input.windowWeekdays ?? input.window_weekdays) ? input.windowWeekdays ?? input.window_weekdays : [];
     const windowWeekdays = [...new Set(rawWeekdays.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))];
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(windowStart) || !/^\d{4}-\d{2}-\d{2}$/.test(windowEnd) || windowStart > windowEnd) return { error: "时间窗日期范围无效" };
-    if (windowStart <= today) return { error: "时间窗开始日期必须从明天起" };
     if (!windowWeekdays.length) return { error: "请至少选择一个星期" };
     if (tasks.some((task) => !normalizeWeekdays(task.enabled_weekdays).some((day) => windowWeekdays.includes(day)))) return { error: "每个子任务都需至少有一个与时间窗重叠的可做星期" };
-    return { settlementMode, windowStart, windowEnd, windowWeekdays };
+    if (windowType !== "custom") {
+        const allowed = windowType === "weekly" ? ["daily", "weekly"] : ["daily", "weekly", "monthly"];
+        if (tasks.some((task) => !allowed.includes(task.period))) return { error: windowType === "weekly" ? "每周任务集仅可包含每日或每周任务" : "每月任务集仅可包含每日、每周或每月任务" };
+        return { settlementMode, windowType, windowStart: null, windowEnd: null, windowWeekdays };
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(windowStart) || !/^\d{4}-\d{2}-\d{2}$/.test(windowEnd) || windowStart > windowEnd) return { error: "时间窗日期范围无效" };
+    if (windowStart <= today) return { error: "时间窗开始日期必须从明天起" };
+    return { settlementMode, windowType, windowStart, windowEnd, windowWeekdays };
 }
 export async function handleParentRoutes(path, method, request, env, actor, url, ctx) {
     if (path === "/parent/report-settings" && method === "GET") {
@@ -1011,9 +1017,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             const eligible = await taskSetEligibleChildIds(env, a.id, taskIds);
             if (!eligible.length) return fail("BAD_REQUEST", "至少要有一名儿童同时拥有全部子任务", 400);
             const setId = id();
+            const active = input.isActive === false ? 0 : 1;
+            const startedAt = window.settlementMode === "window" && window.windowType !== "custom" && active ? nowIso() : null;
             await env.DB.transaction(async () => {
-                await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active, settlement_mode, window_start, window_end, window_weekdays) VALUES (?, ?, ?, ?, 'emoji', ?, ?, ?, ?, ?, ?)")
-                    .bind(setId, a.id, title, input.description || "", input.iconValue || "🧩", input.isActive === false ? 0 : 1, window.settlementMode, window.windowStart, window.windowEnd, JSON.stringify(window.windowWeekdays)).run();
+                await env.DB.prepare("INSERT INTO task_sets (id, parent_id, title, description, icon_type, icon_value, is_active, settlement_mode, window_type, window_start, window_end, window_weekdays, recurrence_started_at) VALUES (?, ?, ?, ?, 'emoji', ?, ?, ?, ?, ?, ?, ?, ?)")
+                    .bind(setId, a.id, title, input.description || "", input.iconValue || "🧩", active, window.settlementMode, window.windowType, window.windowStart, window.windowEnd, JSON.stringify(window.windowWeekdays), startedAt).run();
                 for (let index = 0; index < taskIds.length; index++)
                     await env.DB.prepare("INSERT INTO task_set_members (task_set_id, task_id, sort_order) VALUES (?, ?, ?)").bind(setId, taskIds[index], index).run();
             });
@@ -1039,23 +1047,37 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         const title = String(input.title || "").trim();
         const error = validateInput(title, INPUT_RULES.title, "标题") || validateInput(input.description || "", INPUT_RULES.description, "说明") || validateEnum(input.iconType || "emoji", ["emoji"], "图标类型");
         if (error) return fail("BAD_REQUEST", error, 400);
+        const currentWindowType = ["weekly", "monthly"].includes(current.window_type) ? current.window_type : "custom";
+        const currentRecurring = current.settlement_mode === "window" && currentWindowType !== "custom";
+        if (currentRecurring && Number(current.is_active) !== 0 && input.isActive === false) {
+            const stoppedAt = nowIso();
+            await env.DB.prepare("UPDATE task_sets SET title=?, description=?, icon_type='emoji', icon_value=?, is_active=0, recurrence_stopped_at=?, updated_at=? WHERE id=?")
+                .bind(title, input.description || "", input.iconValue || "🧩", stoppedAt, stoppedAt, current.id).run();
+            await settleTaskSetWindows(env, stoppedAt);
+            return ok(true);
+        }
         const previousIds = (await env.DB.prepare("SELECT task_id FROM task_set_members WHERE task_set_id=? ORDER BY sort_order").bind(current.id).all()).results.map((row) => row.task_id);
         const taskIds = input.taskIds === undefined ? previousIds : [...new Set(Array.isArray(input.taskIds) ? input.taskIds.filter(Boolean) : [])];
+        const desiredActive = input.isActive === undefined ? Number(current.is_active) : input.isActive === false ? 0 : 1;
         const settlementMode = input.settlementMode === "window" || input.settlement_mode === "window" ? "window" : "round";
-        const structureChanged = taskIds.length !== previousIds.length || taskIds.some((taskId, index) => taskId !== previousIds[index]) || settlementMode !== (current.settlement_mode || "round") || (input.isActive !== undefined && Number(current.is_active) !== (input.isActive === false ? 0 : 1));
-        if (structureChanged && (await taskSetWindowLocked(env, current.id) || await taskSetHasOpenProgress(env, current.id))) return fail("TASK_SET_IN_PROGRESS", "任务集有进行中进度，只能修改标题、说明和图标", 409);
         if (taskIds.length < (settlementMode === "window" ? 1 : 2)) return fail("BAD_REQUEST", settlementMode === "window" ? "时间窗任务集至少需要一个子任务" : "任务集至少需要两个子任务", 400);
         const placeholders = taskIds.map(() => "?").join(",");
         const tasks = (await env.DB.prepare(`SELECT * FROM tasks WHERE parent_id=? AND id IN (${placeholders}) AND deleted_at IS NULL AND is_active=1 AND point_type='earn'`).bind(a.id, ...taskIds).all()).results;
         if (tasks.length !== taskIds.length) return fail("BAD_REQUEST", "子任务必须属于当前家庭、启用且为赚取积分任务", 400);
         const window = taskSetWindowInput(input, tasks, localDateKey(undefined, await timezoneOffsetMinutes(env)));
         if (window.error) return fail("BAD_REQUEST", window.error, 400);
+        const structureChanged = taskIds.length !== previousIds.length || taskIds.some((taskId, index) => taskId !== previousIds[index]) || settlementMode !== (current.settlement_mode || "round") || window.windowType !== currentWindowType || JSON.stringify(window.windowWeekdays) !== JSON.stringify(normalizeWeekdays(current.window_weekdays)) || window.windowStart !== (current.window_start || null) || window.windowEnd !== (current.window_end || null) || desiredActive !== Number(current.is_active);
+        if (structureChanged && (await taskSetWindowLocked(env, current.id) || await taskSetHasOpenProgress(env, current.id))) return fail("TASK_SET_IN_PROGRESS", "任务集有进行中进度，只能修改标题、说明和图标", 409);
         const occupied = await env.DB.prepare(`SELECT task_id FROM task_set_members WHERE task_id IN (${placeholders}) AND task_set_id<>?`).bind(...taskIds, current.id).all();
         if (occupied.results.length) return fail("CONFLICT", "子任务已属于其他任务集", 409);
         if (!(await taskSetEligibleChildIds(env, a.id, taskIds)).length) return fail("BAD_REQUEST", "至少要有一名儿童同时拥有全部子任务", 400);
+        const updatedAt = nowIso();
+        const reactivating = currentRecurring && Number(current.is_active) === 0 && desiredActive !== 0;
+        if (reactivating && current.recurrence_stopped_at && periodKey(currentWindowType, current.recurrence_stopped_at, await timezoneOffsetMinutes(env)) === periodKey(currentWindowType, updatedAt, await timezoneOffsetMinutes(env))) return fail("TASK_SET_REACTIVATION_WAIT", "循环任务集需到下个自然周期才能重新启用", 409);
+        const recurrenceStartedAt = window.settlementMode === "window" && window.windowType !== "custom" && desiredActive ? (reactivating || !current.recurrence_started_at || currentWindowType !== window.windowType ? updatedAt : current.recurrence_started_at) : null;
         await env.DB.transaction(async () => {
-            await env.DB.prepare("UPDATE task_sets SET title=?, description=?, icon_type='emoji', icon_value=?, is_active=?, settlement_mode=?, window_start=?, window_end=?, window_weekdays=?, updated_at=? WHERE id=?")
-                .bind(title, input.description || "", input.iconValue || "🧩", input.isActive === false ? 0 : 1, window.settlementMode, window.windowStart, window.windowEnd, JSON.stringify(window.windowWeekdays), nowIso(), current.id).run();
+            await env.DB.prepare("UPDATE task_sets SET title=?, description=?, icon_type='emoji', icon_value=?, is_active=?, settlement_mode=?, window_type=?, window_start=?, window_end=?, window_weekdays=?, recurrence_started_at=?, recurrence_stopped_at=?, updated_at=? WHERE id=?")
+                .bind(title, input.description || "", input.iconValue || "🧩", desiredActive, window.settlementMode, window.windowType, window.windowStart, window.windowEnd, JSON.stringify(window.windowWeekdays), recurrenceStartedAt, reactivating ? null : current.recurrence_stopped_at, updatedAt, current.id).run();
             if (structureChanged) {
                 await env.DB.prepare("DELETE FROM task_set_members WHERE task_set_id=?").bind(current.id).run();
                 for (let index = 0; index < taskIds.length; index++)

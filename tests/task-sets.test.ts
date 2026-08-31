@@ -50,6 +50,22 @@ describe("task sets", () => {
       .bind(id(), taskId, childId, parentId, taskSetId, points).run();
   }
 
+  async function createRecurring(taskIds: string[], windowType: "weekly" | "monthly" = "weekly") {
+    env.DB.prepare("DELETE FROM task_set_members").run();
+    env.DB.prepare("DELETE FROM task_sets").run();
+    const response = await safe(handleParentRoutes, "/task-sets", "POST", request("POST", "/task-sets", { title: "循环目标", taskIds, settlementMode: "window", windowType, windowWeekdays: [1], iconType: "emoji", iconValue: "🧩", isActive: true }), env, parent());
+    expect(response!.status).toBe(200);
+    const set = env.DB.prepare("SELECT id FROM task_sets WHERE parent_id=?").bind(parentId).first() as any;
+    env.DB.prepare("UPDATE task_sets SET recurrence_started_at=? WHERE id=?").bind("2026-09-06T16:00:00.000Z", set.id).run();
+    env.DB.prepare("UPDATE tasks SET enabled_weekdays='[1]' WHERE id IN (?, ?)").bind(taskA, taskB).run();
+    return set;
+  }
+
+  function approvedRecurringSubmission(taskSetId: string, taskId: string, date: string, points = 5) {
+    env.DB.prepare("INSERT INTO task_submissions (id, task_id, child_id, parent_id, period_key, submitted_at, reviewed_at, status, task_set_id, approved_points) VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?)")
+      .bind(id(), taskId, childId, parentId, date, `${date}T01:00:00.000Z`, `${date}T02:00:00.000Z`, taskSetId, points).run();
+  }
+
   it("holds child-task points until every member is approved", async () => {
     expect((await submitAndApprove(taskA))!.status).toBe(200);
     expect(env.DB.prepare("SELECT COUNT(*) v FROM point_ledger WHERE source_type='task_set'").first().v).toBe(0);
@@ -103,5 +119,40 @@ describe("task sets", () => {
     const resolved = await safe(handleParentRoutes, `/task-set-settlements/${settlement.id}/resolve`, "PATCH", request("PATCH", `/task-set-settlements/${settlement.id}/resolve`, { action: "release" }), env, parent());
     expect(resolved!.status).toBe(200);
     expect(env.DB.prepare("SELECT amount FROM point_ledger WHERE source_type='task' AND source_id IN (SELECT id FROM task_submissions WHERE task_set_id=?)").bind(set.id).first()).toMatchObject({ amount: 5 });
+  });
+
+  it("settles recurring weekly cycles independently and resets for the next week", async () => {
+    const set = await createRecurring([taskA]);
+    approvedRecurringSubmission(set.id, taskA, "2026-09-07");
+    expect((await schedulerTick(env, new Date("2026-09-14T00:00:00.000Z"))).taskSetWindows.settled).toBe(1);
+    approvedRecurringSubmission(set.id, taskA, "2026-09-14");
+    expect((await schedulerTick(env, new Date("2026-09-21T00:00:00.000Z"))).taskSetWindows.settled).toBe(1);
+    expect(env.DB.prepare("SELECT COUNT(*) v FROM task_set_settlements WHERE task_set_id=?").bind(set.id).first().v).toBe(2);
+    expect(env.DB.prepare("SELECT COUNT(*) v FROM point_ledger WHERE source_type='task_set'").first().v).toBe(2);
+  });
+
+  it("does not let an unresolved weekly cycle block the next cycle", async () => {
+    const set = await createRecurring([taskA]);
+    expect((await schedulerTick(env, new Date("2026-09-14T00:00:00.000Z"))).taskSetWindows.awaitingDecision).toBe(1);
+    approvedRecurringSubmission(set.id, taskA, "2026-09-14");
+    expect((await schedulerTick(env, new Date("2026-09-21T00:00:00.000Z"))).taskSetWindows.settled).toBe(1);
+    expect(env.DB.prepare("SELECT COUNT(*) v FROM task_set_settlements WHERE task_set_id=? AND status='awaiting_decision'").bind(set.id).first().v).toBe(1);
+  });
+
+  it("catches up every completed cycle before a recurring task set is stopped", async () => {
+    const set = await createRecurring([taskA]);
+    approvedRecurringSubmission(set.id, taskA, "2026-09-07");
+    approvedRecurringSubmission(set.id, taskA, "2026-09-14");
+    env.DB.prepare("UPDATE task_sets SET is_active=0, recurrence_stopped_at=? WHERE id=?").bind("2026-09-17T00:00:00.000Z", set.id).run();
+    expect((await schedulerTick(env, new Date("2026-09-18T00:00:00.000Z"))).taskSetWindows.settled).toBe(2);
+    expect(env.DB.prepare("SELECT COUNT(*) v FROM task_set_settlements WHERE task_set_id=?").bind(set.id).first().v).toBe(2);
+  });
+
+  it("rejects incompatible monthly tasks in a weekly recurring task set", async () => {
+    env.DB.prepare("DELETE FROM task_set_members").run();
+    env.DB.prepare("DELETE FROM task_sets").run();
+    env.DB.prepare("UPDATE tasks SET period='monthly' WHERE id=?").bind(taskA).run();
+    const response = await safe(handleParentRoutes, "/task-sets", "POST", request("POST", "/task-sets", { title: "每周目标", taskIds: [taskA], settlementMode: "window", windowType: "weekly", windowWeekdays: [1], iconType: "emoji", iconValue: "🧩", isActive: true }), env, parent());
+    expect(response!.status).toBe(400);
   });
 });

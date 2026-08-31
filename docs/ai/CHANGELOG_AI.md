@@ -1,5 +1,11 @@
 # 2026-08-31
 
+- 类型：功能新增
+- 任务：为时间窗任务集增加循环每周、每月模式，并保留逐轮与指定日期窗。
+- 修改文件：`migrations/0038_recurring_task_set_windows.sql`、`server/api/utils.js`、`server/api/routes/{parent,shared}.js`、`src/{ParentApp,ChildApp}.tsx`、`tests/{task-sets,migration}.test.ts`、功能索引。
+- 行为：循环任务集按系统时区自然周/月自动重置、按成员自身周期延迟结算；首个不完整周期不追溯已开始的成员周期。停用截断当前周期，同一自然周期不能重新启用；旧周期待审或待决定独立于后续周期。结算按任务集、儿童、周期唯一并支持按周期补发或作废；导入循环配置默认停用。
+- 验证：`node --check server/api/utils.js`、`node --check server/api/routes/parent.js`、`node --check server/api/routes/shared.js`、`npm run build`、`npm test`（175 项通过）。
+
 - 类型：部署热修复
 - 任务：修复 Docker 运行镜像启动时 `server/api/utils.js` 的重复 ESM 导入错误。
 - 修改文件：删除重复导入；Dockerfile 增加原生 Node 语法检查；同步任务集功能索引。

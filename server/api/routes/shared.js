@@ -126,6 +126,11 @@ LIMIT 50`)
                 icon_type: item.icon_type,
                 icon_value: item.icon_value,
                 is_active: item.is_active,
+                settlement_mode: item.settlementMode || item.settlement_mode || "round",
+                window_type: item.windowType || item.window_type || "custom",
+                window_start: item.windowStart || item.window_start || null,
+                window_end: item.windowEnd || item.window_end || null,
+                window_weekdays: item.windowWeekdays || item.window_weekdays || [],
                 members: (item.members || []).map((member) => ({ title: member.title, period: config.tasks.find((task) => task.id === member.task_id)?.period || "daily" }))
             })),
             rewards: config.rewards.map((item) => ({

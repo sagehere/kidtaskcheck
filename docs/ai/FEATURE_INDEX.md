@@ -242,3 +242,5 @@
 - 相关接口：`GET/POST /api/task-sets`、`PATCH/DELETE /api/task-sets/:id`、`PATCH /api/task-set-settlements/:id/resolve`、`PATCH /api/task-submissions/:id/review`、`GET /api/dashboard/{parent,child}`、`GET/POST /api/config/{export,import}`。
 - 修改注意事项：一个任务只能归属一个任务集，成员必须为本家庭启用的赚取积分任务且共同适用至少一个孩子；指定日期窗开始日期只能是明天或以后，日期范围和星期同时生效，结束后等待全部待审记录处理。循环每周仅允许日/周任务，循环每月允许日/周/月任务，不允许一次性任务；启用期间锁定成员、周期、星期和成员任务配置，停用会截断当前周期且同一自然周期不得重新启用。每个循环结算以任务集、儿童和 `cycle_key` 唯一，完成程度分数以审核时 `approved_points` 快照为准；成功统一记任务集账本，补发改记单任务账本，作废只消费结算明细；账本和结算明细必须保持一对一，历史清理不得删除未消费提交。配置导出只保存循环类型和星期，导入的循环任务集默认停用。任务集子任务复选列表固定为 240px 高并在内容超出时内部滚动，移动端保持相同行为。Docker 镜像构建会以原生 Node 语法检查 `server/api/utils.js`；Vite/Vitest 转换通过不等价于生产 ESM 可解析。
 - 最近更新时间：2026-08-31
+
+<!-- 2026-09-01：儿童普通任务墙支持按儿童账号保存的长按拖动排序。排序仅在任务集各自分组和未分组区域内生效，必做任务始终优先；置顶区与日程表显示保持原有顺序。/child-task-wall-order 只允许当前儿童提交已分配的有效任务 ID，/dashboard/child 任务新增 wallSortOrder。 -->

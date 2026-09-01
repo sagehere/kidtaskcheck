@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type PointerEvent } from 'react';
 import { AlertTriangle, Award, ClipboardCheck, Coins, Gift, Package, Pin, Star, Calendar, Bold, Italic, Underline, List, Eye, EyeOff } from "lucide-react";
 import { Me, LedgerRow, LedgerResponse, WarehouseItem, REFRESH_INTERVAL_MS, ChildScheduleData, ChildScheduleSlot, DailyReview } from "./types/api";
 import { api } from "./api/client";
@@ -56,6 +56,9 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
       return false;
     }
   });
+  const [taskOrderIds, setTaskOrderIds] = useState<string[]>([]);
+  const [dragTaskId, setDragTaskId] = useState("");
+  const [dragTargetId, setDragTargetId] = useState("");
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [warehouse, setWarehouse] = useState<WarehouseItem[]>([]);
   const [warehouseAchievements, setWarehouseAchievements] = useState<any[]>([]);
@@ -66,6 +69,10 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const loadDashLockRef = useRef(false);
   const dailyReviewEntryRef = useRef(true);
+  const taskOrderRef = useRef<string[]>([]);
+  const taskOrderSavingRef = useRef(false);
+  const dragTimerRef = useRef<number | null>(null);
+  const dragStateRef = useRef<{ taskId: string; group: string; required: boolean; activated: boolean; previous: string[]; startX: number; startY: number } | null>(null);
   const pollingRef = useRef<number | null>(null);
 
   async function loadWarehouse() {
@@ -115,7 +122,91 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     );
   }
 
-  function renderTaskCard(task: any, pinned = false) {
+  function clearTaskWallDragTimer() {
+    if (dragTimerRef.current !== null) window.clearTimeout(dragTimerRef.current);
+    dragTimerRef.current = null;
+  }
+
+  function moveTaskWallTask(targetId: string) {
+    const state = dragStateRef.current;
+    if (!state || state.taskId === targetId) return;
+    setTaskOrderIds((current) => {
+      const from = current.indexOf(state.taskId);
+      const to = current.indexOf(targetId);
+      if (from < 0 || to < 0) return current;
+      const next = [...current];
+      next.splice(from, 1);
+      next.splice(to, 0, state.taskId);
+      taskOrderRef.current = next;
+      return next;
+    });
+  }
+
+  async function saveTaskWallOrder(next: string[], previous: string[]) {
+    taskOrderSavingRef.current = true;
+    try {
+      const result = await api<{ taskIds: string[] }>("/child-task-wall-order", { method: "PATCH", body: JSON.stringify({ taskIds: next }) });
+      taskOrderRef.current = result.taskIds;
+      setTaskOrderIds(result.taskIds);
+      setMessage("任务顺序已保存");
+      await loadDashboard();
+    } catch (err) {
+      taskOrderRef.current = previous;
+      setTaskOrderIds(previous);
+      setError(err instanceof Error ? err.message : "任务顺序保存失败");
+    } finally {
+      taskOrderSavingRef.current = false;
+    }
+  }
+
+  function endTaskWallDrag(save: boolean) {
+    const state = dragStateRef.current;
+    clearTaskWallDragTimer();
+    dragStateRef.current = null;
+    setDragTaskId("");
+    setDragTargetId("");
+    if (!state || !state.activated) return;
+    const next = taskOrderRef.current;
+    if (!save) {
+      taskOrderRef.current = state.previous;
+      setTaskOrderIds(state.previous);
+      return;
+    }
+    if (next.join("|") !== state.previous.join("|")) void saveTaskWallOrder(next, state.previous);
+  }
+
+  function startTaskWallDrag(event: PointerEvent<HTMLElement>, task: any, group: string) {
+    if (event.button !== 0 || (event.target as Element).closest("button, input, select, textarea, a")) return;
+    const state = { taskId: task.id, group, required: Number(task.is_required) !== 0, activated: false, previous: taskOrderRef.current, startX: event.clientX, startY: event.clientY };
+    dragStateRef.current = state;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragTimerRef.current = window.setTimeout(() => {
+      if (dragStateRef.current !== state) return;
+      state.activated = true;
+      setDragTaskId(task.id);
+    }, 450);
+  }
+
+  function moveTaskWallDrag(event: PointerEvent<HTMLElement>) {
+    const state = dragStateRef.current;
+    if (!state) return;
+    if (!state.activated) {
+      if (Math.hypot(event.clientX - state.startX, event.clientY - state.startY) > 8) {
+        clearTaskWallDragTimer();
+        dragStateRef.current = null;
+      }
+      return;
+    }
+    event.preventDefault();
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-wall-task-id]");
+    if (!target || target.dataset.wallGroup !== state.group || target.dataset.wallRequired !== (state.required ? "1" : "0")) return;
+    const targetId = target.dataset.wallTaskId || "";
+    if (targetId && targetId !== state.taskId) {
+      setDragTargetId(targetId);
+      moveTaskWallTask(targetId);
+    }
+  }
+  function renderTaskCard(task: any, pinned = false, sortGroup = "") {
     const now = Date.now();
     const deadlineAt = task.deadlineAt ? Date.parse(task.deadlineAt) : NaN;
     const resetAt = task.resetAt ? Date.parse(task.resetAt) : NaN;
@@ -125,8 +216,9 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     const busyId = busy === "task:" + task.id;
     const points = (task.point_type === "earn" ? "+" : "-") + task.points;
     const isRequired = task.is_required === 1;
+    const sortable = !!sortGroup && !pinned;
     return (
-      <article className={["task-card", "wall-card", pinned ? "pinned-card" : "", limited ? "is-muted" : "", isRequired ? "required-card" : ""].filter(Boolean).join(" ")} key={task.id}>
+      <article className={["task-card", "wall-card", pinned ? "pinned-card" : "", limited ? "is-muted" : "", isRequired ? "required-card" : "", sortable ? "is-sortable" : "", dragTaskId === task.id ? "is-dragging" : "", dragTargetId === task.id ? "is-drag-target" : ""].filter(Boolean).join(" ")} key={task.id} data-wall-task-id={sortable ? task.id : undefined} data-wall-group={sortable ? sortGroup : undefined} data-wall-required={sortable ? (isRequired ? "1" : "0") : undefined} onPointerDown={sortable ? (event) => startTaskWallDrag(event, task, sortGroup) : undefined} onPointerMove={sortable ? moveTaskWallDrag : undefined} onPointerUp={sortable ? () => endTaskWallDrag(true) : undefined} onPointerCancel={sortable ? () => endTaskWallDrag(false) : undefined}>
         <div className="card-head wall-card-head with-pin">
           {icon(task.icon_type, task.icon_value, task.title)}
           <div>
@@ -189,7 +281,13 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
   const remedyCriticisms = dash.remedyCriticisms || [];
   const remedyItems = [...remedyCriticisms, ...(dash.requiredPenaltyRemedies || [])];
   const activeTasks = taskRows.filter((task: any) => task.is_active !== 0);
-  const sortedTasks = [...taskRows].sort((a: any, b: any) => (b.is_required || 0) - (a.is_required || 0));
+  const taskOrderRanks = new Map(taskOrderIds.map((taskId, index) => [taskId, index]));
+  const sortedTasks = [...taskRows].sort((a: any, b: any) => {
+    const required = Number(b.is_required || 0) - Number(a.is_required || 0);
+    if (required) return required;
+    return (taskOrderRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (taskOrderRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER);
+  });
+  const taskOrderKey = taskRows.map((task: any) => task.id + ":" + (task.wallSortOrder ?? "")).join("|");
   const groupedTaskIds = new Set(taskSets.flatMap((set: any) => set.taskIds || []));
   const taskById = new Map(taskRows.map((task: any) => [task.id, task]));
   const scheduledTaskIds = new Set(schedule.items.map((item) => item.taskId));
@@ -431,6 +529,18 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
     }
   }, [me.id, showScheduleOnWall]);
   useEffect(() => {
+    if (dragStateRef.current || taskOrderSavingRef.current) return;
+    const next = [...taskRows].sort((a: any, b: any) => {
+      const required = Number(b.is_required || 0) - Number(a.is_required || 0);
+      if (required) return required;
+      const aOrder = a.wallSortOrder ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = b.wallSortOrder ?? Number.MAX_SAFE_INTEGER;
+      return aOrder - bOrder;
+    }).map((task: any) => task.id);
+    taskOrderRef.current = next;
+    setTaskOrderIds(next);
+  }, [taskOrderKey]);
+  useEffect(() => {
     if (!schedule.slots.length) {
       if (activeScheduleSlotId) setActiveScheduleSlotId("");
       return;
@@ -599,7 +709,7 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
         <div className="grid">
           <section className="panel child-panel">
             <div className="panel-title task-wall-title">
-              <ClipboardCheck /><h2>任务墙</h2>
+              <ClipboardCheck /><h2>任务墙</h2><small className="task-wall-sort-hint">长按卡片排序</small>
               <label className="toggle schedule-wall-toggle">
                 <input type="checkbox" checked={showScheduleOnWall} onChange={(e) => setShowScheduleOnWall(e.target.checked)} />
                 <span>日程表显示</span>
@@ -615,10 +725,10 @@ export function ChildApp({ me, refresh }: { me: NonNullable<Me>; refresh: () => 
                   return <section className="panel task-set-wall" key={set.id}>
                     <div className="panel-title">{icon(set.icon_type, set.icon_value, set.title)}<div><h2>{set.title}</h2><small>{windowMode ? `${set.windowType === "weekly" ? "本周" : set.windowType === "monthly" ? "本月" : `${set.windowStart || set.window_start} 至 ${set.windowEnd || set.window_end}`} · 已达成 ${progress.completed || 0}/${progress.total || 0} 个周期 · ${progress.status || "active"}${progress.nextResetAt ? ` · 下次重置 ${String(progress.nextResetAt).slice(0, 10)}` : ""}${progress.awaitingDecisionCount ? ` · 上期待处理 ${progress.awaitingDecisionCount}` : ""}` : `下一轮已通过 ${progress.approved || 0}/${progress.total || members.length} · 已结算 ${progress.settledRounds || 0} 轮`} · {set.minPoints}{set.maxPoints !== set.minPoints ? `-${set.maxPoints}` : ""} 积分</small></div></div>
                     {set.description && <p className="card-description">{set.description}</p>}
-                    <div className="wall-grid">{members.map((task: any) => renderTaskCard(task))}</div>
+                    <div className="wall-grid">{members.map((task: any) => renderTaskCard(task, false, "set:" + set.id))}</div>
                   </section>;
                 })}
-                {sortedTasks.filter((task: any) => !groupedTaskIds.has(task.id)).length ? <section className="wall-grid">{sortedTasks.filter((task: any) => !groupedTaskIds.has(task.id)).map((task: any) => renderTaskCard(task))}</section> : null}
+                {sortedTasks.filter((task: any) => !groupedTaskIds.has(task.id)).length ? <section className="wall-grid">{sortedTasks.filter((task: any) => !groupedTaskIds.has(task.id)).map((task: any) => renderTaskCard(task, false, "ungrouped"))}</section> : null}
                 {!sortedTasks.length && <Empty text="暂无任务" />}
               </div>
             ) : (

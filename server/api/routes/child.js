@@ -1,5 +1,5 @@
 import { isWeekdayAllowed, nextPeriodReset, normalizeWeekdays, periodKey, taskSubmissionDeadlineState } from "../../../src/lib/domain.js";
-import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, localTimeText, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, settleRequiredTaskPenalties, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema, childDailyReview, childDailyReviewRequired, acknowledgeChildDailyReview, ensureTaskSetSchema, taskSetForSubmission, listTaskSets, taskSetProgress } from "../utils.js";
+import { ok, fail, body, id, nowIso, requireRole, timezoneOffsetMinutes, localTimeText, childUsageForPeriod, childUsageCountsForPeriods, childLatestTaskStatuses, rewardLockedByAchievement, lockedRewardIdsByAchievement, unmetRewardPrerequisites, balance, frozenPointsForChild, recalcAchievements, notify, settleExpiredCriticismFreezes, settleRequiredTaskPenalties, activeRemedyCriticisms, activeRequiredPenaltyRemedies, ensureChildScheduleSchema, ensureChildTaskWallOrderSchema, sanitizeSchedulePlanHtml, ensureAchievementSchema, ensureRequiredTaskSchema, childDailyReview, childDailyReviewRequired, acknowledgeChildDailyReview, ensureTaskSetSchema, taskSetForSubmission, listTaskSets, taskSetProgress } from "../utils.js";
 import { loadAiGreetingSnapshot } from "../ai/index.js";
 
 export async function handleChildRoutes(path, method, request, env, actor, ctx) {
@@ -163,6 +163,32 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             .run();
         return ok(true);
     }
+    if (path === "/child-task-wall-order" && method === "PATCH") {
+        const a = requireRole(actor, ["child"]);
+        await ensureChildTaskWallOrderSchema(env);
+        const input = await body(request);
+        if (!Array.isArray(input.taskIds)) return fail("BAD_REQUEST", "任务排序格式无效", 400);
+        const taskIds = input.taskIds.map((value) => String(value || "").trim());
+        if (taskIds.some((value) => !value) || new Set(taskIds).size !== taskIds.length)
+            return fail("BAD_REQUEST", "任务排序包含重复或无效任务", 400);
+        const rows = (await env.DB.prepare("SELECT t.id, t.is_required, wall.sort_order FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id LEFT JOIN child_task_wall_orders wall ON wall.child_id=ta.child_id AND wall.task_id=t.id WHERE ta.child_id=? AND t.parent_id=? AND t.is_active=1 AND t.deleted_at IS NULL ORDER BY t.is_required DESC, CASE WHEN wall.sort_order IS NULL THEN 1 ELSE 0 END, wall.sort_order, t.created_at DESC").bind(a.id, a.parent_id).all()).results;
+        const byId = new Map(rows.map((row) => [row.id, row]));
+        if (taskIds.some((taskId) => !byId.has(taskId))) return fail("NOT_ASSIGNED", "任务不存在或未分配给当前孩子", 404);
+        const requested = new Set(taskIds);
+        const normalized = [
+            ...taskIds.filter((taskId) => Number(byId.get(taskId).is_required) !== 0),
+            ...taskIds.filter((taskId) => Number(byId.get(taskId).is_required) === 0)
+        ];
+        let index = 0;
+        const merged = rows.map((row) => requested.has(row.id) ? normalized[index++] : row.id);
+        const updatedAt = nowIso();
+        await env.DB.transaction(async () => {
+            for (let sortOrder = 0; sortOrder < merged.length; sortOrder++)
+                await env.DB.prepare("INSERT INTO child_task_wall_orders (child_id, task_id, sort_order, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(child_id, task_id) DO UPDATE SET sort_order=excluded.sort_order, updated_at=excluded.updated_at")
+                    .bind(a.id, merged[sortOrder], sortOrder, updatedAt).run();
+        });
+        return ok({ taskIds: merged });
+    }
     if (path === "/dashboard/child-summary" && method === "GET") {
         const a = requireRole(actor, ["child"]);
         await settleExpiredCriticismFreezes(env);
@@ -183,7 +209,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
     }
     if (path === "/dashboard/child" && method === "GET") {
         const a = requireRole(actor, ["child"]);
-        await Promise.all([ensureAchievementSchema(env), ensureTaskSetSchema(env)]);
+        await Promise.all([ensureAchievementSchema(env), ensureTaskSetSchema(env), ensureChildTaskWallOrderSchema(env)]);
         await settleExpiredCriticismFreezes(env);
         const offset = await timezoneOffsetMinutes(env);
         const reviewAt = nowIso();
@@ -194,7 +220,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
         const pins = (await env.DB.prepare("SELECT item_type, item_id FROM child_pins WHERE child_id=?").bind(a.id).all()).results;
         const pinnedTaskId = pins.find((pin) => pin.item_type === "task")?.item_id || null;
         const pinnedRewardId = pins.find((pin) => pin.item_type === "reward")?.item_id || null;
-        const currentTasks = await env.DB.prepare("SELECT t.*, tc.name category_name, tc.icon_type category_icon_type, tc.icon_value category_icon_value FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id JOIN task_categories tc ON tc.id=t.category_id WHERE ta.child_id=? AND t.parent_id=? AND t.is_active=1 AND t.deleted_at IS NULL ORDER BY tc.name, t.created_at DESC")
+        const currentTasks = await env.DB.prepare("SELECT t.*, tc.name category_name, tc.icon_type category_icon_type, tc.icon_value category_icon_value, wall.sort_order wall_sort_order FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id LEFT JOIN child_task_wall_orders wall ON wall.child_id=ta.child_id AND wall.task_id=t.id JOIN task_categories tc ON tc.id=t.category_id WHERE ta.child_id=? AND t.parent_id=? AND t.is_active=1 AND t.deleted_at IS NULL ORDER BY tc.name, t.created_at DESC")
             .bind(a.id, a.parent_id)
             .all();
         const enabledTasks = currentTasks.results.filter((task) => isWeekdayAllowed(task.enabled_weekdays, undefined, offset));
@@ -227,6 +253,7 @@ ORDER BY ca.unlocked_at DESC`).bind(a.id).all()).results);
             const taskSet = taskSetByTaskId.get(task.id);
             return {
                 ...task,
+                wallSortOrder: task.wall_sort_order === null || task.wall_sort_order === undefined ? null : Number(task.wall_sort_order),
                 enabledWeekdays: normalizeWeekdays(task.enabled_weekdays),
                 periodKey: pkey,
                 limitCount,

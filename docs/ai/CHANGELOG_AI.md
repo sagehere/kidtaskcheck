@@ -525,3 +525,17 @@
 - 业务代码：`server/api/routes/parent.js`、`src/ParentApp.tsx`、`src/styles.css`
 - 测试：`tests/ledger.test.ts`
 - 验证：待运行 `npm.cmd test -- --run tests/ledger.test.ts`
+
+## 2026-09-01
+
+- 类型：功能优化与移动端修复
+- 任务：儿童任务墙长按排序跨设备保存；必做任务优先；家长新建任务区域全宽；移动端导航不再遮挡弹窗操作。
+- 修改文件：
+  - src/ChildApp.tsx、server/api/routes/child.js、server/api/utils.js、migrations/0039_child_task_wall_order.sql
+  - src/ParentApp.tsx、src/styles.css
+  - 	ests/api.test.ts、	ests/migration.test.ts、docs/ai/FEATURE_INDEX.md
+- 验证：
+ode --check server/api/utils.js、
+ode --check server/api/routes/child.js、
+pm run build；
+pm test 通过 174/176，任务集时间窗既有两项测试因当前日期导致创建窗口返回 400。

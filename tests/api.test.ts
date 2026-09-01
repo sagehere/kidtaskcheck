@@ -133,6 +133,24 @@ describe("Real Child Session Integration", () => {
     expect(dash.data.tasks[0].title).toBe("T");
   });
 
+  it("persists child task wall order while keeping required tasks first", async () => {
+    const normalTask = env.DB.prepare("SELECT id FROM tasks WHERE parent_id=?").bind(pid).first() as any;
+    const requiredTaskId = id();
+    env.DB.prepare("INSERT INTO tasks (id, parent_id, category_id, title, points, period, limit_count, point_type, enabled_weekdays, is_required) VALUES (?, ?, 'cat', 'Required', 10, 'daily', 1, 'earn', '[1,2,3,4,5,6,0]', 1)").bind(requiredTaskId, pid).run();
+    env.DB.prepare("INSERT INTO task_assignees (task_id, child_id) VALUES (?, ?)").bind(requiredTaskId, cid).run();
+    const actor = { type: "child", role: "child", id: cid, parent_id: pid, parentId: pid, displayName: "Child" };
+    const saved = await safe(handleChildRoutes, "/child-task-wall-order", "PATCH", makeRequest("PATCH", "/child-task-wall-order", { taskIds: [normalTask.id, requiredTaskId] }), env, actor);
+    expect(saved!.status).toBe(200);
+    expect((await saved!.json()).data.taskIds).toEqual([requiredTaskId, normalTask.id]);
+    const dashboard = await safe(handleChildRoutes, "/dashboard/child", "GET", makeRequest("GET", "/dashboard/child"), env, actor, { waitUntil: () => {} });
+    const tasks = (await dashboard!.json()).data.tasks;
+    expect(tasks.find((task: any) => task.id === requiredTaskId).wallSortOrder).toBe(0);
+    expect(tasks.find((task: any) => task.id === normalTask.id).wallSortOrder).toBe(1);
+    const duplicate = await safe(handleChildRoutes, "/child-task-wall-order", "PATCH", makeRequest("PATCH", "/child-task-wall-order", { taskIds: [normalTask.id, normalTask.id] }), env, actor);
+    expect(duplicate!.status).toBe(400);
+    const unassigned = await safe(handleChildRoutes, "/child-task-wall-order", "PATCH", makeRequest("PATCH", "/child-task-wall-order", { taskIds: ["missing-task"] }), env, actor);
+    expect(unassigned!.status).toBe(404);
+  });
   it("child login -> submit task succeeds", async () => {
     const cookie = await login(env, "child", "cpw");
     const req = makeRequest("GET", "/auth/me", undefined, `session=${cookie}`);

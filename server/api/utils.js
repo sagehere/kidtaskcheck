@@ -1107,6 +1107,10 @@ async function ensureChildScheduleSchemaNow(env) {
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_slot ON child_schedule_items(slot_id, sort_order)").run();
     await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_schedule_items_child_task ON child_schedule_items(child_id, task_id)").run();
 }
+async function ensureChildTaskWallOrderSchemaNow(env) {
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS child_task_wall_orders (child_id TEXT NOT NULL REFERENCES children(id) ON DELETE CASCADE, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, sort_order INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (child_id, task_id))").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_child_task_wall_orders_child_sort ON child_task_wall_orders(child_id, sort_order)").run();
+}
 async function ensureChildDailyReviewSchemaNow(env) {
     await env.DB.prepare(`CREATE TABLE IF NOT EXISTS child_daily_reviews (
   child_id TEXT NOT NULL REFERENCES children(id) ON DELETE CASCADE,
@@ -1137,6 +1141,9 @@ export function ensureRequiredTaskSchema(env) {
 }
 export function ensureChildScheduleSchema(env) {
     return oncePerDb(env, "child-schedule-schema", () => ensureChildScheduleSchemaNow(env));
+}
+export function ensureChildTaskWallOrderSchema(env) {
+    return oncePerDb(env, "child-task-wall-order-schema", () => ensureChildTaskWallOrderSchemaNow(env));
 }
 export function ensureChildDailyReviewSchema(env) {
     return oncePerDb(env, "child-daily-review-schema", () => ensureChildDailyReviewSchemaNow(env));
@@ -1734,6 +1741,7 @@ export async function bootstrap(env) {
         await ensureSystemErrorLogs(env);
         await ensureAdmin(env);
         await ensureChildScheduleSchema(env);
+        await ensureChildTaskWallOrderSchema(env);
         await ensureChildDailyReviewSchema(env);
         await maybeRunMaintenance(env);
     });

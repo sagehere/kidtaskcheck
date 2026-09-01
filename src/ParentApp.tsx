@@ -828,9 +828,7 @@ export function ParentApp({ me, refresh }: { me: NonNullable<Me>; refresh: () =>
           )}
           <section className={"panel setting-group " + (activeTab === "rules" ? "" : "is-hidden")}>
             <div className="panel-title"><Star /><h2>任务配置</h2><div className="actions"><button type="button" className="secondary" onClick={() => setCategoryDialogOpen(true)}><Star size={16} />任务分类设置</button></div></div>
-            <div className="grid two">
-              <details className="create-disclosure"><summary><Plus size={16} />新建任务</summary><CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} /></details>
-            </div>
+            <details className="create-disclosure"><summary><Plus size={16} />新建任务</summary><CreateTask children={children} categories={categories} onCreate={(data) => create("/tasks", data, "任务已创建")} /></details>
             {categoryDialogOpen && <EditDialog title="任务分类设置" icon={<Star />} onClose={() => setCategoryDialogOpen(false)}>
               <CategoryOverview
                 items={categories}
